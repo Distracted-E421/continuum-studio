@@ -1,0 +1,173 @@
+package com.example.continuumstudio.viewmodel
+
+import android.app.Application
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.continuumstudio.data.*
+import com.example.continuumstudio.network.DialogEvent
+import com.example.continuumstudio.network.DialogWebSocketClient
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+
+// DataStore extension
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
+
+class DialogViewModel(application: Application) : AndroidViewModel(application) {
+    
+    private val dataStore = application.dataStore
+    private val wsClient = DialogWebSocketClient(viewModelScope)
+
+    // Exposed state
+    val connectionState = wsClient.connectionState
+    val dialogState = wsClient.dialogState
+    val events = wsClient.events
+
+    // Settings keys
+    private object PrefsKeys {
+        val SERVER_URL = stringPreferencesKey("server_url")
+    }
+
+    // Saved server URL
+    val savedServerUrl: Flow<String> = dataStore.data.map { prefs ->
+        prefs[PrefsKeys.SERVER_URL] ?: "obsidian:8080"
+    }
+
+    init {
+        // Auto-connect on startup if we have a saved URL
+        viewModelScope.launch {
+            savedServerUrl.first().let { url ->
+                if (url.isNotBlank()) {
+                    connect(url)
+                }
+            }
+        }
+    }
+
+    /**
+     * Connect to the dialog daemon
+     */
+    fun connect(serverUrl: String) {
+        viewModelScope.launch {
+            // Save the URL
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.SERVER_URL] = serverUrl
+            }
+            wsClient.connect(serverUrl)
+        }
+    }
+
+    /**
+     * Disconnect from the daemon
+     */
+    fun disconnect() {
+        wsClient.disconnect()
+    }
+
+    /**
+     * Refresh current dialog
+     */
+    fun refreshDialog() {
+        viewModelScope.launch {
+            connectionState.value.serverUrl.takeIf { it.isNotBlank() }?.let {
+                wsClient.fetchCurrentDialog(it)
+            }
+        }
+    }
+
+    /**
+     * Submit the current dialog answer
+     */
+    fun submitAnswer() {
+        viewModelScope.launch {
+            val state = dialogState.value
+            val dialog = state.activeDialog ?: return@launch
+            val serverUrl = connectionState.value.serverUrl
+
+            val selection: Any = when (dialog.dialogType.type) {
+                "choice" -> {
+                    if (dialog.dialogType.allowMultiple == true) {
+                        state.selectedOptions.toList()
+                    } else {
+                        state.selectedValue
+                    }
+                }
+                "text" -> state.selectedValue
+                "confirm" -> state.selectedValue == "true"
+                "slider" -> state.sliderValue
+                else -> state.selectedValue
+            }
+
+            wsClient.answerDialog(
+                serverUrl = serverUrl,
+                dialogId = dialog.id,
+                selection = selection,
+                comment = state.comment.takeIf { it.isNotBlank() }
+            )
+        }
+    }
+
+    /**
+     * Select a single option (for single-choice dialogs)
+     */
+    fun selectOption(value: String) {
+        wsClient.updateSelectedValue(value)
+    }
+
+    /**
+     * Toggle an option (for multi-select dialogs)
+     */
+    fun toggleOption(value: String) {
+        wsClient.toggleOption(value)
+    }
+
+    /**
+     * Update text input value
+     */
+    fun updateTextInput(value: String) {
+        wsClient.updateSelectedValue(value)
+    }
+
+    /**
+     * Update comment
+     */
+    fun updateComment(comment: String) {
+        wsClient.updateComment(comment)
+    }
+
+    /**
+     * Update slider value
+     */
+    fun updateSliderValue(value: Float) {
+        wsClient.updateSliderValue(value)
+    }
+
+    /**
+     * Set confirmation answer
+     */
+    fun setConfirmation(confirmed: Boolean) {
+        wsClient.updateSelectedValue(confirmed.toString())
+    }
+
+    /**
+     * Toggle hold mode on the server
+     */
+    fun toggleHoldMode() {
+        viewModelScope.launch {
+            connectionState.value.serverUrl.takeIf { it.isNotBlank() }?.let {
+                wsClient.toggleHoldMode(it)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        wsClient.disconnect()
+    }
+}
+

@@ -1,0 +1,25 @@
+# Build outputs
+android/app/build/
+android/build/
+android/.gradle/
+.gradle/
+
+# IDE files
+*.iml
+.idea/
+*.swp
+*.swo
+
+# Local properties
+local.properties
+
+# Kotlin/Gradle
+*.class
+*.jar
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
