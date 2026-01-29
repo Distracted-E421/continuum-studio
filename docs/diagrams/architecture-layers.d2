@@ -4,11 +4,14 @@ direction: down
 
 title: |md
   # Continuum Studio Architecture
-  Modular, presentation-agnostic design
+  Modular, presentation-agnostic design with Agent Bridge
 |
 
-# Presentation Layer (User-Selectable)
-presentation: Presentation Layer {
+# ============================================================================
+# Presentation Layer (Rust/egui)
+# ============================================================================
+
+presentation: Presentation Layer (Rust) {
   style: {
     fill: "#1e3a5f"
     stroke: "#3b82f6"
@@ -16,24 +19,26 @@ presentation: Presentation Layer {
   }
   
   tiles: Tiling Widgets {
-    icon: https://icons.terrastruct.com/essentials%2F227-grid.svg
     style.fill: "#2563eb"
   }
   tabs: Tab Mode {
-    icon: https://icons.terrastruct.com/essentials%2F036-tabs.svg
     style.fill: "#2563eb"
   }
-  hub: Hub/Spoke {
-    icon: https://icons.terrastruct.com/tech%2F015-connection.svg
+  agent_stream: Agent Stream {
     style.fill: "#2563eb"
   }
-  overlay: Overlay {
-    icon: https://icons.terrastruct.com/essentials%2F055-layers.svg
+  diagram: Diagram View {
+    style.fill: "#2563eb"
+  }
+  terminal: Terminal {
     style.fill: "#2563eb"
   }
 }
 
+# ============================================================================
 # Widget Runtime
+# ============================================================================
+
 runtime: Widget Runtime {
   style: {
     fill: "#1e293b"
@@ -44,7 +49,7 @@ runtime: Widget Runtime {
     shape: cylinder
   }
   layout: Layout Engine
-  ipc: IPC Bus {
+  event_bus: Event Bus {
     shape: queue
   }
   state: State Management {
@@ -52,78 +57,211 @@ runtime: Widget Runtime {
   }
   
   registry -> layout: provides widgets
-  layout -> ipc: events
-  ipc -> state: updates
+  layout -> event_bus: events
+  event_bus -> state: updates
 }
 
-# Core Services
-services: Core Services {
+# ============================================================================
+# Studio Core (Elixir/BEAM)
+# ============================================================================
+
+core: Studio Core (Elixir) {
   style: {
     fill: "#0f172a"
+    stroke: "#7c3aed"
+  }
+  
+  socket: Socket Handler {
+    style.fill: "#6366f1"
+  }
+  harness_reg: Harness Registry {
+    shape: cylinder
+    style.fill: "#8b5cf6"
+  }
+  state_mgr: State Manager {
+    shape: stored_data
+    style.fill: "#a78bfa"
+  }
+  core_bus: Event Bus {
+    shape: queue
+    style.fill: "#c4b5fd"
+  }
+  
+  socket -> harness_reg
+  socket -> state_mgr
+  harness_reg -> core_bus: broadcasts
+  state_mgr -> core_bus: broadcasts
+}
+
+# ============================================================================
+# Agent Bridge (Elixir)
+# ============================================================================
+
+agent_bridge: Agent Bridge (Elixir) {
+  style: {
+    fill: "#1a1a2e"
+    stroke: "#f59e0b"
+  }
+  
+  router: Router {
+    style.fill: "#f59e0b"
+  }
+  providers: Provider Registry {
+    shape: cylinder
+    style.fill: "#fbbf24"
+  }
+  context: Context Manager {
+    shape: stored_data
+    style.fill: "#fcd34d"
+  }
+  cost: Cost Tracker {
+    style.fill: "#fef3c7"
+  }
+  rate: Rate Limiter {
+    style.fill: "#fef08a"
+  }
+  middleware: Middleware Pipeline {
+    shape: queue
+    style.fill: "#fde047"
+  }
+  
+  router -> providers: selects
+  router -> context: history
+  router -> rate: checks
+  providers -> cost: tracks
+  middleware -> router: wraps
+}
+
+# ============================================================================
+# AI Providers
+# ============================================================================
+
+providers_layer: AI Providers {
+  style: {
+    fill: "#0c0c0c"
     stroke: "#475569"
   }
   
-  agent: Agent Manager {
-    icon: https://icons.terrastruct.com/tech%2F068-robot.svg
-    style.fill: "#7c3aed"
+  claude: Claude (Anthropic) {
+    style.fill: "#8b5cf6"
   }
-  sync: Sync Engine {
-    icon: https://icons.terrastruct.com/essentials%2F213-sync.svg
-    style.fill: "#059669"
-  }
-  dialog: Dialog Daemon {
-    icon: https://icons.terrastruct.com/essentials%2F103-chat.svg
-    style.fill: "#f59e0b"
-  }
-  memory: Memory Store {
-    shape: cylinder
-    style.fill: "#06b6d4"
-  }
-  config: Config Loader {
-    icon: https://icons.terrastruct.com/essentials%2F116-settings.svg
-    style.fill: "#64748b"
-  }
-}
-
-# Integration Layer
-integrations: Integration Layer {
-  style: {
-    fill: "#020617"
-    stroke: "#334155"
-  }
-  
-  cursor: Cursor IDE {
-    icon: https://icons.terrastruct.com/tech%2F019-code.svg
+  ollama: Ollama (Local) {
     style.fill: "#22c55e"
   }
-  local: Local Models {
-    icon: https://icons.terrastruct.com/tech%2F068-robot.svg
-    style.fill: "#a855f7"
-  }
-  api: API (GPT/Claude) {
-    icon: https://icons.terrastruct.com/essentials%2F088-api.svg
+  cursor_harness: Cursor (Harness) {
     style.fill: "#3b82f6"
   }
-  engram: Engram {
-    icon: https://icons.terrastruct.com/infra%2F004-network.svg
-    style.fill: "#f43f5e"
-  }
-  external: External Tools {
-    icon: https://icons.terrastruct.com/essentials%2F048-plugin.svg
-    style.fill: "#78716c"
+  openai: OpenAI (Planned) {
+    style.fill: "#64748b"
+    style.stroke-dash: 3
   }
 }
 
-# Connections
-presentation -> runtime: widget requests
-runtime -> services: service calls
-services -> integrations: external calls
+# ============================================================================
+# Synapsix Harnesses
+# ============================================================================
 
+synapsix: Synapsix (Elixir) {
+  style: {
+    fill: "#1a0a2e"
+    stroke: "#dc2626"
+  }
+  
+  harness_sup: Harness Supervisor {
+    style.fill: "#ef4444"
+  }
+  cursor: Cursor Harness {
+    style.fill: "#f87171"
+  }
+  android: Android Studio {
+    style.fill: "#fca5a5"
+  }
+  godot: Godot Editor {
+    style.fill: "#fecaca"
+  }
+  dialog_mgr: Dialog Manager {
+    style.fill: "#dc2626"
+  }
+}
+
+# ============================================================================
+# Dialog Daemon (Rust)
+# ============================================================================
+
+dialog: Dialog Daemon (Rust) {
+  style: {
+    fill: "#1c1917"
+    stroke: "#eab308"
+  }
+  
+  dbus: D-Bus Interface {
+    style.fill: "#facc15"
+  }
+  renderer: Dialog Renderer {
+    style.fill: "#fde047"
+  }
+}
+
+# ============================================================================
 # User
+# ============================================================================
+
 user: User {
   shape: person
   style.fill: "#0ea5e9"
 }
 
+# ============================================================================
+# Connections
+# ============================================================================
+
+# User to UI
 user -> presentation: interacts
+
+# UI to Runtime
+presentation -> runtime: widget requests
+
+# UI to Core (JSON over Unix Socket)
+presentation -> core.socket: JSON/IPC {
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+}
+
+# Core to Agent Bridge
+core -> agent_bridge.router: agent messages {
+  style.stroke: "#f59e0b"
+}
+
+# Agent Bridge to Providers
+agent_bridge.providers -> providers_layer.claude: API calls {
+  style.stroke: "#8b5cf6"
+}
+agent_bridge.providers -> providers_layer.ollama: local {
+  style.stroke: "#22c55e"
+}
+agent_bridge.providers -> providers_layer.cursor_harness: via harness {
+  style.stroke: "#3b82f6"
+  style.stroke-dash: 3
+}
+
+# Core to Synapsix
+core.harness_reg -> synapsix.harness_sup: harness control {
+  style.stroke: "#ef4444"
+}
+
+# Synapsix to Harnesses
+synapsix.harness_sup -> synapsix.cursor
+synapsix.harness_sup -> synapsix.android
+synapsix.harness_sup -> synapsix.godot
+
+# Synapsix to Dialog Daemon
+synapsix.dialog_mgr -> dialog.dbus: D-Bus {
+  style.stroke: "#eab308"
+}
+
+# Cursor Harness Provider uses Synapsix
+providers_layer.cursor_harness -> synapsix.cursor: controls {
+  style.stroke: "#3b82f6"
+  style.stroke-dash: 3
+}
 

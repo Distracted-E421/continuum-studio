@@ -39,6 +39,7 @@ nixos-cursor/
 **Dependencies**: egui 0.29, tokio, libp2p (optional), axum (optional)
 
 **Features**:
+
 - Version management (download, install, verify)
 - Chat library viewer
 - D2 diagram rendering and editing
@@ -49,6 +50,7 @@ nixos-cursor/
 - Theme system
 
 **Migration Notes**:
+
 - Core application that should become the desktop UI
 - Needs refactoring for new widget architecture
 - Theme system is reusable
@@ -61,6 +63,7 @@ nixos-cursor/
 **Location**: `tools/cursor-dialog-daemon/`
 
 **Features**:
+
 - D-Bus interface for AI dialogs
 - CLI tool for integration
 - Web server for mobile
@@ -68,6 +71,7 @@ nixos-cursor/
 - Queue management
 
 **Migration Notes**:
+
 - Already functional and tested
 - Will become a core service in continuum-studio
 - Keep as separate daemon, integrate via IPC
@@ -75,10 +79,12 @@ nixos-cursor/
 #### 3. Theme/UI Components
 
 **Files**:
+
 - `cursor-studio-egui/src/theme.rs`
 - `cursor-studio-egui/src/theme_loader.rs`
 
 **Notes**:
+
 - Valuable theming infrastructure
 - Should be shared across all continuum-studio components
 
@@ -93,12 +99,14 @@ nixos-cursor/
 **Location**: `tools/cursor-agent-tui/`
 
 **Features**:
+
 - TUI interface for AI agents
 - Protocol buffer based communication
 - Authentication handling
 - Tool execution
 
 **Questions**:
+
 - Is this actively used?
 - Does the proto-based approach conflict with our harness design?
 - Could be useful for terminal-based orchestration
@@ -128,7 +136,8 @@ nixos-cursor/
 #### 1. NixOS Modules
 
 **Location**: `modules/`
-**Contents**: 
+**Contents**:
+
 - `modules/nixos/` - NixOS system modules
 - `modules/home-manager/` - Home-manager modules
 - `modules/cursor-protection/` - Protection/sandboxing
@@ -162,24 +171,24 @@ nixos-cursor/
 
 ### Phase 2: Core Migration
 
-5. [ ] Copy cursor-studio-egui source to continuum-studio
-6. [ ] Refactor for new architecture:
+1. [ ] Copy cursor-studio-egui source to continuum-studio
+2. [ ] Refactor for new architecture:
    - Extract widget components
    - Add event bus system
    - Integrate with dialog daemon
-7. [ ] Update builds and CI
+3. [ ] Update builds and CI
 
 ### Phase 3: Integration
 
-8. [ ] Connect synapsix harnesses to continuum-studio
-9. [ ] Implement agent stream widget
-10. [ ] Add multi-window support
+1. [ ] Connect synapsix harnesses to continuum-studio
+2. [ ] Implement agent stream widget
+3. [ ] Add multi-window support
 
 ### Phase 4: Cleanup
 
-11. [ ] Archive unused code in nixos-cursor
-12. [ ] Update nixos-cursor README
-13. [ ] Remove migrated code from nixos-cursor
+1. [ ] Archive unused code in nixos-cursor
+2. [ ] Update nixos-cursor README
+3. [ ] Remove migrated code from nixos-cursor
 
 ---
 
@@ -250,7 +259,8 @@ tracing-subscriber = "0.3"
 
 ### Risk: Breaking nixos-cursor functionality
 
-**Mitigation**: 
+**Mitigation**:
+
 - Keep modules/ and examples/ intact
 - Maintain backward compatibility for Nix users
 - Phase migration gradually
@@ -258,6 +268,7 @@ tracing-subscriber = "0.3"
 ### Risk: Large codebase complexity
 
 **Mitigation**:
+
 - Refactor incrementally
 - Create clear module boundaries
 - Document as we go
@@ -265,6 +276,7 @@ tracing-subscriber = "0.3"
 ### Risk: Integration issues between components
 
 **Mitigation**:
+
 - Define clear IPC protocols
 - Use event bus pattern
 - Test integration early
@@ -282,4 +294,3 @@ tracing-subscriber = "0.3"
 ---
 
 *Last updated: 2026-01-28*
-

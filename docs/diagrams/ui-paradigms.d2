@@ -28,28 +28,28 @@ paradigm1: 1. Tiling Widget System {
       stroke: "#3b82f6"
     }
     
-    left: Agent Stream {
+    left_panel: Agent Stream {
       style.fill: "#7c3aed"
     }
     
-    center: Editor {
+    center_panel: Editor {
       style.fill: "#2563eb"
     }
     
-    right: Vertical Split {
+    right_panel: Vertical Split {
       style.fill: "#1e3a5f"
       
-      top: Terminal {
+      top_pane: Terminal {
         style.fill: "#059669"
       }
-      bottom: Dialogs {
+      bottom_pane: Dialogs {
         style.fill: "#f59e0b"
       }
     }
     
-    left -> center
-    center -> right
-    right.top -> right.bottom
+    left_panel -- center_panel
+    center_panel -- right_panel
+    right_panel.top_pane -- right_panel.bottom_pane
   }
   
   pros: |md

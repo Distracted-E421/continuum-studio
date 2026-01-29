@@ -1,0 +1,314 @@
+# Continuum Ecosystem - Module Overview
+
+direction: right
+
+title: |md
+  # Continuum Ecosystem
+  Four modules, clear boundaries
+|
+
+# Define styles
+style: {
+  fill: "#0a0a0f"
+}
+
+# ============================================
+# SYNAPSIX MODULE (Separate Repo)
+# ============================================
+synapsix: SYNAPSIX {
+  label: |md
+    # SYNAPSIX
+    **Harness Orchestration**
+    *Elixir / AGPL*
+  |
+  
+  style: {
+    fill: "#1e1b4b"
+    stroke: "#7c3aed"
+    stroke-width: 3
+    border-radius: 12
+    shadow: true
+  }
+  
+  harness_runtime: Harness Runtime {
+    style.fill: "#5b21b6"
+    
+    cursor_harness: Cursor IDE
+    godot_harness: Godot Editor
+    android_harness: Android Studio
+    generic_harness: Generic X11/Wayland
+  }
+  
+  dialog_daemon: Dialog Daemon {
+    style.fill: "#7c3aed"
+    shape: hexagon
+    
+    note: |md
+      Rust binary
+      D-Bus interface
+      Native dialogs
+    |
+  }
+  
+  service_registry: Service Registry {
+    style.fill: "#4c1d95"
+    shape: cylinder
+  }
+  
+  cluster: Cross-Machine {
+    style.fill: "#6d28d9"
+    
+    beam_dist: BEAM Distribution
+    node_mgmt: Node Management
+  }
+  
+  window_ctrl: Window Control {
+    style.fill: "#8b5cf6"
+    
+    kdotool: kdotool (Wayland)
+    xdotool: xdotool (X11)
+    screenshot: Screenshot
+  }
+  
+  harness_runtime -> dialog_daemon: user input
+  harness_runtime -> window_ctrl: control apps
+  harness_runtime -> service_registry: register
+  cluster -> service_registry: sync
+}
+
+# ============================================
+# CONTINUUM STUDIO (Main Repo)
+# ============================================
+studio: CONTINUUM STUDIO {
+  style: {
+    fill: "#0c1222"
+    stroke: "#3b82f6"
+    stroke-width: 2
+    border-radius: 12
+  }
+  
+  # ----------------------------------------
+  # Studio Core
+  # ----------------------------------------
+  core: Studio Core {
+    label: |md
+      **Studio Core**
+      *Elixir / AGPL*
+    |
+    
+    style: {
+      fill: "#1e3a5f"
+      stroke: "#60a5fa"
+      border-radius: 8
+    }
+    
+    event_bus: Event Bus {
+      style.fill: "#2563eb"
+      shape: queue
+    }
+    
+    state_mgmt: State Manager {
+      style.fill: "#1d4ed8"
+      shape: cylinder
+    }
+    
+    ipc_server: IPC Server {
+      style.fill: "#3b82f6"
+      shape: hexagon
+      
+      note: |md
+        ETF over Unix socket
+        Rust ↔ Elixir
+      |
+    }
+    
+    session: Session Manager {
+      style.fill: "#2563eb"
+    }
+    
+    event_bus -> state_mgmt: updates
+    ipc_server -> event_bus: commands
+    event_bus -> ipc_server: events
+    session -> state_mgmt: persist
+  }
+  
+  # ----------------------------------------
+  # Agent Bridge
+  # ----------------------------------------
+  bridge: Agent Bridge {
+    label: |md
+      **Agent Bridge**
+      *Elixir / AGPL*
+    |
+    
+    style: {
+      fill: "#1c1917"
+      stroke: "#f59e0b"
+      border-radius: 8
+    }
+    
+    providers: Provider Adapters {
+      style.fill: "#78350f"
+      
+      cursor_p: Cursor
+      ollama_p: Ollama
+      claude_p: Claude API
+      openai_p: OpenAI
+    }
+    
+    context: Context Manager {
+      style.fill: "#92400e"
+    }
+    
+    tools: Tool Registry {
+      style.fill: "#b45309"
+      
+      harness_tools: Harness Tools
+      file_tools: File Tools
+      search_tools: Search Tools
+    }
+    
+    usage: Usage Tracker {
+      style.fill: "#d97706"
+      shape: stored_data
+    }
+    
+    providers -> context: with context
+    tools -> context: provide
+    providers -> usage: track
+  }
+  
+  # ----------------------------------------
+  # Studio UI
+  # ----------------------------------------
+  ui: Studio UI {
+    label: |md
+      **Studio UI**
+      *Rust (egui) / AGPL*
+    |
+    
+    style: {
+      fill: "#052e16"
+      stroke: "#22c55e"
+      border-radius: 8
+    }
+    
+    widgets: Widget System {
+      style.fill: "#166534"
+      
+      agent_stream: Agent Stream
+      code_view: Code View
+      terminal: Terminal
+      file_browser: File Browser
+      harness_panel: Harness Panel
+    }
+    
+    layout: Layout Engine {
+      style.fill: "#15803d"
+      
+      tiling: Tiling
+      tabs: Tabs
+      floating: Floating
+    }
+    
+    ipc_client: IPC Client {
+      style.fill: "#22c55e"
+      shape: hexagon
+    }
+    
+    theme: Theme Engine {
+      style.fill: "#16a34a"
+    }
+    
+    widgets -> layout: arranged by
+    ipc_client -> widgets: events
+    widgets -> ipc_client: commands
+    theme -> widgets: styled by
+  }
+  
+  # Internal connections
+  core.ipc_server <-> ui.ipc_client: ETF {
+    style: {
+      stroke: "#10b981"
+      stroke-width: 3
+      stroke-dash: 5
+    }
+  }
+  
+  core.event_bus <-> bridge: function calls
+}
+
+# ============================================
+# External Systems
+# ============================================
+external: External {
+  style: {
+    fill: "#18181b"
+    stroke: "#71717a"
+    border-radius: 8
+  }
+  
+  apps: Controlled Apps {
+    style.fill: "#27272a"
+    
+    cursor_app: Cursor IDE
+    godot_app: Godot Editor
+    android_app: Android Studio
+  }
+  
+  ai_apis: AI APIs {
+    style.fill: "#27272a"
+    
+    anthropic: Anthropic
+    openai: OpenAI
+    ollama: Ollama Local
+  }
+  
+  dns: Continuum DNS {
+    style.fill: "#3f3f46"
+    shape: cloud
+    label: |md
+      **Future**
+      *SSPL*
+    |
+  }
+}
+
+# ============================================
+# Cross-Module Connections
+# ============================================
+studio.core <-> synapsix: function calls {
+  style.stroke: "#a78bfa"
+}
+
+synapsix.harness_runtime -> external.apps: control {
+  style.stroke: "#8b5cf6"
+}
+
+studio.bridge.providers -> external.ai_apis: HTTP/gRPC {
+  style.stroke: "#fbbf24"
+}
+
+studio.bridge.tools.harness_tools -> synapsix: delegate {
+  style.stroke: "#f59e0b"
+  style.stroke-dash: 3
+}
+
+synapsix.service_registry -> external.dns: register {
+  style.stroke: "#71717a"
+  style.stroke-dash: 5
+}
+
+# ============================================
+# User
+# ============================================
+user: User {
+  shape: person
+  style.fill: "#06b6d4"
+}
+
+user -> studio.ui: interacts
+synapsix.dialog_daemon -> user: dialogs {
+  style.stroke: "#a78bfa"
+}
+

@@ -1,0 +1,302 @@
+# Continuum Studio - System Overview
+
+direction: right
+
+title: |md
+  # Continuum Studio System Overview
+  Complete component architecture with data flows
+|
+
+# ============================================================================
+# Studio UI (Rust/egui)
+# ============================================================================
+
+studio_ui: Studio UI {
+  icon: https://www.rust-lang.org/logos/rust-logo-32x32.png
+  shape: rectangle
+  style: {
+    fill: "#2d4a6f"
+    stroke: "#3b82f6"
+    font-color: white
+  }
+  
+  description: |md
+    **Language**: Rust (egui/eframe)
+    **Platform**: KDE/Wayland + X11
+    
+    • Widget-based architecture
+    • VS Code theme support
+    • Tabbed/tiling layout
+  |
+  
+  widgets: Widgets {
+    agent: Agent Stream
+    harness: Harness Panel
+    diagram: Diagram View
+    code: Code View
+    terminal: Terminal
+  }
+  
+  ipc: IPC Client {
+    shape: hexagon
+    style.fill: "#1d4ed8"
+  }
+  
+  dbus: D-Bus Client {
+    shape: hexagon
+    style.fill: "#1d4ed8"
+  }
+}
+
+# ============================================================================
+# Studio Core (Elixir)
+# ============================================================================
+
+studio_core: Studio Core {
+  icon: https://elixir-lang.org/images/logo/logo.png
+  shape: rectangle
+  style: {
+    fill: "#4c1d95"
+    stroke: "#8b5cf6"
+    font-color: white
+  }
+  
+  description: |md
+    **Language**: Elixir (BEAM)
+    **Protocol**: JSON over Unix Socket
+    
+    • ETS-backed state
+    • Event broadcasting
+    • Harness coordination
+  |
+  
+  acceptor: Socket Acceptor {
+    shape: parallelogram
+  }
+  handler: Request Handler
+  state: State (ETS) {
+    shape: cylinder
+  }
+  event_bus: Event Bus {
+    shape: queue
+  }
+  harness_reg: Harness Registry {
+    shape: cylinder
+  }
+}
+
+# ============================================================================
+# Agent Bridge (Elixir)
+# ============================================================================
+
+agent_bridge: Agent Bridge {
+  icon: https://elixir-lang.org/images/logo/logo.png
+  shape: rectangle
+  style: {
+    fill: "#78350f"
+    stroke: "#f59e0b"
+    font-color: white
+  }
+  
+  description: |md
+    **Language**: Elixir
+    **Purpose**: Unified AI Interface
+    
+    • Multi-provider support
+    • Context management
+    • Cost tracking
+    • Rate limiting
+  |
+  
+  router: Router
+  providers: Provider Registry {
+    shape: cylinder
+  }
+  context: Context Manager
+  cost: Cost Tracker
+  rate: Rate Limiter
+  middleware: Middleware {
+    shape: queue
+  }
+}
+
+# ============================================================================
+# Synapsix (Elixir)
+# ============================================================================
+
+synapsix: Synapsix {
+  icon: https://elixir-lang.org/images/logo/logo.png
+  shape: rectangle
+  style: {
+    fill: "#7f1d1d"
+    stroke: "#dc2626"
+    font-color: white
+  }
+  
+  description: |md
+    **Language**: Elixir
+    **Purpose**: Harness Orchestrator
+    
+    • Multi-app control
+    • Window automation
+    • Fault tolerance
+  |
+  
+  supervisor: Harness Supervisor
+  harnesses: Harnesses {
+    cursor: Cursor IDE
+    android: Android Studio
+    godot: Godot Editor
+  }
+  dialog_mgr: Dialog Manager
+  core_client: Core Client
+}
+
+# ============================================================================
+# Dialog Daemon (Rust)
+# ============================================================================
+
+dialog: Dialog Daemon {
+  icon: https://www.rust-lang.org/logos/rust-logo-32x32.png
+  shape: rectangle
+  style: {
+    fill: "#713f12"
+    stroke: "#eab308"
+    font-color: white
+  }
+  
+  description: |md
+    **Language**: Rust
+    **IPC**: D-Bus
+    
+    • Native dialogs
+    • Non-blocking input
+    • Mobile support
+  |
+  
+  dbus_if: D-Bus Interface
+  renderer: Dialog Renderer
+}
+
+# ============================================================================
+# AI Providers (External)
+# ============================================================================
+
+providers: AI Providers {
+  style: {
+    fill: "#1e1e2e"
+    stroke: "#64748b"
+  }
+  
+  claude: Claude API {
+    style.fill: "#8b5cf6"
+  }
+  ollama: Ollama (Local) {
+    style.fill: "#22c55e"
+  }
+  cursor_ai: Cursor AI {
+    style.fill: "#3b82f6"
+    style.stroke-dash: 3
+  }
+}
+
+# ============================================================================
+# Applications (Controlled)
+# ============================================================================
+
+apps: Controlled Applications {
+  style: {
+    fill: "#0f0f0f"
+    stroke: "#475569"
+  }
+  
+  cursor_app: Cursor IDE {
+    shape: document
+    style.fill: "#06b6d4"
+  }
+  android_app: Android Studio {
+    shape: document
+    style.fill: "#22c55e"
+  }
+  godot_app: Godot Editor {
+    shape: document
+    style.fill: "#3b82f6"
+  }
+}
+
+# ============================================================================
+# Data Flows
+# ============================================================================
+
+# UI to Core
+studio_ui.ipc -> studio_core.acceptor: JSON (Unix Socket) {
+  style.stroke: "#6366f1"
+  style.stroke-width: 2
+}
+
+# UI to Dialog
+studio_ui.dbus -> dialog.dbus_if: D-Bus {
+  style.stroke: "#eab308"
+}
+
+# Core internal flows
+studio_core.acceptor -> studio_core.handler
+studio_core.handler -> studio_core.state
+studio_core.handler -> studio_core.event_bus
+studio_core.handler -> studio_core.harness_reg
+
+# Core to Agent Bridge
+studio_core.event_bus -> agent_bridge.router: agent requests {
+  style.stroke: "#f59e0b"
+  style.stroke-width: 2
+}
+agent_bridge.router -> studio_core.event_bus: agent responses {
+  style.stroke: "#f59e0b"
+  style.stroke-width: 2
+}
+
+# Agent Bridge to Providers
+agent_bridge.providers -> providers.claude: HTTPS {
+  style.stroke: "#8b5cf6"
+}
+agent_bridge.providers -> providers.ollama: HTTP {
+  style.stroke: "#22c55e"
+}
+agent_bridge.providers -> synapsix.harnesses.cursor: via harness {
+  style.stroke: "#3b82f6"
+  style.stroke-dash: 3
+}
+
+# Synapsix to Core
+synapsix.core_client -> studio_core.acceptor: JSON (Unix Socket) {
+  style.stroke: "#dc2626"
+}
+studio_core.harness_reg -> synapsix.supervisor: control commands {
+  style.stroke: "#dc2626"
+}
+
+# Synapsix to Dialog
+synapsix.dialog_mgr -> dialog.dbus_if: D-Bus {
+  style.stroke: "#eab308"
+}
+
+# Harnesses to Applications
+synapsix.harnesses.cursor -> apps.cursor_app: kdotool/ydotool {
+  style.stroke: "#06b6d4"
+  style.stroke-dash: 3
+}
+synapsix.harnesses.android -> apps.android_app: automation {
+  style.stroke: "#22c55e"
+  style.stroke-dash: 3
+}
+synapsix.harnesses.godot -> apps.godot_app: automation {
+  style.stroke: "#3b82f6"
+  style.stroke-dash: 3
+}
+
+# Provider to Cursor AI (via app)
+providers.cursor_ai -> apps.cursor_app: built-in AI {
+  style.stroke: "#3b82f6"
+  style.stroke-dash: 3
+}
+

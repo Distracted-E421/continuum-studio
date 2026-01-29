@@ -1,0 +1,204 @@
+# IPC Communication Flow
+
+direction: down
+
+title: |md
+  # IPC Communication
+  Rust UI ↔ Elixir Backend
+|
+
+style: {
+  fill: "#0a0a0f"
+}
+
+# ============================================
+# Studio UI (Rust)
+# ============================================
+ui: Studio UI (Rust) {
+  style: {
+    fill: "#052e16"
+    stroke: "#22c55e"
+    border-radius: 12
+  }
+  
+  app: Application {
+    style.fill: "#166534"
+    
+    widgets: Widgets
+    layout: Layout
+    input: Input Handler
+  }
+  
+  ipc_client: IPC Client {
+    style.fill: "#15803d"
+    shape: hexagon
+    
+    socket: Unix Socket
+    encoder: ETF Encoder
+    decoder: ETF Decoder
+    queue: Message Queue
+  }
+  
+  app -> ipc_client: commands
+  ipc_client -> app: events
+}
+
+# ============================================
+# IPC Channel
+# ============================================
+channel: IPC Channel {
+  style: {
+    fill: "#1c1917"
+    stroke: "#f59e0b"
+    stroke-width: 3
+    border-radius: 8
+  }
+  
+  socket: Unix Socket {
+    style.fill: "#78350f"
+    shape: parallelogram
+    
+    path: /tmp/continuum-studio.sock
+  }
+  
+  protocol: ETF Protocol {
+    style.fill: "#92400e"
+    
+    commands: |md
+      **Commands (UI → Core)**
+      `{:command, :harness_start, %{...}}`
+      `{:command, :state_set, %{...}}`
+      `{:command, :agent_message, %{...}}`
+    |
+    
+    events: |md
+      **Events (Core → UI)**
+      `{:event, :harness_status, %{...}}`
+      `{:event, :state_changed, %{...}}`
+      `{:event, :agent_response, %{...}}`
+    |
+  }
+}
+
+# ============================================
+# Studio Core (Elixir)
+# ============================================
+core: Studio Core (Elixir) {
+  style: {
+    fill: "#1e3a5f"
+    stroke: "#3b82f6"
+    border-radius: 12
+  }
+  
+  ipc_server: IPC Server {
+    style.fill: "#2563eb"
+    shape: hexagon
+    
+    acceptor: Socket Acceptor
+    handler: Message Handler
+    router: Command Router
+  }
+  
+  event_bus: Event Bus {
+    style.fill: "#1d4ed8"
+    shape: queue
+    
+    topics: |md
+      Topics:
+      - harness.*
+      - agent.*
+      - state.*
+      - user.*
+    |
+  }
+  
+  state: State Manager {
+    style.fill: "#3b82f6"
+    shape: cylinder
+  }
+  
+  ipc_server -> event_bus: publish
+  event_bus -> ipc_server: subscribe
+  event_bus -> state: update
+}
+
+# ============================================
+# Connections
+# ============================================
+ui.ipc_client -> channel.socket: write {
+  style: {
+    stroke: "#22c55e"
+    stroke-width: 2
+  }
+}
+
+channel.socket -> core.ipc_server: read {
+  style: {
+    stroke: "#3b82f6"
+    stroke-width: 2
+  }
+}
+
+core.ipc_server -> channel.socket: write {
+  style: {
+    stroke: "#3b82f6"
+    stroke-width: 2
+  }
+}
+
+channel.socket -> ui.ipc_client: read {
+  style: {
+    stroke: "#22c55e"
+    stroke-width: 2
+  }
+}
+
+# ============================================
+# Message Flow Examples
+# ============================================
+examples: Message Flow Examples {
+  style: {
+    fill: "#18181b"
+    stroke: "#71717a"
+    border-radius: 8
+  }
+  
+  example1: User Starts Harness {
+    style.fill: "#1f2937"
+    
+    flow: |md
+      1. User clicks "Start Cursor"
+      2. UI sends: `{:command, :harness_start, %{type: :cursor}}`
+      3. Core receives, publishes to event bus
+      4. Synapsix picks up, starts harness
+      5. Status event flows back
+      6. UI updates harness panel
+    |
+  }
+  
+  example2: Agent Message {
+    style.fill: "#1f2937"
+    
+    flow: |md
+      1. User types message
+      2. UI sends: `{:command, :agent_message, %{text: "...", provider: :cursor}}`
+      3. Core routes to Agent Bridge
+      4. Bridge builds context, calls provider
+      5. Response streamed back as events
+      6. UI updates agent stream widget
+    |
+  }
+  
+  example3: State Change {
+    style.fill: "#1f2937"
+    
+    flow: |md
+      1. Widget updates local state
+      2. UI sends: `{:command, :state_set, %{path: [...], value: ...}}`
+      3. Core's State Manager updates
+      4. Publishes: `{:event, :state_changed, %{...}}`
+      5. UI receives, updates relevant widgets
+    |
+  }
+}
+

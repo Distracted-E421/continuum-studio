@@ -1,0 +1,307 @@
+# Code Migration Plan: nixos-cursor → Continuum
+
+direction: down
+
+title: |md
+  # Migration Plan
+  From nixos-cursor to Continuum Ecosystem
+|
+
+style: {
+  fill: "#0a0a0f"
+}
+
+# ============================================
+# SOURCE: nixos-cursor
+# ============================================
+source: nixos-cursor (Source) {
+  style: {
+    fill: "#7f1d1d"
+    stroke: "#ef4444"
+    border-radius: 12
+  }
+  
+  dialog_daemon: cursor-dialog-daemon {
+    style.fill: "#b91c1c"
+    shape: hexagon
+    
+    note: |md
+      **Move to Synapsix**
+      - Rust binary
+      - D-Bus interface
+      - Dialog logic
+    |
+  }
+  
+  studio_egui: cursor-studio-egui {
+    style.fill: "#dc2626"
+    
+    note: |md
+      **Refactor for Studio UI**
+      - Widget code
+      - Layout logic
+      - Theme system
+    |
+  }
+  
+  modules: NixOS Modules {
+    style.fill: "#f87171"
+    
+    note: |md
+      **Keep in nixos-cursor**
+      - Proxy modules
+      - Cursor-specific config
+      - Installation helpers
+    |
+  }
+  
+  tools: Proxy Tools {
+    style.fill: "#fca5a5"
+    
+    note: |md
+      **Keep in nixos-cursor**
+      - cursor-proxy
+      - Test harness
+      - Analysis tools
+    |
+  }
+}
+
+# ============================================
+# PHASE 1: Dialog Daemon
+# ============================================
+phase1: Phase 1: Dialog Daemon {
+  style: {
+    fill: "#1e1b4b"
+    stroke: "#7c3aed"
+    stroke-width: 3
+    border-radius: 8
+  }
+  
+  priority: HIGH PRIORITY
+  
+  phase1_steps: Migration Steps {
+    style.fill: "#4c1d95"
+    
+    s1: 1. Create synapsix/priv/dialog-daemon/
+    s2: 2. Move Rust source files
+    s3: 3. Update Cargo.toml paths
+    s4: 4. Update D-Bus interface name
+    s5: 5. Create Elixir wrapper module
+    s6: 6. Test with existing harnesses
+    
+    s1 -> s2 -> s3 -> s4 -> s5 -> s6
+  }
+  
+  changes: Changes {
+    style.fill: "#6d28d9"
+    
+    rename: |md
+      **Rename:**
+      - cursor-dialog-daemon → continuum-dialog-daemon
+      - cursor-dialog-cli → continuum-dialog-cli
+    |
+    
+    dbus: |md
+      **D-Bus Interface:**
+      - sh.cursor.studio.Dialog1
+      → sh.continuum.studio.Dialog1
+    |
+  }
+}
+
+# ============================================
+# PHASE 2: Studio UI Foundation
+# ============================================
+phase2: Phase 2: UI Foundation {
+  style: {
+    fill: "#052e16"
+    stroke: "#22c55e"
+    border-radius: 8
+  }
+  
+  priority: MEDIUM PRIORITY
+  
+  phase2_steps: UI Steps {
+    style.fill: "#166534"
+    
+    ui1: 1. Create continuum-studio/ui/ scaffold
+    ui2: 2. Set up IPC client (ETF)
+    ui3: 3. Extract widget patterns from egui code
+    ui4: 4. Build minimal widget system
+    ui5: 5. Implement basic layout engine
+    ui6: 6. Connect to Studio Core
+    
+    ui1 -> ui2 -> ui3 -> ui4 -> ui5 -> ui6
+  }
+  
+  from_egui: Extract from cursor-studio-egui {
+    style.fill: "#15803d"
+    
+    extract: |md
+      **Extract:**
+      - Theme/color system
+      - Font configuration
+      - Basic widget patterns
+      - Layout calculations
+    |
+    
+    discard: |md
+      **Discard:**
+      - Cursor-specific logic
+      - Old IPC code
+      - Tight coupling
+    |
+  }
+}
+
+# ============================================
+# PHASE 3: Core & Bridge
+# ============================================
+phase3: Phase 3: Core & Bridge {
+  style: {
+    fill: "#1e3a5f"
+    stroke: "#3b82f6"
+    border-radius: 8
+  }
+  
+  priority: AFTER UI
+  
+  core_steps: Studio Core Steps {
+    style.fill: "#1d4ed8"
+    
+    c1: 1. Create Elixir umbrella app
+    c2: 2. Implement EventBus GenServer
+    c3: 3. Implement State GenServer
+    c4: 4. Build IPC server (port/socket)
+    c5: 5. Wire up to Synapsix
+    
+    c1 -> c2 -> c3 -> c4 -> c5
+  }
+  
+  bridge_steps: Agent Bridge Steps {
+    style.fill: "#2563eb"
+    
+    b1: 1. Define Provider behaviour
+    b2: 2. Implement Ollama adapter (simplest)
+    b3: 3. Add context management
+    b4: 4. Add Cursor adapter (via Synapsix)
+    b5: 5. Add API adapters (Claude, OpenAI)
+    
+    b1 -> b2 -> b3 -> b4 -> b5
+  }
+}
+
+# ============================================
+# DESTINATIONS
+# ============================================
+dest_synapsix: synapsix/ (Destination) {
+  style: {
+    fill: "#1e1b4b"
+    stroke: "#a78bfa"
+    border-radius: 12
+  }
+  
+  priv: priv/dialog-daemon/ {
+    style.fill: "#5b21b6"
+    shape: package
+  }
+  
+  lib: lib/synapsix/ {
+    style.fill: "#6d28d9"
+    shape: package
+  }
+}
+
+dest_studio: continuum-studio/ (Destination) {
+  style: {
+    fill: "#0c1222"
+    stroke: "#60a5fa"
+    border-radius: 12
+  }
+  
+  ui: ui/ {
+    style.fill: "#166534"
+    shape: package
+  }
+  
+  core: core/ {
+    style.fill: "#1d4ed8"
+    shape: package
+  }
+  
+  bridge: agent-bridge/ {
+    style.fill: "#92400e"
+    shape: package
+  }
+}
+
+# ============================================
+# Migration Arrows
+# ============================================
+source.dialog_daemon -> dest_synapsix.priv: migrate {
+  style: {
+    stroke: "#7c3aed"
+    stroke-width: 3
+  }
+}
+
+source.studio_egui -> dest_studio.ui: extract & refactor {
+  style: {
+    stroke: "#22c55e"
+    stroke-width: 2
+    stroke-dash: 3
+  }
+}
+
+# source.modules stays in place (no migration arrow needed)
+
+# ============================================
+# Timeline
+# ============================================
+timeline: Timeline {
+  style: {
+    fill: "#18181b"
+    stroke: "#71717a"
+    border-radius: 8
+  }
+  
+  week1: Week 1-2 {
+    style.fill: "#1f2937"
+    
+    tasks: |md
+      - Move dialog-daemon
+      - Test existing functionality
+      - Update imports/paths
+    |
+  }
+  
+  week3: Week 3-4 {
+    style.fill: "#374151"
+    
+    tasks: |md
+      - UI scaffold
+      - IPC implementation
+      - Basic widgets
+    |
+  }
+  
+  week5: Week 5-6 {
+    style.fill: "#4b5563"
+    
+    tasks: |md
+      - Studio Core
+      - Agent Bridge
+      - Integration testing
+    |
+  }
+  
+  week1 -> week3 -> week5
+}
+
+# ============================================
+# Phase connections
+# ============================================
+phase1 -> phase2: then
+phase2 -> phase3: then
+
