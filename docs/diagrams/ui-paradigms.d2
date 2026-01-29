@@ -1,0 +1,269 @@
+# Continuum Studio - UI Paradigm Comparison
+
+direction: down
+
+title: |md
+  # UI Paradigm Options
+  Comparing layouts and flexibility
+|
+
+# Paradigm 1: Tiling Widget System
+paradigm1: 1. Tiling Widget System {
+  style: {
+    fill: "#1a1a2e"
+    stroke: "#16213e"
+  }
+  
+  desc: |md
+    **Like i3/Hyprland for apps**
+    - Automatic space allocation
+    - Drag to rearrange
+    - Split horizontal/vertical
+    - Save/load layouts
+  |
+  
+  mockup: Layout {
+    style: {
+      fill: "#0f0f23"
+      stroke: "#3b82f6"
+    }
+    
+    left: Agent Stream {
+      style.fill: "#7c3aed"
+    }
+    
+    center: Editor {
+      style.fill: "#2563eb"
+    }
+    
+    right: Vertical Split {
+      style.fill: "#1e3a5f"
+      
+      top: Terminal {
+        style.fill: "#059669"
+      }
+      bottom: Dialogs {
+        style.fill: "#f59e0b"
+      }
+    }
+    
+    left -> center
+    center -> right
+    right.top -> right.bottom
+  }
+  
+  pros: |md
+    **✅ Pros:**
+    - Efficient space use
+    - Familiar to Linux users
+    - Keyboard-driven
+  |
+  
+  cons: |md
+    **❌ Cons:**
+    - Learning curve
+    - Less intuitive
+    - Single window only
+  |
+}
+
+# Paradigm 2: Tab-Based (Notepad++ style)
+paradigm2: 2. Tab-Based Pages {
+  style: {
+    fill: "#1a1a2e"
+    stroke: "#16213e"
+  }
+  
+  desc: |md
+    **Enhanced tabbed interface**
+    - Tabs = different views
+    - Not just editors
+    - Easy to understand
+    - Tab groups/pinning
+  |
+  
+  mockup: Layout {
+    style: {
+      fill: "#0f0f23"
+      stroke: "#3b82f6"
+    }
+    
+    tabs: Tab Bar {
+      style.fill: "#1e293b"
+      
+      tab1: 📝 Editor
+      tab2: 🤖 Agent
+      tab3: 💬 Dialog
+      tab4: ⚙️ Config
+    }
+    
+    content: Active Content {
+      style.fill: "#2563eb"
+      height: 300
+    }
+    
+    tabs -> content: shows
+  }
+  
+  pros: |md
+    **✅ Pros:**
+    - Very familiar
+    - Simple mental model
+    - Easy to implement
+  |
+  
+  cons: |md
+    **❌ Cons:**
+    - One thing at a time
+    - More switching
+    - Less overview
+  |
+}
+
+# Paradigm 3: Hub and Spoke
+paradigm3: 3. Hub & Spoke {
+  style: {
+    fill: "#1a1a2e"
+    stroke: "#16213e"
+  }
+  
+  desc: |md
+    **Central control, child windows**
+    - Main window = command
+    - Spawn task windows
+    - Can spread across monitors
+    - Each window independent
+  |
+  
+  mockup: Layout {
+    style: {
+      fill: "#0f0f23"
+      stroke: "#3b82f6"
+    }
+    
+    hub: Command Hub {
+      style.fill: "#f59e0b"
+      
+      status: Status
+      launch: Launchers
+      overview: Overview
+    }
+    
+    spoke1: Editor Window {
+      style.fill: "#2563eb"
+    }
+    
+    spoke2: Agent Window {
+      style.fill: "#7c3aed"
+    }
+    
+    spoke3: Terminal Window {
+      style.fill: "#059669"
+    }
+    
+    hub -> spoke1: spawn
+    hub -> spoke2: spawn
+    hub -> spoke3: spawn
+  }
+  
+  pros: |md
+    **✅ Pros:**
+    - Multi-monitor native
+    - Flexible placement
+    - Independent workflows
+  |
+  
+  cons: |md
+    **❌ Cons:**
+    - Window management
+    - More complex state
+    - Desktop clutter
+  |
+}
+
+# Paradigm 4: Overlay Engine
+paradigm4: 4. Overlay Engine {
+  style: {
+    fill: "#1a1a2e"
+    stroke: "#16213e"
+  }
+  
+  desc: |md
+    **Game-engine approach**
+    - Full GPU rendering
+    - Complex animations
+    - Cross-monitor canvas
+    - Floating panels
+  |
+  
+  mockup: Layout {
+    style: {
+      fill: "#0f0f23"
+      stroke: "#3b82f6"
+      shadow: true
+    }
+    
+    layer1: DE Layer {
+      style.fill: "#0f172a"
+      style.opacity: 0.5
+    }
+    
+    layer2: Overlay Canvas {
+      style.fill: "transparent"
+      style.stroke: "#f59e0b"
+      style.stroke-dash: 3
+      
+      float1: Agent {
+        style.fill: "#7c3aed"
+        style.opacity: 0.9
+      }
+      
+      float2: Dialog {
+        style.fill: "#f59e0b"
+        style.opacity: 0.9
+      }
+      
+      float3: Quick Actions {
+        style.fill: "#059669"
+        style.opacity: 0.9
+      }
+    }
+    
+    layer1 -> layer2: overlay
+  }
+  
+  pros: |md
+    **✅ Pros:**
+    - Ultimate flexibility
+    - Rich animations
+    - Unique experience
+  |
+  
+  cons: |md
+    **❌ Cons:**
+    - Complex to build
+    - GPU requirements
+    - Accessibility issues
+  |
+}
+
+# Recommendation
+recommendation: Recommendation {
+  style: {
+    fill: "#065f46"
+    stroke: "#10b981"
+    stroke-width: 3
+  }
+  
+  text: |md
+    ## Hybrid Approach
+    
+    Start with **Tiling Widgets** as core,
+    add **Hub & Spoke** for multi-window,
+    use **Overlay** for notifications/dialogs.
+    
+    This gives maximum flexibility without
+    committing to one paradigm.
+  |
+}
+

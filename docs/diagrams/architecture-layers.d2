@@ -1,0 +1,129 @@
+# Continuum Studio - Layered Architecture
+
+direction: down
+
+title: |md
+  # Continuum Studio Architecture
+  Modular, presentation-agnostic design
+|
+
+# Presentation Layer (User-Selectable)
+presentation: Presentation Layer {
+  style: {
+    fill: "#1e3a5f"
+    stroke: "#3b82f6"
+    font-color: "#f8fafc"
+  }
+  
+  tiles: Tiling Widgets {
+    icon: https://icons.terrastruct.com/essentials%2F227-grid.svg
+    style.fill: "#2563eb"
+  }
+  tabs: Tab Mode {
+    icon: https://icons.terrastruct.com/essentials%2F036-tabs.svg
+    style.fill: "#2563eb"
+  }
+  hub: Hub/Spoke {
+    icon: https://icons.terrastruct.com/tech%2F015-connection.svg
+    style.fill: "#2563eb"
+  }
+  overlay: Overlay {
+    icon: https://icons.terrastruct.com/essentials%2F055-layers.svg
+    style.fill: "#2563eb"
+  }
+}
+
+# Widget Runtime
+runtime: Widget Runtime {
+  style: {
+    fill: "#1e293b"
+    stroke: "#64748b"
+  }
+  
+  registry: Widget Registry {
+    shape: cylinder
+  }
+  layout: Layout Engine
+  ipc: IPC Bus {
+    shape: queue
+  }
+  state: State Management {
+    shape: stored_data
+  }
+  
+  registry -> layout: provides widgets
+  layout -> ipc: events
+  ipc -> state: updates
+}
+
+# Core Services
+services: Core Services {
+  style: {
+    fill: "#0f172a"
+    stroke: "#475569"
+  }
+  
+  agent: Agent Manager {
+    icon: https://icons.terrastruct.com/tech%2F068-robot.svg
+    style.fill: "#7c3aed"
+  }
+  sync: Sync Engine {
+    icon: https://icons.terrastruct.com/essentials%2F213-sync.svg
+    style.fill: "#059669"
+  }
+  dialog: Dialog Daemon {
+    icon: https://icons.terrastruct.com/essentials%2F103-chat.svg
+    style.fill: "#f59e0b"
+  }
+  memory: Memory Store {
+    shape: cylinder
+    style.fill: "#06b6d4"
+  }
+  config: Config Loader {
+    icon: https://icons.terrastruct.com/essentials%2F116-settings.svg
+    style.fill: "#64748b"
+  }
+}
+
+# Integration Layer
+integrations: Integration Layer {
+  style: {
+    fill: "#020617"
+    stroke: "#334155"
+  }
+  
+  cursor: Cursor IDE {
+    icon: https://icons.terrastruct.com/tech%2F019-code.svg
+    style.fill: "#22c55e"
+  }
+  local: Local Models {
+    icon: https://icons.terrastruct.com/tech%2F068-robot.svg
+    style.fill: "#a855f7"
+  }
+  api: API (GPT/Claude) {
+    icon: https://icons.terrastruct.com/essentials%2F088-api.svg
+    style.fill: "#3b82f6"
+  }
+  engram: Engram {
+    icon: https://icons.terrastruct.com/infra%2F004-network.svg
+    style.fill: "#f43f5e"
+  }
+  external: External Tools {
+    icon: https://icons.terrastruct.com/essentials%2F048-plugin.svg
+    style.fill: "#78716c"
+  }
+}
+
+# Connections
+presentation -> runtime: widget requests
+runtime -> services: service calls
+services -> integrations: external calls
+
+# User
+user: User {
+  shape: person
+  style.fill: "#0ea5e9"
+}
+
+user -> presentation: interacts
+

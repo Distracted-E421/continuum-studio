@@ -1,0 +1,150 @@
+# Continuum Studio - Widget Communication System
+
+direction: right
+
+title: |md
+  # Widget Communication Architecture
+  Event-driven, loosely coupled
+|
+
+# Widget instances
+widgets: Widgets {
+  style: {
+    fill: "#1e3a5f"
+    stroke: "#3b82f6"
+  }
+  
+  agent: Agent Stream {
+    style.fill: "#7c3aed"
+    
+    events_out: |md
+      **Emits:**
+      - agent.activity
+      - agent.request
+      - agent.complete
+    |
+    
+    events_in: |md
+      **Listens:**
+      - user.approve
+      - user.reject
+      - config.changed
+    |
+  }
+  
+  editor: Code Editor {
+    style.fill: "#2563eb"
+    
+    events_out: |md
+      **Emits:**
+      - file.changed
+      - file.saved
+      - cursor.moved
+    |
+    
+    events_in: |md
+      **Listens:**
+      - agent.edit
+      - sync.update
+    |
+  }
+  
+  dialog: Dialog Queue {
+    style.fill: "#f59e0b"
+    
+    events_out: |md
+      **Emits:**
+      - user.response
+      - dialog.timeout
+    |
+    
+    events_in: |md
+      **Listens:**
+      - agent.request
+    |
+  }
+  
+  terminal: Terminal {
+    style.fill: "#059669"
+    
+    events_out: |md
+      **Emits:**
+      - command.run
+      - output.line
+    |
+    
+    events_in: |md
+      **Listens:**
+      - agent.command
+    |
+  }
+}
+
+# Event Bus
+bus: Event Bus {
+  shape: queue
+  style: {
+    fill: "#0f172a"
+    stroke: "#f59e0b"
+    stroke-width: 3
+  }
+  
+  topics: |md
+    **Topics:**
+    - agent.*
+    - file.*
+    - user.*
+    - sync.*
+    - config.*
+  |
+}
+
+# State Store
+state: Shared State {
+  shape: cylinder
+  style: {
+    fill: "#1e293b"
+    stroke: "#06b6d4"
+  }
+  
+  data: |md
+    - Widget layouts
+    - User preferences
+    - Session data
+    - Agent contexts
+  |
+}
+
+# Connections
+widgets.agent -> bus: publish
+widgets.editor -> bus: publish
+widgets.dialog -> bus: publish
+widgets.terminal -> bus: publish
+
+bus -> widgets.agent: subscribe
+bus -> widgets.editor: subscribe
+bus -> widgets.dialog: subscribe
+bus -> widgets.terminal: subscribe
+
+bus <-> state: read/write
+
+# External services
+external: External Services {
+  style: {
+    fill: "#020617"
+    stroke: "#475569"
+  }
+  
+  dbus: D-Bus {
+    shape: hexagon
+  }
+  websocket: WebSocket {
+    shape: hexagon
+  }
+  grpc: gRPC {
+    shape: hexagon
+  }
+}
+
+bus -> external: bridge
+
