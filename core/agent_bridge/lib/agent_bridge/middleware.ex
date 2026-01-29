@@ -1,34 +1,34 @@
 defmodule AgentBridge.Middleware do
   @moduledoc """
   Middleware pipeline for Agent Bridge.
-  
+
   Middleware can intercept, modify, or block messages before they're
   sent to providers and responses before they're returned.
-  
+
   ## Implementing Middleware
-  
+
       defmodule MyMiddleware do
         @behaviour AgentBridge.Middleware
-        
+
         @impl true
         def call(message, opts, next) do
           # Pre-processing
           modified_message = transform(message)
-          
+
           # Call next middleware/provider
           case next.(modified_message, opts) do
             {:ok, response} ->
               # Post-processing
               {:ok, transform_response(response)}
-            
+
             error ->
               error
           end
         end
       end
-  
+
   ## Built-in Middleware
-  
+
   - `AgentBridge.Middleware.Logger` - Log all messages
   - `AgentBridge.Middleware.Sanitizer` - Remove sensitive data
   - `AgentBridge.Middleware.Validator` - Validate message content
@@ -73,16 +73,16 @@ defmodule AgentBridge.Middleware.Logger do
   def call(message, opts, next) do
     Logger.debug("AgentBridge request: #{inspect(message, limit: 200)}")
     start_time = System.monotonic_time(:millisecond)
-    
+
     result = next.(message, opts)
-    
+
     elapsed = System.monotonic_time(:millisecond) - start_time
-    
+
     case result do
       {:ok, response} ->
         Logger.debug("AgentBridge response (#{elapsed}ms): #{inspect(response, limit: 200)}")
         {:ok, response}
-      
+
       {:error, reason} ->
         Logger.warning("AgentBridge error (#{elapsed}ms): #{inspect(reason)}")
         {:error, reason}
@@ -107,12 +107,12 @@ defmodule AgentBridge.Middleware.Sanitizer do
   @impl true
   def call(message, opts, next) do
     sanitized = sanitize_content(message)
-    
+
     case next.(sanitized, opts) do
       {:ok, response} ->
         # Also sanitize response
         {:ok, sanitize_content(response)}
-      
+
       error ->
         error
     end
@@ -173,13 +173,13 @@ defmodule AgentBridge.Middleware.Telemetry do
       session: opts[:session],
       message_role: message.role,
     }
-    
+
     :telemetry.span(
       [:agent_bridge, :request],
       metadata,
       fn ->
         result = next.(message, opts)
-        
+
         case result do
           {:ok, response} ->
             {result, Map.merge(metadata, %{
@@ -187,7 +187,7 @@ defmodule AgentBridge.Middleware.Telemetry do
               response_role: response.role,
               model: response.model,
             })}
-          
+
           {:error, reason} ->
             {result, Map.merge(metadata, %{
               status: :error,
@@ -209,11 +209,11 @@ defmodule AgentBridge.Middleware.ContentFilter do
   @impl true
   def call(message, opts, next) do
     rules = opts[:content_filter_rules] || []
-    
+
     case check_rules(message.content, rules) do
       :ok ->
         next.(message, opts)
-      
+
       {:blocked, rule} ->
         {:error, {:content_blocked, rule}}
     end
@@ -240,4 +240,3 @@ defmodule AgentBridge.Middleware.ContentFilter do
 
   defp rule_matches?(_, _), do: false
 end
-

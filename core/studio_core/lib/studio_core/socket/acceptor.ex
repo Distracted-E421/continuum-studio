@@ -1,19 +1,19 @@
 defmodule StudioCore.Socket.Acceptor do
   @moduledoc """
   Unix socket acceptor for UI connections.
-  
+
   Listens on a Unix domain socket and spawns a handler
   for each connecting UI client.
-  
+
   ## Protocol
-  
+
   Messages are framed with a 4-byte big-endian length prefix:
-  
+
       +--------+----------------+
       | length | ETF payload    |
       | 4 bytes| variable       |
       +--------+----------------+
-  
+
   The payload is Erlang External Term Format (ETF), which
   is the native serialization format for BEAM languages.
   """
@@ -64,10 +64,10 @@ defmodule StudioCore.Socket.Acceptor do
     ]) do
       {:ok, listen_socket} ->
         Logger.info("Socket acceptor listening on #{socket_path}")
-        
+
         # Start accepting connections
         send(self(), :accept)
-        
+
         {:ok, %State{
           socket_path: socket_path,
           listen_socket: listen_socket,
@@ -88,11 +88,11 @@ defmodule StudioCore.Socket.Acceptor do
   @impl true
   def handle_cast({:broadcast, message}, state) do
     encoded = :erlang.term_to_binary(message)
-    
+
     for {_pid, socket} <- state.clients do
       :gen_tcp.send(socket, encoded)
     end
-    
+
     {:noreply, state}
   end
 
@@ -103,13 +103,13 @@ defmodule StudioCore.Socket.Acceptor do
         # Spawn a handler for this client
         {:ok, pid} = StudioCore.Socket.Handler.start_link(client_socket)
         :gen_tcp.controlling_process(client_socket, pid)
-        
+
         # Track the client
         new_clients = Map.put(state.clients, pid, client_socket)
         Process.monitor(pid)
-        
+
         Logger.info("Client connected (total: #{map_size(new_clients)})")
-        
+
         # Continue accepting
         send(self(), :accept)
         {:noreply, %{state | clients: new_clients}}
@@ -146,4 +146,3 @@ defmodule StudioCore.Socket.Acceptor do
     :ok
   end
 end
-

@@ -10,11 +10,13 @@ use continuum_studio_ui::{
         TabBarWidget, Tab, TabType,
         DiagramWidget, DiagramNode, DiagramEdge, NodeShape, NodeStatus,
         CodeViewWidget, Language,
-        TerminalWidget, AnsiColor,
+        TerminalWidget,
     },
+    ipc::{IpcClient, Command, Event},
 };
 use eframe::egui::{self, Color32, RichText};
-use tracing::info;
+use std::sync::Arc;
+use tracing::{info, warn, error};
 use tracing_subscriber::EnvFilter;
 
 /// Application state
@@ -40,7 +42,13 @@ struct ContinuumStudio {
     /// Demo terminal widget  
     terminal_widget: TerminalWidget,
     
-    /// IPC connection state (simulated)
+    /// IPC client for Studio Core communication
+    ipc_client: IpcClient,
+    
+    /// Tokio runtime handle for async operations
+    runtime: Arc<tokio::runtime::Runtime>,
+    
+    /// IPC connection state (actual, not simulated)
     ipc_connected: bool,
     
     /// Frame counter for demo
@@ -48,11 +56,26 @@ struct ContinuumStudio {
     
     /// Whether left sidebar is visible
     show_sidebar: bool,
+    
+    /// Pending connection attempt
+    connection_pending: bool,
 }
 
 impl ContinuumStudio {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         info!("Initializing Continuum Studio");
+        
+        // Create tokio runtime for async IPC operations
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime")
+        );
+        
+        // Create IPC client
+        let ipc_client = IpcClient::new(IpcClient::default_socket_path());
         
         // Create tab bar with initial tabs
         let mut tab_bar = TabBarWidget::new();
@@ -149,9 +172,12 @@ async fn main() -> anyhow::Result<()> {
             diagram_widget,
             code_widget,
             terminal_widget,
+            ipc_client,
+            runtime,
             ipc_connected: false,
             frame_count: 0,
             show_sidebar: true,
+            connection_pending: true, // Will attempt to connect on first frame
         }
     }
     
@@ -210,6 +236,65 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+    
+    /// Handle events received from Studio Core
+    fn handle_ipc_event(&mut self, event: Event) {
+        match event {
+            Event::HarnessStatus { harness, status } => {
+                info!("Harness status: {} -> {}", harness, status);
+                self.terminal_widget.write_info(&format!("🔗 Harness {}: {}", harness, status));
+                
+                // Update diagram node status based on harness
+                let node_status = match status.as_str() {
+                    "running" | "reconnected" => NodeStatus::Running,
+                    "starting" | "stopping" | "registered" => NodeStatus::Pending,
+                    "stopped" | "error" => NodeStatus::Error,
+                    _ => NodeStatus::Ready,
+                };
+                
+                // Update matching node in diagram (if it exists)
+                self.diagram_widget.set_node_status(&harness, node_status);
+            }
+            Event::HarnessRegistered { harness, harness_type } => {
+                info!("Harness registered: {} (type: {})", harness, harness_type);
+                self.terminal_widget.write_success(&format!("✅ Harness registered: {} [{}]", harness, harness_type));
+                
+                // Set diagram node to pending (waiting for status)
+                self.diagram_widget.set_node_status(&harness, NodeStatus::Pending);
+            }
+            Event::HarnessDisconnected { harness, reason } => {
+                info!("Harness disconnected: {} (reason: {})", harness, reason);
+                self.terminal_widget.write_error(&format!("🔌 Harness disconnected: {} - {}", harness, reason));
+                
+                // Update diagram node to error/stopped state
+                self.diagram_widget.set_node_status(&harness, NodeStatus::Error);
+            }
+            Event::AgentResponse { content, role } => {
+                info!("Agent response from {}: {}...", role, &content[..content.len().min(50)]);
+                self.agent_stream.add_message(&role, &content);
+            }
+            Event::StateChanged { path, value } => {
+                info!("State changed: {:?} = {:?}", path, value);
+                self.terminal_widget.write_plain(&format!("📝 State: {:?}", path));
+            }
+            Event::Pong => {
+                info!("Received pong from Core");
+                self.terminal_widget.write_success("✅ Core responded to ping");
+            }
+            Event::Error { message } => {
+                error!("Error from Core: {}", message);
+                self.terminal_widget.write_error(&format!("❌ Error: {}", message));
+            }
+        }
+    }
+    
+    /// Attempt to reconnect to Studio Core
+    fn reconnect(&mut self) {
+        if !self.connection_pending {
+            self.connection_pending = true;
+            self.terminal_widget.write_info("🔄 Attempting to reconnect...");
+        }
+    }
 }
 
 impl eframe::App for ContinuumStudio {
@@ -219,15 +304,38 @@ impl eframe::App for ContinuumStudio {
         // Apply theme
         self.theme.apply_to_ctx(ctx);
         
-        // Simulate IPC connection toggle every 120 frames
-        if self.frame_count % 120 == 0 {
-            self.ipc_connected = !self.ipc_connected;
+        // Handle IPC connection
+        if self.connection_pending && !self.ipc_connected {
+            self.connection_pending = false;
+            let mut client = self.ipc_client.clone();
+            let rt = self.runtime.clone();
+            
+            // Attempt connection in background
+            std::thread::spawn(move || {
+                match rt.block_on(client.connect()) {
+                    Ok(()) => {
+                        info!("Connected to Studio Core!");
+                        // Send initial ping
+                        let _ = rt.block_on(client.send(Command::Ping));
+                    }
+                    Err(e) => {
+                        warn!("Failed to connect to Studio Core: {}", e);
+                    }
+                }
+            });
         }
         
-        // Simulate terminal output
-        if self.frame_count % 300 == 0 {
-            self.terminal_widget.write_plain(&format!("$ echo 'Frame {}'", self.frame_count));
-            self.terminal_widget.write_plain(&format!("Frame {}", self.frame_count));
+        // Update connection status
+        self.ipc_connected = self.ipc_client.is_connected();
+        
+        // Poll for IPC events
+        while let Some(event) = self.ipc_client.try_recv() {
+            self.handle_ipc_event(event);
+        }
+        
+        // Log terminal output periodically (for demo)
+        if self.frame_count % 300 == 0 && self.ipc_connected {
+            self.terminal_widget.write_info(&format!("Frame {} - Core connected", self.frame_count));
         }
         
         // Top panel - title bar / status
@@ -238,13 +346,22 @@ impl eframe::App for ContinuumStudio {
                     ui.heading(RichText::new("◈ Continuum Studio").color(self.theme.accent));
                     ui.separator();
                     
-                    // Connection status indicator
+                    // Connection status indicator with reconnect button
                     let (status_icon, status_text, status_color) = if self.ipc_connected {
                         ("●", "Core Connected", self.theme.success)
+                    } else if self.connection_pending {
+                        ("◐", "Connecting...", self.theme.warning)
                     } else {
-                        ("○", "Core Disconnected", self.theme.warning)
+                        ("○", "Core Disconnected", self.theme.error)
                     };
                     ui.colored_label(status_color, format!("{} {}", status_icon, status_text));
+                    
+                    // Show reconnect button when disconnected
+                    let reconnect_clicked = if !self.ipc_connected && !self.connection_pending {
+                        ui.button("🔄 Reconnect").clicked()
+                    } else {
+                        false
+                    };
                     
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).color(self.theme.fg_dim));
@@ -254,6 +371,11 @@ impl eframe::App for ContinuumStudio {
                             self.tab_bar.add_tab(Tab::settings());
                         }
                     });
+                    
+                    // Handle reconnect after layout
+                    if reconnect_clicked {
+                        self.connection_pending = true;
+                    }
                 });
             });
         

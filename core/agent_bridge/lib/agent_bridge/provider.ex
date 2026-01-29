@@ -1,7 +1,7 @@
 defmodule AgentBridge.Provider do
   @moduledoc """
   Behaviour for AI providers.
-  
+
   Implement this behaviour to add a new AI provider to the Agent Bridge.
   """
 
@@ -20,7 +20,7 @@ defmodule AgentBridge.Provider do
 
   @doc """
   Send a message and stream the response.
-  
+
   The callback will be called with each chunk as it arrives.
   """
   @callback stream_message(state :: term(), message :: Message.t(), callback :: (Message.t() -> any()), opts :: keyword()) ::

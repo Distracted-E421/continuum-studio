@@ -1,7 +1,7 @@
 defmodule AgentBridge.Router do
   @moduledoc """
   Routes messages to appropriate AI providers.
-  
+
   Handles:
   - Provider selection (explicit or automatic)
   - Context enrichment
@@ -63,16 +63,16 @@ defmodule AgentBridge.Router do
          {:ok, provider} <- ProviderRegistry.acquire(provider_id),
          enriched_message <- enrich_message(message, opts),
          {:ok, response} <- send_to_provider(provider, enriched_message, opts) do
-      
+
       # Track usage
       track_usage(provider_id, message, response)
-      
+
       # Store in context
       if session = opts[:session] do
         ContextManager.add_message(session, message)
         ContextManager.add_message(session, response)
       end
-      
+
       {:ok, response}
     end
   end
@@ -82,33 +82,33 @@ defmodule AgentBridge.Router do
          :ok <- check_rate_limit(provider_id),
          {:ok, provider} <- ProviderRegistry.acquire(provider_id),
          enriched_message <- enrich_message(message, opts) do
-      
+
       # Store user message in context
       if session = opts[:session] do
         ContextManager.add_message(session, message)
       end
-      
+
       # Track callback that also accumulates response
       accumulated = []
       tracking_callback = fn chunk ->
         callback.(chunk)
         [chunk | accumulated]
       end
-      
+
       result = stream_from_provider(provider, enriched_message, tracking_callback, opts)
-      
+
       # After streaming completes, track usage and store response
       case result do
         :ok ->
           full_response = combine_chunks(Enum.reverse(accumulated))
           track_usage(provider_id, message, full_response)
-          
+
           if session = opts[:session] do
             ContextManager.add_message(session, full_response)
           end
-          
+
           :ok
-        
+
         error ->
           error
       end
@@ -117,7 +117,7 @@ defmodule AgentBridge.Router do
 
   defp select_provider(opts, state) do
     provider_id = opts[:provider] || state.default_provider
-    
+
     case ProviderRegistry.get(provider_id) do
       nil -> {:error, {:provider_not_found, provider_id}}
       _provider -> {:ok, provider_id}
@@ -136,7 +136,7 @@ defmodule AgentBridge.Router do
     case opts[:session] do
       nil ->
         message
-      
+
       session ->
         history = ContextManager.get_history(session)
         %{message | metadata: Map.put(message.metadata, :history, history)}
@@ -145,15 +145,15 @@ defmodule AgentBridge.Router do
 
   defp send_to_provider(provider, message, opts) do
     Logger.debug("Sending message to #{provider.id}")
-    
+
     # Build messages list including history
     messages = build_messages(message, opts)
-    
+
     case provider.module.send_message(provider.state, message, Keyword.put(opts, :messages, messages)) do
       {:ok, response} ->
         # Update provider state if needed
         {:ok, response}
-      
+
       {:error, reason} = error ->
         ProviderRegistry.mark_failed(provider.id, reason)
         error
@@ -162,9 +162,9 @@ defmodule AgentBridge.Router do
 
   defp stream_from_provider(provider, message, callback, opts) do
     Logger.debug("Streaming message from #{provider.id}")
-    
+
     messages = build_messages(message, opts)
-    
+
     case provider.module.stream_message(provider.state, message, callback, Keyword.put(opts, :messages, messages)) do
       :ok -> :ok
       {:error, reason} = error ->
@@ -176,14 +176,14 @@ defmodule AgentBridge.Router do
   defp build_messages(message, opts) do
     history = get_in(message.metadata, [:history]) || []
     system_prompt = opts[:system_prompt]
-    
-    messages = 
+
+    messages =
       if system_prompt do
         [Message.system(system_prompt) | history]
       else
         history
       end
-    
+
     messages ++ [message]
   end
 
@@ -208,10 +208,10 @@ defmodule AgentBridge.Router do
     |> Enum.map(& &1.content)
     |> Enum.reject(&is_nil/1)
     |> Enum.join("")
-    
+
     # Take metadata from last chunk
     last = List.last(chunks) || %Message{}
-    
+
     %Message{
       id: last.id,
       role: :assistant,
@@ -224,4 +224,3 @@ defmodule AgentBridge.Router do
     }
   end
 end
-

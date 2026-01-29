@@ -1,37 +1,37 @@
 defmodule AgentBridge do
   @moduledoc """
   Agent Bridge - Unified AI Provider Interface
-  
+
   The Agent Bridge provides a consistent interface for communicating with
   multiple AI providers (Claude, OpenAI, Ollama, Cursor) with:
-  
+
   - **Unified Message Format**: Single `Message` struct for all providers
   - **Context Management**: Session-based conversation history
   - **Cost Tracking**: Token counting and budget enforcement
   - **Rate Limiting**: Respect provider limits
   - **Provider Registry**: Dynamic provider management
   - **Streaming Support**: First-class streaming responses
-  
+
   ## Quick Start
-  
+
       # Send a simple message
       {:ok, response} = AgentBridge.chat("What is 2+2?")
-      
+
       # With provider selection
       {:ok, response} = AgentBridge.chat("Hello!", provider: :ollama)
-      
+
       # With streaming
       AgentBridge.stream("Tell me a story", fn chunk ->
         IO.write(chunk.content)
       end)
-      
+
       # With session context
       session = AgentBridge.new_session()
       {:ok, r1} = AgentBridge.chat("My name is Alice", session: session)
       {:ok, r2} = AgentBridge.chat("What's my name?", session: session)
-  
+
   ## Configuration
-  
+
       config :agent_bridge,
         default_provider: :claude,
         providers: [
@@ -46,9 +46,9 @@ defmodule AgentBridge do
             model: "llama3.2",
           ],
         ]
-  
+
   ## Architecture
-  
+
       ┌─────────────────────────────────────────────────────────┐
       │                     Agent Bridge                        │
       ├─────────────────────────────────────────────────────────┤
@@ -74,9 +74,9 @@ defmodule AgentBridge do
 
   @doc """
   Send a chat message and get a response.
-  
+
   ## Options
-  
+
   - `:provider` - Provider to use (default: configured default)
   - `:session` - Session ID for context continuity
   - `:system` - System prompt to prepend
@@ -92,7 +92,7 @@ defmodule AgentBridge do
 
   @doc """
   Send a chat message and stream the response.
-  
+
   The callback will be called with each chunk as it arrives.
   """
   def stream(content, callback, opts \\ []) when is_binary(content) and is_function(callback, 1) do
@@ -228,7 +228,7 @@ defmodule AgentBridge do
     case ProviderRegistry.get(provider_id) do
       nil ->
         {:error, :not_found}
-      
+
       provider ->
         if function_exported?(provider.module, :health_check, 1) do
           provider.module.health_check(provider.state)
@@ -245,7 +245,7 @@ defmodule AgentBridge do
     case ProviderRegistry.get(provider_id) do
       nil ->
         {:error, :not_found}
-      
+
       provider ->
         if function_exported?(provider.module, :list_models, 1) do
           provider.module.list_models(provider.state)

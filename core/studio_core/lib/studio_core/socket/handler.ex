@@ -1,21 +1,21 @@
 defmodule StudioCore.Socket.Handler do
   @moduledoc """
   Handler for a single UI client connection.
-  
+
   Manages the bidirectional communication with a connected
   Continuum Studio UI instance.
-  
+
   ## Commands (UI → Core)
-  
+
   - `{:command, :harness_start, %{type: type}}` - Start a harness
   - `{:command, :harness_stop, %{type: type}}` - Stop a harness
   - `{:command, :state_set, %{path: path, value: value}}` - Set state
   - `{:command, :state_get, %{path: path}}` - Get state
   - `{:command, :agent_message, %{text: text, provider: provider}}` - Agent message
   - `{:command, :ping, %{}}` - Health check
-  
+
   ## Events (Core → UI)
-  
+
   - `{:event, :harness_status, %{harness: id, status: status}}` - Status change
   - `{:event, :state_changed, %{path: path, value: value}}` - State update
   - `{:event, :agent_response, %{content: content, role: role}}` - Agent response
@@ -42,10 +42,10 @@ defmodule StudioCore.Socket.Handler do
   def init(socket) do
     # Subscribe to event bus for state changes
     StudioCore.EventBus.subscribe()
-    
+
     # Set socket to active mode for receiving
     :inet.setopts(socket, active: true)
-    
+
     Logger.debug("Socket handler started")
     {:ok, %State{socket: socket, subscribed: true}}
   end
@@ -56,11 +56,11 @@ defmodule StudioCore.Socket.Handler do
     case decode_message(data) do
       {:ok, {:command, command, params}} ->
         handle_command(command, params, state)
-      
+
       {:ok, {:event, event, data}} ->
         # Event from Synapsix (harness events)
         handle_synapsix_event(event, data, state)
-      
+
       {:error, reason} ->
         Logger.warning("Failed to decode message: #{inspect(reason)}")
         send_error(state.socket, "Invalid message format")
@@ -75,16 +75,16 @@ defmodule StudioCore.Socket.Handler do
         command = String.to_existing_atom(cmd)
         params_atoms = atomize_keys(params)
         {:ok, {:command, command, params_atoms}}
-      
+
       {:ok, %{"event" => event, "data" => event_data}} ->
         # Event from Synapsix
         event_atom = String.to_existing_atom(event)
         data_atoms = atomize_keys(event_data)
         {:ok, {:event, event_atom, data_atoms}}
-      
+
       {:ok, _} ->
         {:error, :invalid_json_format}
-      
+
       {:error, _} ->
         # Try ETF
         try do
@@ -142,20 +142,20 @@ defmodule StudioCore.Socket.Handler do
 
   defp handle_command(:harness_start, %{type: type}, state) do
     Logger.info("UI requested harness start: #{type}")
-    
+
     # This would trigger harness start via Synapsix
     # For now, just update state
     StudioCore.State.set_harness_status(to_string(type), :starting)
-    
+
     send_event(state.socket, {:harness_status, to_string(type), :starting})
     {:noreply, state}
   end
 
   defp handle_command(:harness_stop, %{type: type}, state) do
     Logger.info("UI requested harness stop: #{type}")
-    
+
     StudioCore.State.set_harness_status(to_string(type), :stopping)
-    
+
     send_event(state.socket, {:harness_status, to_string(type), :stopping})
     {:noreply, state}
   end
@@ -173,7 +173,7 @@ defmodule StudioCore.Socket.Handler do
 
   defp handle_command(:agent_message, %{text: text, provider: provider}, state) do
     Logger.info("Agent message from UI: #{String.slice(text, 0, 50)}...")
-    
+
     # This would forward to the agent bridge
     # For now, echo back a mock response
     Task.start(fn ->
@@ -181,7 +181,7 @@ defmodule StudioCore.Socket.Handler do
       response = "Echo: #{text}"
       StudioCore.EventBus.broadcast({:agent_response, response, "assistant"})
     end)
-    
+
     {:noreply, state}
   end
 
@@ -206,45 +206,45 @@ defmodule StudioCore.Socket.Handler do
 
   defp handle_synapsix_event(:harness_registered, %{harness: harness, type: type} = data, state) do
     Logger.info("🔗 Harness registered: #{harness} (type: #{type})")
-    
+
     capabilities = Map.get(data, :capabilities, [])
     type_atom = if is_atom(type), do: type, else: String.to_atom(type)
-    
+
     # Register with the harness registry (pid is this socket handler for forwarding)
     StudioCore.HarnessRegistry.register(harness, type: type_atom, capabilities: capabilities)
-    
+
     # Broadcast to all UI clients
     StudioCore.EventBus.broadcast({:harness_registered, harness, type_atom})
-    
+
     {:noreply, state}
   end
 
   defp handle_synapsix_event(:harness_unregistered, %{harness: harness}, state) do
     Logger.info("🔌 Harness unregistered: #{harness}")
-    
+
     StudioCore.HarnessRegistry.unregister(harness)
     StudioCore.EventBus.broadcast({:harness_disconnected, harness, :unregistered})
-    
+
     {:noreply, state}
   end
 
   defp handle_synapsix_event(:harness_status, %{harness: harness, status: status}, state) do
     Logger.info("📊 Harness status: #{harness} → #{status}")
-    
+
     status_atom = if is_atom(status), do: status, else: String.to_atom(status)
     StudioCore.State.set_harness_status(harness, status_atom)
     StudioCore.EventBus.broadcast({:harness_status, harness, status_atom})
-    
+
     {:noreply, state}
   end
 
   defp handle_synapsix_event(:harness_reconnected, %{harness: harness}, state) do
     Logger.info("🔄 Harness reconnected: #{harness}")
-    
+
     # Update status to reconnected/running
     StudioCore.State.set_harness_status(harness, :reconnected)
     StudioCore.EventBus.broadcast({:harness_status, harness, :reconnected})
-    
+
     {:noreply, state}
   end
 
@@ -292,4 +292,3 @@ defmodule StudioCore.Socket.Handler do
   defp event_data({_, data}) when is_map(data), do: data
   defp event_data(_), do: %{}
 end
-

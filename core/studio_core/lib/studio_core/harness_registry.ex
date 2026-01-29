@@ -1,14 +1,14 @@
 defmodule StudioCore.HarnessRegistry do
   @moduledoc """
   Registry for connected harnesses from Synapsix.
-  
+
   Harnesses register themselves when they connect and can:
   - Receive commands from the UI
   - Send status updates
   - Forward agent messages
-  
+
   ## Harness Types
-  
+
   - `:cursor` - Cursor IDE harness
   - `:android_studio` - Android Studio harness
   - `:godot` - Godot Editor harness
@@ -41,9 +41,9 @@ defmodule StudioCore.HarnessRegistry do
 
   @doc """
   Register a harness.
-  
+
   ## Options
-  
+
   - `:type` - Harness type (required)
   - `:capabilities` - List of capabilities (optional)
   - `:node` - Remote node name for distributed harnesses (optional)
@@ -118,10 +118,10 @@ defmodule StudioCore.HarnessRegistry do
   @impl true
   def init([]) do
     :ets.new(@table, [:named_table, :public, read_concurrency: true])
-    
+
     # Schedule periodic cleanup of dead harnesses
     schedule_cleanup()
-    
+
     Logger.info("Harness registry initialized")
     {:ok, %{}}
   end
@@ -147,7 +147,7 @@ defmodule StudioCore.HarnessRegistry do
     Process.monitor(pid)
 
     :ets.insert(@table, {harness_id, harness})
-    
+
     # Update global state
     StudioCore.State.register_harness(harness_id, %{
       type: type,
@@ -221,7 +221,7 @@ defmodule StudioCore.HarnessRegistry do
   def handle_info(:cleanup, state) do
     # Remove harnesses that haven't sent a heartbeat in 30 seconds
     cutoff = DateTime.add(DateTime.utc_now(), -30, :second)
-    
+
     for {harness_id, harness} <- :ets.tab2list(@table) do
       if DateTime.compare(harness.last_seen, cutoff) == :lt do
         Logger.warning("Harness #{harness_id} timed out")
@@ -230,7 +230,7 @@ defmodule StudioCore.HarnessRegistry do
         StudioCore.EventBus.broadcast({:harness_timeout, harness_id})
       end
     end
-    
+
     schedule_cleanup()
     {:noreply, state}
   end
@@ -239,4 +239,3 @@ defmodule StudioCore.HarnessRegistry do
     Process.send_after(self(), :cleanup, 10_000)
   end
 end
-

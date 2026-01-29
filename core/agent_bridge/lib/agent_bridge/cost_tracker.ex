@@ -1,7 +1,7 @@
 defmodule AgentBridge.CostTracker do
   @moduledoc """
   Tracks usage and costs for AI provider calls.
-  
+
   Features:
   - Token counting per provider
   - Cost estimation based on model pricing
@@ -51,7 +51,7 @@ defmodule AgentBridge.CostTracker do
 
   @doc """
   Get usage statistics.
-  
+
   Options:
   - `:provider` - Filter by provider
   - `:since` - Filter by time (DateTime)
@@ -105,26 +105,26 @@ defmodule AgentBridge.CostTracker do
       id: generate_id(),
       cost: calculate_cost(usage),
     })
-    
+
     :ets.insert(@table, {usage.provider, record})
-    
+
     Logger.debug("Tracked usage: #{usage.provider} - #{usage.input_tokens}in/#{usage.output_tokens}out")
-    
+
     {:noreply, state}
   end
 
   @impl true
   def handle_call({:get_usage, provider, opts}, _from, state) do
-    usage = 
+    usage =
       if provider do
         :ets.lookup(@table, provider) |> Enum.map(&elem(&1, 1))
       else
         :ets.tab2list(@table) |> Enum.map(&elem(&1, 1))
       end
-    
+
     # Apply time filters
     usage = filter_by_time(usage, opts)
-    
+
     # Aggregate
     summary = %{
       total_input_tokens: Enum.sum(Enum.map(usage, & &1.input_tokens)),
@@ -133,7 +133,7 @@ defmodule AgentBridge.CostTracker do
       request_count: length(usage),
       records: usage,
     }
-    
+
     {:reply, summary, state}
   end
 
@@ -141,7 +141,7 @@ defmodule AgentBridge.CostTracker do
   def handle_call({:get_cost, provider, opts}, _from, state) do
     usage = :ets.lookup(@table, provider) |> Enum.map(&elem(&1, 1))
     usage = filter_by_time(usage, opts)
-    
+
     total_cost = Enum.sum(Enum.map(usage, & &1.cost))
     {:reply, total_cost, state}
   end
@@ -158,11 +158,11 @@ defmodule AgentBridge.CostTracker do
     case Map.get(state.budgets, provider) do
       nil ->
         {:reply, :ok, state}
-      
+
       budget ->
         since = calculate_period_start(budget.period)
         current_cost = get_cost_since(provider, since)
-        
+
         if current_cost >= budget.amount do
           {:reply, {:over_budget, current_cost, budget.amount}, state}
         else
@@ -181,10 +181,10 @@ defmodule AgentBridge.CostTracker do
 
   defp calculate_cost(%{provider: provider, model: model, input_tokens: input, output_tokens: output}) do
     pricing = get_in(@pricing, [provider, model]) || get_in(@pricing, [provider, :default]) || %{input: 0, output: 0}
-    
+
     input_cost = (input / 1_000_000) * pricing.input
     output_cost = (output / 1_000_000) * pricing.output
-    
+
     input_cost + output_cost
   end
 
@@ -193,7 +193,7 @@ defmodule AgentBridge.CostTracker do
   defp filter_by_time(usage, opts) do
     since = opts[:since]
     until_time = opts[:until]
-    
+
     usage
     |> Enum.filter(fn record ->
       after_since = is_nil(since) || DateTime.compare(record.timestamp, since) in [:gt, :eq]
@@ -227,4 +227,3 @@ defmodule AgentBridge.CostTracker do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
 end
-

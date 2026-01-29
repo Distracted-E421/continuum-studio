@@ -1,15 +1,15 @@
 defmodule AgentBridge.Providers.Claude do
   @moduledoc """
   Anthropic Claude provider adapter.
-  
+
   Supports:
   - Claude 4 Opus, Sonnet
   - Claude 3.5 Sonnet
   - Tool/function calling
   - Streaming responses
-  
+
   ## Configuration
-  
+
       config :agent_bridge, :providers,
         claude: [
           module: AgentBridge.Providers.Claude,
@@ -34,7 +34,7 @@ defmodule AgentBridge.Providers.Claude do
   @impl true
   def init(config) do
     api_key = config[:api_key] || System.get_env("ANTHROPIC_API_KEY")
-    
+
     if is_nil(api_key) or api_key == "" do
       {:error, :missing_api_key}
     else
@@ -47,7 +47,7 @@ defmodule AgentBridge.Providers.Claude do
         ],
         timeout: 120_000
       )
-      
+
       state = %__MODULE__{
         api_key: api_key,
         model: config[:model] || "claude-sonnet-4-20250514",
@@ -62,17 +62,17 @@ defmodule AgentBridge.Providers.Claude do
   @impl true
   def send_message(state, message, opts) do
     messages = opts[:messages] || [message]
-    
+
     body = build_request_body(state, messages, opts)
-    
+
     case Req.post(state.client, json: body) do
       {:ok, %Req.Response{status: 200, body: response}} ->
         {:ok, Message.from_provider_response(response, :claude)}
-      
+
       {:ok, %Req.Response{status: status, body: error}} ->
         Logger.error("Claude API error (#{status}): #{inspect(error)}")
         {:error, {:api_error, status, error}}
-      
+
       {:error, reason} ->
         Logger.error("Claude HTTP error: #{inspect(reason)}")
         {:error, {:http_error, reason}}
@@ -82,24 +82,24 @@ defmodule AgentBridge.Providers.Claude do
   @impl true
   def stream_message(state, message, callback, opts) do
     messages = opts[:messages] || [message]
-    
+
     body = build_request_body(state, messages, opts)
     |> Map.put(:stream, true)
-    
+
     stream_callback = fn chunk ->
       case parse_sse_chunk(chunk) do
         {:ok, data} ->
           msg = parse_stream_data(data)
           if msg, do: callback.(msg)
-        
+
         :ignore ->
           :ok
-        
+
         {:error, reason} ->
           Logger.warning("Failed to parse stream chunk: #{inspect(reason)}")
       end
     end
-    
+
     case HTTP.stream_post(@api_url, body, stream_callback, headers: build_headers(state)) do
       :ok -> :ok
       {:error, reason} -> {:error, reason}
@@ -125,7 +125,7 @@ defmodule AgentBridge.Providers.Claude do
       max_tokens: 10,
       messages: [%{role: "user", content: "Hi"}],
     }
-    
+
     case Req.post(state.client, json: body) do
       {:ok, %Req.Response{status: 200}} -> :ok
       {:ok, %Req.Response{status: status}} -> {:error, {:api_error, status}}
@@ -143,31 +143,31 @@ defmodule AgentBridge.Providers.Claude do
   defp build_request_body(state, messages, opts) do
     # Separate system message from conversation
     {system_messages, conversation} = Enum.split_with(messages, &(&1.role == :system))
-    
-    system_prompt = 
+
+    system_prompt =
       case system_messages do
         [%{content: content} | _] -> content
         [] -> state.default_system
       end
-    
+
     # Convert messages to Claude format
     claude_messages = Enum.map(conversation, &Message.to_provider_format(&1, :claude))
-    
+
     body = %{
       model: opts[:model] || state.model,
       max_tokens: opts[:max_tokens] || state.max_tokens,
       messages: claude_messages,
     }
-    
+
     # Add system prompt if present
     body = if system_prompt, do: Map.put(body, :system, system_prompt), else: body
-    
+
     # Add tools if present
     body = if opts[:tools], do: Map.put(body, :tools, format_tools(opts[:tools])), else: body
-    
+
     # Add tool_choice if specified
     body = if opts[:tool_choice], do: Map.put(body, :tool_choice, opts[:tool_choice]), else: body
-    
+
     body
   end
 
@@ -201,13 +201,13 @@ defmodule AgentBridge.Providers.Claude do
             {:error, reason} -> {:error, reason}
           end
         end
-      
+
       String.starts_with?(chunk, "event:") ->
         :ignore
-      
+
       String.trim(chunk) == "" ->
         :ignore
-      
+
       true ->
         :ignore
     end
@@ -257,4 +257,3 @@ defmodule AgentBridge.Providers.Claude do
 
   defp parse_stream_data(_), do: nil
 end
-

@@ -1,7 +1,7 @@
 defmodule AgentBridge.HTTP do
   @moduledoc """
   HTTP client abstraction using Req.
-  
+
   Provides a consistent interface for HTTP requests with:
   - Automatic retries with exponential backoff
   - Timeout handling
@@ -18,9 +18,9 @@ defmodule AgentBridge.HTTP do
 
   @doc """
   Make a POST request with JSON body.
-  
+
   ## Options
-  
+
   - `:timeout` - Request timeout in milliseconds (default: 60_000)
   - `:retry_count` - Number of retries on failure (default: 3)
   - `:retry_delay` - Base delay between retries in ms (default: 1_000)
@@ -29,7 +29,7 @@ defmodule AgentBridge.HTTP do
   def post(url, body, opts \\ []) do
     timeout = opts[:timeout] || @default_timeout
     headers = opts[:headers] || []
-    
+
     req_opts = [
       url: url,
       method: :post,
@@ -38,17 +38,17 @@ defmodule AgentBridge.HTTP do
       receive_timeout: timeout,
       retry: retry_opts(opts),
     ]
-    
+
     case Req.request(req_opts) do
       {:ok, %Req.Response{status: status, body: response_body}} when status in 200..299 ->
         {:ok, %{status: status, body: response_body}}
-      
+
       {:ok, %Req.Response{status: status, body: response_body}} ->
         {:error, {:http_error, status, response_body}}
-      
+
       {:error, %Req.TransportError{reason: reason}} ->
         {:error, {:transport_error, reason}}
-      
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -60,7 +60,7 @@ defmodule AgentBridge.HTTP do
   def get(url, opts \\ []) do
     timeout = opts[:timeout] || @default_timeout
     headers = opts[:headers] || []
-    
+
     req_opts = [
       url: url,
       method: :get,
@@ -68,14 +68,14 @@ defmodule AgentBridge.HTTP do
       receive_timeout: timeout,
       retry: retry_opts(opts),
     ]
-    
+
     case Req.request(req_opts) do
       {:ok, %Req.Response{status: status, body: response_body}} when status in 200..299 ->
         {:ok, %{status: status, body: response_body}}
-      
+
       {:ok, %Req.Response{status: status, body: response_body}} ->
         {:error, {:http_error, status, response_body}}
-      
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -83,12 +83,12 @@ defmodule AgentBridge.HTTP do
 
   @doc """
   Make a streaming POST request.
-  
+
   The callback function receives chunks as they arrive.
   Chunks are strings (one line at a time for SSE).
-  
+
   ## Example
-  
+
       HTTP.stream_post(url, body, fn chunk ->
         IO.write(chunk)
       end)
@@ -96,7 +96,7 @@ defmodule AgentBridge.HTTP do
   def stream_post(url, body, callback, opts \\ []) do
     timeout = opts[:timeout] || @default_timeout * 2
     headers = opts[:headers] || []
-    
+
     # For streaming, we need to use :into option
     req_opts = [
       url: url,
@@ -106,14 +106,14 @@ defmodule AgentBridge.HTTP do
       receive_timeout: timeout,
       into: stream_collector(callback),
     ]
-    
+
     case Req.request(req_opts) do
       {:ok, %Req.Response{status: status}} when status in 200..299 ->
         :ok
-      
+
       {:ok, %Req.Response{status: status, body: error_body}} ->
         {:error, {:http_error, status, error_body}}
-      
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -121,13 +121,13 @@ defmodule AgentBridge.HTTP do
 
   @doc """
   Create a base Req client with common configuration.
-  
+
   Useful for providers that need to make multiple requests.
   """
   def new_client(base_url, opts \\ []) do
     headers = opts[:headers] || []
     timeout = opts[:timeout] || @default_timeout
-    
+
     Req.new(
       base_url: base_url,
       headers: headers,
@@ -141,7 +141,7 @@ defmodule AgentBridge.HTTP do
   defp retry_opts(opts) do
     retry_count = opts[:retry_count] || @default_retry_count
     retry_delay = opts[:retry_delay] || @default_retry_delay
-    
+
     [
       max_retries: retry_count,
       delay: retry_delay,
@@ -163,4 +163,3 @@ defmodule AgentBridge.HTTP do
     end
   end
 end
-

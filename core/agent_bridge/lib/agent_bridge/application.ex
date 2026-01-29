@@ -1,7 +1,7 @@
 defmodule AgentBridge.Application do
   @moduledoc """
   Main application supervisor for Agent Bridge.
-  
+
   Starts the supervision tree including:
   - Provider registry
   - Context manager
@@ -21,19 +21,19 @@ defmodule AgentBridge.Application do
     children = [
       # Provider management
       AgentBridge.ProviderRegistry,
-      
+
       # Session context
       AgentBridge.ContextManager,
-      
+
       # Usage tracking
       AgentBridge.CostTracker,
-      
+
       # Rate limiting
       AgentBridge.RateLimiter,
-      
+
       # Message routing
       AgentBridge.Router,
-      
+
       # Studio Core connection (optional - enabled via config)
       {AgentBridge.CoreClient, Application.get_env(:agent_bridge, :core_client, [])},
     ]

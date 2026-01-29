@@ -1,7 +1,7 @@
 defmodule AgentBridge.ContextManager do
   @moduledoc """
   Manages conversation context and history for sessions.
-  
+
   Stores:
   - Conversation history per session
   - System prompts
@@ -107,13 +107,13 @@ defmodule AgentBridge.ContextManager do
   @impl true
   def handle_cast({:add_message, session_id, message}, state) do
     history = get_history(session_id)
-    
+
     # Add message and trim to max size
     new_history = Enum.take([message | history], @max_history_size)
     |> Enum.reverse()
-    
+
     :ets.insert(@table, {{:history, session_id}, new_history})
-    
+
     {:noreply, state}
   end
 
@@ -122,7 +122,7 @@ defmodule AgentBridge.ContextManager do
     results = get_tool_results(session_id)
     new_results = [{tool_call_id, result, DateTime.utc_now()} | results]
     :ets.insert(@table, {{:tool_results, session_id}, new_results})
-    
+
     {:noreply, state}
   end
 
@@ -146,4 +146,3 @@ defmodule AgentBridge.ContextManager do
     {:reply, :ok, state}
   end
 end
-

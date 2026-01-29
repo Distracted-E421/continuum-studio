@@ -1,13 +1,13 @@
 defmodule AgentBridge.Message do
   @moduledoc """
   Standard message format for AI provider communication.
-  
+
   All providers use this common message format, with provider-specific
   details in the metadata field.
   """
 
   @type role :: :system | :user | :assistant | :tool
-  
+
   @type t :: %__MODULE__{
     id: String.t() | nil,
     role: role(),
@@ -100,20 +100,20 @@ defmodule AgentBridge.Message do
   """
   def to_provider_format(%__MODULE__{} = msg, :claude) do
     base = %{role: to_string(msg.role), content: msg.content}
-    
+
     case msg.role do
       :tool ->
         %{role: "user", content: [
           %{type: "tool_result", tool_use_id: msg.tool_call_id, content: msg.content}
         ]}
-      
+
       :assistant when msg.tool_calls != nil ->
         tool_use = Enum.map(msg.tool_calls, fn tc ->
           %{type: "tool_use", id: tc.id, name: tc.function.name, input: Jason.decode!(tc.function.arguments)}
         end)
         content_blocks = if msg.content, do: [%{type: "text", text: msg.content}], else: []
         %{role: "assistant", content: content_blocks ++ tool_use}
-      
+
       _ ->
         base
     end
@@ -121,16 +121,16 @@ defmodule AgentBridge.Message do
 
   def to_provider_format(%__MODULE__{} = msg, :openai) do
     base = %{role: to_string(msg.role), content: msg.content}
-    
+
     case msg.role do
       :tool ->
         Map.merge(base, %{tool_call_id: msg.tool_call_id})
-      
+
       :assistant when msg.tool_calls != nil ->
         Map.merge(base, %{tool_calls: Enum.map(msg.tool_calls, fn tc ->
           %{id: tc.id, type: "function", function: %{name: tc.function.name, arguments: tc.function.arguments}}
         end)})
-      
+
       _ ->
         if msg.name, do: Map.put(base, :name, msg.name), else: base
     end
@@ -150,7 +150,7 @@ defmodule AgentBridge.Message do
       text when is_binary(text) -> text
       _ -> nil
     end
-    
+
     tool_calls = case response["content"] do
       blocks when is_list(blocks) ->
         blocks
@@ -167,7 +167,7 @@ defmodule AgentBridge.Message do
         end)
       _ -> nil
     end
-    
+
     %__MODULE__{
       id: response["id"],
       role: :assistant,
@@ -186,7 +186,7 @@ defmodule AgentBridge.Message do
   def from_provider_response(response, :openai) do
     choice = List.first(response["choices"]) || %{}
     message = choice["message"] || %{}
-    
+
     tool_calls = case message["tool_calls"] do
       nil -> nil
       calls ->
@@ -201,7 +201,7 @@ defmodule AgentBridge.Message do
           }
         end)
     end
-    
+
     %__MODULE__{
       id: response["id"],
       role: :assistant,
@@ -220,7 +220,7 @@ defmodule AgentBridge.Message do
   def from_provider_response(response, :ollama) do
     # Ollama uses similar format to OpenAI
     message = response["message"] || %{}
-    
+
     %__MODULE__{
       role: :assistant,
       content: message["content"],

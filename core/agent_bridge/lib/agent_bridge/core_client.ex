@@ -1,21 +1,21 @@
 defmodule AgentBridge.CoreClient do
   @moduledoc """
   Client for communicating with Studio Core.
-  
+
   Connects Agent Bridge to the main Studio Core application for:
   - Broadcasting agent responses to UI
   - Receiving requests from UI
   - State synchronization
   - Event coordination with harnesses
-  
+
   ## Protocol
-  
+
   Uses JSON-framed messages over Unix socket (same as UI ↔ Core):
-  
+
       # Events (Agent Bridge → Core)
       {"event": "agent_response", "data": {"content": "...", "role": "assistant"}}
       {"event": "provider_status", "data": {"provider": "claude", "status": "ready"}}
-      
+
       # Commands (Core → Agent Bridge)
       {"command": "agent_message", "params": {"text": "...", "provider": "claude"}}
       {"command": "health_check", "params": {}}
@@ -101,7 +101,7 @@ defmodule AgentBridge.CoreClient do
     ]) do
       {:ok, socket} ->
         Logger.info("AgentBridge connected to Studio Core at #{@socket_path}")
-        
+
         # Register ourselves with Core
         send_frame(socket, %{
           "event" => "agent_bridge_connected",
@@ -109,9 +109,9 @@ defmodule AgentBridge.CoreClient do
             "providers" => list_providers()
           }
         })
-        
+
         {:noreply, %{state | socket: socket, connected: true}}
-        
+
       {:error, reason} ->
         Logger.warning("AgentBridge failed to connect to Core: #{inspect(reason)}, retrying in #{@reconnect_interval}ms")
         Process.send_after(self(), :connect, @reconnect_interval)
@@ -124,11 +124,11 @@ defmodule AgentBridge.CoreClient do
     case Jason.decode(data) do
       {:ok, %{"command" => command, "params" => params}} ->
         handle_command(command, params, state)
-        
+
       {:ok, other} ->
         Logger.warning("Unknown message from Core: #{inspect(other)}")
         {:noreply, state}
-        
+
       {:error, reason} ->
         Logger.error("Failed to decode message from Core: #{inspect(reason)}")
         {:noreply, state}
@@ -154,22 +154,22 @@ defmodule AgentBridge.CoreClient do
   defp handle_command("agent_message", %{"text" => text} = params, state) do
     provider = params["provider"]
     session = params["session"]
-    
+
     Logger.info("Received agent message request from Core: #{String.slice(text, 0, 50)}...")
-    
+
     # Route through AgentBridge
     Task.start(fn ->
       opts = []
       opts = if provider, do: [{:provider, String.to_atom(provider)} | opts], else: opts
       opts = if session, do: [{:session, session} | opts], else: opts
-      
+
       case AgentBridge.chat(text, opts) do
         {:ok, response} ->
           send_agent_response(response.content, response.role,
             provider: response.provider,
             model: response.model
           )
-          
+
         {:error, reason} ->
           send_event(:agent_error, %{
             message: inspect(reason),
@@ -177,21 +177,21 @@ defmodule AgentBridge.CoreClient do
           })
       end
     end)
-    
+
     {:noreply, state}
   end
 
   defp handle_command("stream_message", %{"text" => text} = params, state) do
     provider = params["provider"]
     session = params["session"]
-    
+
     Logger.info("Received streaming message request from Core: #{String.slice(text, 0, 50)}...")
-    
+
     Task.start(fn ->
       opts = []
       opts = if provider, do: [{:provider, String.to_atom(provider)} | opts], else: opts
       opts = if session, do: [{:session, session} | opts], else: opts
-      
+
       AgentBridge.stream(text, fn chunk ->
         send_event(:agent_chunk, %{
           content: chunk.content,
@@ -200,23 +200,23 @@ defmodule AgentBridge.CoreClient do
           done: false,
         })
       end, opts)
-      
+
       # Send completion marker
       send_event(:agent_chunk, %{done: true})
     end)
-    
+
     {:noreply, state}
   end
 
   defp handle_command("health_check", _params, state) do
     providers = AgentBridge.list_providers()
     |> Enum.map(fn p -> %{id: p.id, status: p.status} end)
-    
+
     send_event(:health_status, %{
       status: "ok",
       providers: providers,
     })
-    
+
     {:noreply, state}
   end
 
@@ -229,7 +229,7 @@ defmodule AgentBridge.CoreClient do
         failures: p.failures,
       }
     end)
-    
+
     send_event(:provider_list, %{providers: providers})
     {:noreply, state}
   end
@@ -254,4 +254,3 @@ defmodule AgentBridge.CoreClient do
     _ -> []
   end
 end
-

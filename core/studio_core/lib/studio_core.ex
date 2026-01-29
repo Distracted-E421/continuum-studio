@@ -1,16 +1,16 @@
 defmodule StudioCore do
   @moduledoc """
   Continuum Studio Core
-  
+
   The Elixir backend for Continuum Studio, providing:
-  
+
   - **State Management**: Centralized ETS-backed state
   - **Event Bus**: Pub/sub for state changes
   - **Harness Registry**: Tracking connected Synapsix harnesses
   - **Socket Interface**: Unix socket for UI communication
-  
+
   ## Architecture
-  
+
       ┌─────────────────────────────────────────────────┐
       │              Studio Core (BEAM)                 │
       │                                                 │
@@ -34,28 +34,28 @@ defmodule StudioCore do
               │   UI    │      │ Harnesses │
               │ (Rust)  │      │ (Elixir)  │
               └─────────┘      └───────────┘
-  
+
   ## Usage
-  
+
   Start the application:
-  
+
       iex -S mix
-  
+
   Or as a release:
-  
+
       mix release
       _build/prod/rel/studio_core/bin/studio_core start
-  
+
   ## API
-  
+
   The socket protocol uses ETF (Erlang Term Format) with a 4-byte
   length prefix:
-  
+
       # Commands (UI → Core)
       {:command, :harness_start, %{type: "cursor"}}
       {:command, :state_set, %{path: [:ui, :theme], value: "dark"}}
       {:command, :ping, %{}}
-      
+
       # Events (Core → UI)
       {:event, :harness_status, %{harness: "cursor", status: :running}}
       {:event, :state_changed, %{path: [:ui, :theme], value: "dark"}}

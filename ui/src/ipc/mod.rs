@@ -78,6 +78,10 @@ pub enum Command {
 pub enum Event {
     /// Harness status changed
     HarnessStatus { harness: String, status: String },
+    /// Harness registered with Core
+    HarnessRegistered { harness: String, harness_type: String },
+    /// Harness disconnected from Core
+    HarnessDisconnected { harness: String, reason: String },
     /// State changed
     StateChanged { path: Vec<String>, value: serde_json::Value },
     /// Agent response
@@ -89,13 +93,20 @@ pub enum Event {
 }
 
 /// IPC Client for communicating with Studio Core
+/// 
+/// This client uses ETF (Erlang Term Format) for encoding/decoding messages
+/// to communicate with the Elixir Studio Core backend.
+/// 
+/// The client is designed to be cloneable and shared across threads - all clones
+/// share the same underlying connection state via Arc wrappers.
+#[derive(Clone)]
 pub struct IpcClient {
     /// Socket path
     socket_path: PathBuf,
-    /// Command sender
-    cmd_tx: Option<mpsc::Sender<Command>>,
-    /// Event receiver
-    event_rx: Option<mpsc::Receiver<Event>>,
+    /// Command sender wrapped in Arc for sharing across clones
+    cmd_tx: std::sync::Arc<std::sync::Mutex<Option<mpsc::Sender<Command>>>>,
+    /// Event receiver wrapped in Arc for sharing
+    event_rx: std::sync::Arc<tokio::sync::Mutex<Option<mpsc::Receiver<Event>>>>,
 }
 
 impl IpcClient {
@@ -103,8 +114,8 @@ impl IpcClient {
     pub fn new(socket_path: PathBuf) -> Self {
         Self {
             socket_path,
-            cmd_tx: None,
-            event_rx: None,
+            cmd_tx: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            event_rx: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
     
@@ -115,7 +126,7 @@ impl IpcClient {
     
     /// Check if connected
     pub fn is_connected(&self) -> bool {
-        self.cmd_tx.is_some()
+        self.cmd_tx.lock().map(|guard| guard.is_some()).unwrap_or(false)
     }
     
     /// Connect to Studio Core
@@ -130,8 +141,11 @@ impl IpcClient {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<Command>(32);
         let (event_tx, event_rx) = mpsc::channel::<Event>(32);
         
-        self.cmd_tx = Some(cmd_tx);
-        self.event_rx = Some(event_rx);
+        // Store the channels in our Arc-wrapped state (accessible by all clones)
+        if let Ok(mut guard) = self.cmd_tx.lock() {
+            *guard = Some(cmd_tx);
+        }
+        *self.event_rx.lock().await = Some(event_rx);
         
         // Spawn writer task
         let mut write_half = write_half;
@@ -184,7 +198,11 @@ impl IpcClient {
     
     /// Send a command to Studio Core
     pub async fn send(&self, cmd: Command) -> Result<(), IpcError> {
-        if let Some(tx) = &self.cmd_tx {
+        let tx = {
+            let guard = self.cmd_tx.lock().map_err(|_| IpcError::ChannelClosed)?;
+            guard.clone()
+        };
+        if let Some(tx) = tx {
             tx.send(cmd).await.map_err(|_| IpcError::ChannelClosed)
         } else {
             Err(IpcError::ConnectionFailed("Not connected".to_string()))
@@ -192,12 +210,13 @@ impl IpcClient {
     }
     
     /// Try to receive an event (non-blocking)
-    pub fn try_recv(&mut self) -> Option<Event> {
-        if let Some(rx) = &mut self.event_rx {
-            rx.try_recv().ok()
-        } else {
-            None
+    pub fn try_recv(&self) -> Option<Event> {
+        if let Ok(mut guard) = self.event_rx.try_lock() {
+            if let Some(rx) = guard.as_mut() {
+                return rx.try_recv().ok();
+            }
         }
+        None
     }
 }
 

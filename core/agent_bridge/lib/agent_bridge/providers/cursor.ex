@@ -1,32 +1,32 @@
 defmodule AgentBridge.Providers.Cursor do
   @moduledoc """
   Cursor IDE harness-based provider adapter.
-  
+
   Routes messages through a running Cursor IDE instance via the
   Synapsix Cursor harness, leveraging Cursor's AI capabilities.
-  
+
   This allows the Agent Bridge to utilize Cursor's:
   - Subscription-based AI access
   - Multi-model routing
   - Context-aware completions
   - Tool/function execution
-  
+
   ## Configuration
-  
+
       config :agent_bridge, :providers,
         cursor: [
           module: AgentBridge.Providers.Cursor,
           harness_id: "cursor_homelab",  # Synapsix harness ID
           workspace: "homelab",
         ]
-  
+
   ## How It Works
-  
+
   1. Messages are sent to the Cursor harness via Synapsix
   2. Harness types the message into Cursor's chat interface
   3. Harness captures the response via screen OCR or accessibility API
   4. Response is returned through the Agent Bridge
-  
+
   This is more experimental than direct API providers but enables
   using Cursor's AI without additional API costs.
   """
@@ -43,13 +43,13 @@ defmodule AgentBridge.Providers.Cursor do
   @impl true
   def init(config) do
     harness_id = config[:harness_id] || "cursor_default"
-    
+
     state = %__MODULE__{
       harness_id: harness_id,
       workspace: config[:workspace] || "default",
       timeout: config[:timeout] || 120_000,  # 2 minutes default
     }
-    
+
     {:ok, state}
   end
 
@@ -59,10 +59,10 @@ defmodule AgentBridge.Providers.Cursor do
     case get_harness_status(state.harness_id) do
       {:ok, :running} ->
         do_send_message(state, message, opts)
-      
+
       {:ok, status} ->
         {:error, {:harness_not_ready, status}}
-      
+
       {:error, reason} ->
         {:error, {:harness_error, reason}}
     end
@@ -89,7 +89,7 @@ defmodule AgentBridge.Providers.Cursor do
           end)
         end
         :ok
-      
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -125,13 +125,13 @@ defmodule AgentBridge.Providers.Cursor do
   defp get_harness_status(harness_id) do
     # Query Synapsix for harness status
     # This assumes Synapsix is running and accessible
-    
+
     # Try via Studio Core's HarnessRegistry first
     case Process.whereis(StudioCore.HarnessRegistry) do
       nil ->
         # Fall back to direct Synapsix query
         query_synapsix_harness(harness_id)
-      
+
       _pid ->
         case StudioCore.HarnessRegistry.get(harness_id) do
           {:ok, harness} -> {:ok, harness.status}
@@ -145,7 +145,7 @@ defmodule AgentBridge.Providers.Cursor do
     case Process.whereis(Synapsix.Registry) do
       nil ->
         {:error, :synapsix_not_running}
-      
+
       _pid ->
         case Registry.lookup(Synapsix.Registry, {:cursor, extract_workspace(harness_id)}) do
           [{pid, _}] ->
@@ -153,7 +153,7 @@ defmodule AgentBridge.Providers.Cursor do
               %{status: status} -> {:ok, status}
               status when is_atom(status) -> {:ok, status}
             end
-          
+
           [] ->
             {:error, :harness_not_found}
         end
@@ -166,20 +166,20 @@ defmodule AgentBridge.Providers.Cursor do
   defp do_send_message(state, message, _opts) do
     # Send message to Cursor harness
     harness_pid = get_harness_pid(state.harness_id)
-    
+
     if harness_pid do
       # Focus Cursor window
       GenServer.call(harness_pid, :focus)
-      
+
       # Clear any existing input
       GenServer.call(harness_pid, {:send_keys, ["ctrl+a", "BackSpace"]})
-      
+
       # Type the message
       GenServer.call(harness_pid, {:type_text, message.content})
-      
+
       # Submit (Enter)
       GenServer.call(harness_pid, {:send_keys, ["Return"]})
-      
+
       # Wait for response
       case wait_for_response(harness_pid, state.timeout) do
         {:ok, response_text} ->
@@ -190,7 +190,7 @@ defmodule AgentBridge.Providers.Cursor do
             model: "cursor-default",
             created_at: DateTime.utc_now(),
           }}
-        
+
         {:error, reason} ->
           {:error, reason}
       end
@@ -201,7 +201,7 @@ defmodule AgentBridge.Providers.Cursor do
 
   defp get_harness_pid(harness_id) do
     workspace = extract_workspace(harness_id)
-    
+
     case Registry.lookup(Synapsix.Registry, {:cursor, workspace}) do
       [{pid, _}] -> pid
       [] -> nil
@@ -212,15 +212,15 @@ defmodule AgentBridge.Providers.Cursor do
     # This is a simplified implementation
     # In practice, you'd use screen capture + OCR or accessibility APIs
     # to detect when Cursor has finished responding
-    
+
     start_time = System.monotonic_time(:millisecond)
-    
+
     poll_for_response(harness_pid, start_time, timeout)
   end
 
   defp poll_for_response(harness_pid, start_time, timeout) do
     elapsed = System.monotonic_time(:millisecond) - start_time
-    
+
     if elapsed > timeout do
       {:error, :timeout}
     else
@@ -229,11 +229,11 @@ defmodule AgentBridge.Providers.Cursor do
       case GenServer.call(harness_pid, {:get_response_state}, 5000) do
         {:complete, text} ->
           {:ok, text}
-        
+
         :pending ->
           Process.sleep(500)
           poll_for_response(harness_pid, start_time, timeout)
-        
+
         {:error, reason} ->
           {:error, reason}
       end
@@ -246,4 +246,3 @@ defmodule AgentBridge.Providers.Cursor do
       {:ok, "[Response capture not implemented - Cursor harness needs get_response_state]"}
   end
 end
-

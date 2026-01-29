@@ -1,7 +1,7 @@
 defmodule AgentBridge.ProviderRegistry do
   @moduledoc """
   Registry for AI providers.
-  
+
   Manages provider lifecycle:
   - Registration/deregistration
   - Health checking
@@ -81,10 +81,10 @@ defmodule AgentBridge.ProviderRegistry do
     case get(id) do
       nil ->
         {:error, :not_found}
-      
+
       %Provider{status: :disabled} = provider ->
         {:error, {:disabled, provider}}
-      
+
       %Provider{status: :failed} = provider ->
         # Check if enough time has passed for retry
         if can_retry?(provider) do
@@ -92,7 +92,7 @@ defmodule AgentBridge.ProviderRegistry do
         else
           {:error, {:failed, provider}}
         end
-      
+
       provider ->
         {:ok, provider}
     end
@@ -131,7 +131,7 @@ defmodule AgentBridge.ProviderRegistry do
   @impl true
   def init(_opts) do
     :ets.new(@table, [:named_table, :public, read_concurrency: true])
-    
+
     Logger.info("Provider registry initialized")
     {:ok, %{}, {:continue, :load_configured_providers}}
   end
@@ -140,14 +140,14 @@ defmodule AgentBridge.ProviderRegistry do
   def handle_continue(:load_configured_providers, state) do
     # Load providers from config
     providers = Application.get_env(:agent_bridge, :providers, [])
-    
+
     for {id, config} <- providers do
       module = config[:module]
       if module do
         do_register(id, module, config)
       end
     end
-    
+
     {:noreply, state}
   end
 
@@ -168,7 +168,7 @@ defmodule AgentBridge.ProviderRegistry do
       _ ->
         :ok
     end
-    
+
     :ets.delete(@table, id)
     Logger.info("Provider unregistered: #{id}")
     {:reply, :ok, state}
@@ -179,20 +179,20 @@ defmodule AgentBridge.ProviderRegistry do
     case get(id) do
       nil ->
         {:reply, {:error, :not_found}, state}
-      
+
       provider ->
         new_failures = provider.failures + 1
         new_status = if new_failures >= 3, do: :failed, else: provider.status
-        
+
         updated = %{provider |
           failures: new_failures,
           status: new_status,
           last_failure: DateTime.utc_now(),
         }
-        
+
         :ets.insert(@table, {id, updated})
         Logger.warning("Provider #{id} marked failed (#{new_failures} failures): #{inspect(reason)}")
-        
+
         {:reply, :ok, state}
     end
   end
@@ -202,10 +202,10 @@ defmodule AgentBridge.ProviderRegistry do
     case get(id) do
       nil ->
         {:reply, {:error, :not_found}, state}
-      
+
       provider ->
         merged_config = Map.merge(provider.config, Enum.into(new_config, %{}))
-        
+
         # Re-initialize provider with new config
         case provider.module.init(merged_config) do
           {:ok, new_state} ->
@@ -215,7 +215,7 @@ defmodule AgentBridge.ProviderRegistry do
             }
             :ets.insert(@table, {id, updated})
             {:reply, :ok, state}
-          
+
           {:error, reason} ->
             {:reply, {:error, reason}, state}
         end
@@ -227,7 +227,7 @@ defmodule AgentBridge.ProviderRegistry do
     case get(id) do
       nil ->
         {:reply, {:error, :not_found}, state}
-      
+
       provider ->
         updated = %{provider | status: status, failures: 0}
         :ets.insert(@table, {id, updated})
@@ -241,7 +241,7 @@ defmodule AgentBridge.ProviderRegistry do
     case get(id) do
       nil ->
         :ok
-      
+
       provider ->
         updated = %{provider |
           failures: 0,
@@ -250,7 +250,7 @@ defmodule AgentBridge.ProviderRegistry do
         }
         :ets.insert(@table, {id, updated})
     end
-    
+
     {:noreply, state}
   end
 
@@ -258,7 +258,7 @@ defmodule AgentBridge.ProviderRegistry do
 
   defp do_register(id, module, config) do
     config_map = Enum.into(config, %{})
-    
+
     case module.init(config_map) do
       {:ok, provider_state} ->
         provider = %Provider{
@@ -269,11 +269,11 @@ defmodule AgentBridge.ProviderRegistry do
           priority: config_map[:priority] || 0,
           status: :ready,
         }
-        
+
         :ets.insert(@table, {id, provider})
         Logger.info("Provider registered: #{id} (#{module})")
         {:ok, provider}
-      
+
       {:error, reason} ->
         Logger.error("Failed to initialize provider #{id}: #{inspect(reason)}")
         {:error, reason}

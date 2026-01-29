@@ -1,7 +1,7 @@
 defmodule AgentBridge.RateLimiter do
   @moduledoc """
   Rate limiting for AI provider API calls.
-  
+
   Prevents excessive API usage and respects provider limits.
   Uses a sliding window algorithm.
   """
@@ -27,7 +27,7 @@ defmodule AgentBridge.RateLimiter do
 
   @doc """
   Check if a request can proceed.
-  
+
   Returns:
   - `:ok` - Request can proceed
   - `{:rate_limited, retry_after}` - Must wait
@@ -75,11 +75,11 @@ defmodule AgentBridge.RateLimiter do
   @impl true
   def init(_opts) do
     :ets.new(@table, [:named_table, :public, :bag])
-    
+
     # Load configured limits
     configured = Application.get_env(:agent_bridge, :rate_limits, [])
     limits = Map.merge(@default_limits, Enum.into(configured, %{}))
-    
+
     Logger.info("Rate limiter initialized")
     {:ok, %{limits: limits}}
   end
@@ -87,14 +87,14 @@ defmodule AgentBridge.RateLimiter do
   @impl true
   def handle_call({:check, provider}, _from, state) do
     limit = Map.get(state.limits, provider, 60)
-    
+
     if limit == :unlimited do
       {:reply, :ok, state}
     else
       # Get requests in the last minute
       cutoff = System.monotonic_time(:second) - 60
       requests = get_requests_since(provider, cutoff)
-      
+
       if length(requests) >= limit do
         # Calculate retry after
         oldest = List.last(requests)
@@ -117,14 +117,14 @@ defmodule AgentBridge.RateLimiter do
     limit = Map.get(state.limits, provider, 60)
     cutoff = System.monotonic_time(:second) - 60
     requests = get_requests_since(provider, cutoff)
-    
+
     status = %{
       provider: provider,
       limit: limit,
       current: length(requests),
       available: if(limit == :unlimited, do: :unlimited, else: max(0, limit - length(requests))),
     }
-    
+
     {:reply, status, state}
   end
 
@@ -132,10 +132,10 @@ defmodule AgentBridge.RateLimiter do
   def handle_cast({:record, provider}, state) do
     timestamp = System.monotonic_time(:second)
     :ets.insert(@table, {provider, timestamp})
-    
+
     # Cleanup old entries (older than 2 minutes)
     cleanup_old_entries(provider)
-    
+
     {:noreply, state}
   end
 
@@ -150,10 +150,9 @@ defmodule AgentBridge.RateLimiter do
 
   defp cleanup_old_entries(provider) do
     cutoff = System.monotonic_time(:second) - 120
-    
+
     :ets.lookup(@table, provider)
     |> Enum.filter(fn {_, ts} -> ts < cutoff end)
     |> Enum.each(fn entry -> :ets.delete_object(@table, entry) end)
   end
 end
-

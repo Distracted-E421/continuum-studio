@@ -1,14 +1,14 @@
 defmodule StudioCore.State do
   @moduledoc """
   Global state management for Studio Core.
-  
+
   Uses ETS for fast, concurrent access to application state.
   State changes are broadcast via the EventBus.
-  
+
   ## State Structure
-  
+
   The state is organized as a nested map:
-  
+
       %{
         harnesses: %{
           "cursor" => %{status: :running, pid: #PID<0.123.0>},
@@ -51,9 +51,9 @@ defmodule StudioCore.State do
 
   @doc """
   Get a value at a specific path.
-  
+
   ## Examples
-  
+
       State.get([:harnesses, "cursor", :status])
       #=> :running
   """
@@ -63,9 +63,9 @@ defmodule StudioCore.State do
 
   @doc """
   Set a value at a specific path and broadcast the change.
-  
+
   ## Examples
-  
+
       State.set([:harnesses, "cursor", :status], :running)
   """
   def set(path, value) when is_list(path) do
@@ -107,7 +107,7 @@ defmodule StudioCore.State do
     # Create ETS table
     :ets.new(@table, [:named_table, :public, read_concurrency: true])
     :ets.insert(@table, {:state, @initial_state})
-    
+
     Logger.info("State manager initialized")
     {:ok, %{}}
   end
@@ -117,10 +117,10 @@ defmodule StudioCore.State do
     current = get_all()
     new_state = put_in_path(current, path, value)
     :ets.insert(@table, {:state, new_state})
-    
+
     # Broadcast the change
     StudioCore.EventBus.broadcast({:state_changed, path, value})
-    
+
     {:reply, :ok, state}
   end
 
@@ -131,10 +131,10 @@ defmodule StudioCore.State do
     new_value = fun.(old_value)
     new_state = put_in_path(current, path, new_value)
     :ets.insert(@table, {:state, new_state})
-    
+
     # Broadcast the change
     StudioCore.EventBus.broadcast({:state_changed, path, new_value})
-    
+
     {:reply, :ok, state}
   end
 
@@ -143,10 +143,10 @@ defmodule StudioCore.State do
     current = get_all()
     new_state = delete_in_path(current, path)
     :ets.insert(@table, {:state, new_state})
-    
+
     # Broadcast the change
     StudioCore.EventBus.broadcast({:state_deleted, path})
-    
+
     {:reply, :ok, state}
   end
 
@@ -172,4 +172,3 @@ defmodule StudioCore.State do
     end
   end
 end
-

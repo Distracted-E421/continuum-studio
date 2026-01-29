@@ -1,26 +1,26 @@
 defmodule StudioCore.EventBus do
   @moduledoc """
   Pub/Sub event bus for Studio Core.
-  
+
   Allows components to subscribe to events and receive broadcasts.
   Used primarily for:
-  
+
   - State change notifications
   - Harness status updates
   - Agent messages
   - UI events
-  
+
   ## Example
-  
+
       # Subscribe to all events
       EventBus.subscribe()
-      
+
       # Subscribe to specific event types
       EventBus.subscribe(:harness_status)
-      
+
       # Broadcast an event
       EventBus.broadcast({:harness_status, "cursor", :running})
-      
+
       # In your GenServer:
       def handle_info({:event, event}, state) do
         # Handle the event
@@ -39,7 +39,7 @@ defmodule StudioCore.EventBus do
 
   @doc """
   Subscribe the calling process to events.
-  
+
   Optionally specify a filter to only receive certain event types.
   """
   def subscribe(filter \\ :all) do
@@ -100,15 +100,15 @@ defmodule StudioCore.EventBus do
   @impl true
   def handle_cast({:broadcast, event}, state) do
     event_type = event_type(event)
-    
+
     subscribers = :ets.tab2list(@table)
-    
+
     for {pid, filter, _ref} <- subscribers do
       if matches_filter?(event_type, filter) do
         send(pid, {:event, event})
       end
     end
-    
+
     {:noreply, state}
   end
 
@@ -137,4 +137,3 @@ defmodule StudioCore.EventBus do
   defp matches_filter?(type, filters) when is_list(filters), do: type in filters
   defp matches_filter?(_, _), do: false
 end
-
