@@ -133,6 +133,8 @@ pub struct AgentMessage {
     pub role: String,
     pub content: String,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub source: Option<String>,  // Harness ID
+    pub color: Option<String>,   // Color for visual identification
 }
 
 impl AgentStreamWidget {
@@ -150,11 +152,37 @@ impl AgentStreamWidget {
             role: role.into(),
             content: content.into(),
             timestamp: chrono::Utc::now(),
+            source: None,
+            color: None,
         });
         
         // Trim old messages
         while self.messages.len() > self.max_messages {
             self.messages.remove(0);
+        }
+    }
+
+    pub fn add_message_with_source(&mut self, role: impl Into<String>, content: impl Into<String>, source: Option<&str>) {
+        self.messages.push(AgentMessage {
+            role: role.into(),
+            content: content.into(),
+            timestamp: chrono::Utc::now(),
+            source: source.map(String::from),
+            color: None,  // Color will be looked up from harness registry
+        });
+        
+        // Trim old messages
+        while self.messages.len() > self.max_messages {
+            self.messages.remove(0);
+        }
+    }
+
+    pub fn append_to_last(&mut self, content: &str) {
+        if let Some(last) = self.messages.last_mut() {
+            last.content.push_str(content);
+        } else {
+            // No previous message, create new one
+            self.add_message("assistant", content);
         }
     }
 
@@ -208,22 +236,53 @@ impl Widget for AgentStreamWidget {
     }
 }
 
-/// Harness panel showing available harnesses and their status
+/// Harness panel showing available harnesses and their status with interactive controls
 pub struct HarnessPanelWidget {
     harnesses: Vec<HarnessInfo>,
+    expanded: std::collections::HashSet<String>,
+    custom_modes: Vec<CustomMode>,
+    active_mode: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct HarnessInfo {
     pub id: String,
+    pub harness_type: String,
     pub name: String,
+    pub custom_name: Option<String>,
+    pub workspace: Option<String>,
+    pub color: Option<String>,
     pub status: HarnessStatus,
     pub description: String,
+    pub window_name: Option<String>,
+    pub capabilities: Vec<String>,
+    pub tooling: Vec<HarnessTool>,
+    pub studio_enhanced: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct HarnessTool {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub description: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CustomMode {
+    pub name: String,
+    pub harness_configs: std::collections::HashMap<String, HarnessModeConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HarnessModeConfig {
+    pub enabled_tools: std::collections::HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HarnessStatus {
     Stopped,
+    Searching,
     Starting,
     Running,
     Paused,
@@ -234,6 +293,7 @@ impl HarnessStatus {
     pub fn color(&self) -> eframe::egui::Color32 {
         match self {
             HarnessStatus::Stopped => eframe::egui::Color32::GRAY,
+            HarnessStatus::Searching => eframe::egui::Color32::from_rgb(79, 193, 233),
             HarnessStatus::Starting => eframe::egui::Color32::YELLOW,
             HarnessStatus::Running => eframe::egui::Color32::from_rgb(59, 165, 93),
             HarnessStatus::Paused => eframe::egui::Color32::from_rgb(209, 154, 102),
@@ -244,38 +304,98 @@ impl HarnessStatus {
     pub fn label(&self) -> &'static str {
         match self {
             HarnessStatus::Stopped => "stopped",
+            HarnessStatus::Searching => "searching",
             HarnessStatus::Starting => "starting",
             HarnessStatus::Running => "running",
             HarnessStatus::Paused => "paused",
             HarnessStatus::Error => "error",
         }
     }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            HarnessStatus::Stopped => "⏹",
+            HarnessStatus::Searching => "🔍",
+            HarnessStatus::Starting => "⏳",
+            HarnessStatus::Running => "▶",
+            HarnessStatus::Paused => "⏸",
+            HarnessStatus::Error => "⚠",
+        }
+    }
+}
+
+impl HarnessInfo {
+    fn default_cursor() -> Self {
+        Self {
+            id: "cursor".to_string(),
+            harness_type: "cursor".to_string(),
+            name: "Cursor IDE".to_string(),
+            custom_name: None,
+            workspace: None,
+            color: Some("#4EC9B0".to_string()),  // Default teal
+            status: HarnessStatus::Stopped,
+            description: "Control Cursor IDE via automation".to_string(),
+            window_name: None,
+            capabilities: vec![
+                "type_text".to_string(),
+                "send_keys".to_string(),
+                "screenshot".to_string(),
+                "open_file".to_string(),
+                "run_command".to_string(),
+            ],
+            tooling: vec![
+                HarnessTool {
+                    id: "keyboard".to_string(),
+                    name: "Keyboard Input".to_string(),
+                    enabled: true,
+                    description: "Type text and send key combinations".to_string(),
+                },
+                HarnessTool {
+                    id: "screenshot".to_string(),
+                    name: "Screenshot Capture".to_string(),
+                    enabled: true,
+                    description: "Capture window screenshots".to_string(),
+                },
+                HarnessTool {
+                    id: "ocr".to_string(),
+                    name: "OCR Text Recognition".to_string(),
+                    enabled: false,
+                    description: "Extract text from screenshots (requires tesseract)".to_string(),
+                },
+                HarnessTool {
+                    id: "clipboard".to_string(),
+                    name: "Clipboard Integration".to_string(),
+                    enabled: true,
+                    description: "Read/write clipboard content".to_string(),
+                },
+                HarnessTool {
+                    id: "window_focus".to_string(),
+                    name: "Window Management".to_string(),
+                    enabled: true,
+                    description: "Focus and manage windows".to_string(),
+                },
+            ],
+            studio_enhanced: false,
+        }
+    }
 }
 
 impl HarnessPanelWidget {
     pub fn new() -> Self {
-        // Initialize with default harnesses
         Self {
-            harnesses: vec![
-                HarnessInfo {
-                    id: "cursor".to_string(),
-                    name: "Cursor IDE".to_string(),
-                    status: HarnessStatus::Stopped,
-                    description: "Control Cursor IDE via automation".to_string(),
+            harnesses: vec![HarnessInfo::default_cursor()],
+            expanded: std::collections::HashSet::new(),
+            custom_modes: vec![
+                CustomMode {
+                    name: "Development".to_string(),
+                    harness_configs: std::collections::HashMap::new(),
                 },
-                HarnessInfo {
-                    id: "android_studio".to_string(),
-                    name: "Android Studio".to_string(),
-                    status: HarnessStatus::Stopped,
-                    description: "Control Android Studio for mobile development".to_string(),
-                },
-                HarnessInfo {
-                    id: "godot".to_string(),
-                    name: "Godot".to_string(),
-                    status: HarnessStatus::Stopped,
-                    description: "Control Godot Editor for game development".to_string(),
+                CustomMode {
+                    name: "Minimal".to_string(),
+                    harness_configs: std::collections::HashMap::new(),
                 },
             ],
+            active_mode: None,
         }
     }
 
@@ -285,8 +405,293 @@ impl HarnessPanelWidget {
         }
     }
 
+    pub fn update_harness(&mut self, harness_id: &str, window_name: Option<String>, status: HarnessStatus) {
+        if let Some(harness) = self.harnesses.iter_mut().find(|h| h.id == harness_id) {
+            harness.status = status;
+            harness.window_name = window_name;
+        }
+    }
+
+    pub fn set_studio_enhanced(&mut self, harness_id: &str, enhanced: bool) {
+        if let Some(harness) = self.harnesses.iter_mut().find(|h| h.id == harness_id) {
+            harness.studio_enhanced = enhanced;
+        }
+    }
+
     pub fn add_harness(&mut self, info: HarnessInfo) {
-        self.harnesses.push(info);
+        // Don't add if already exists
+        if !self.harnesses.iter().any(|h| h.id == info.id) {
+            self.harnesses.push(info);
+        }
+    }
+
+    pub fn register_harness(&mut self, id: &str, harness_type: &str) {
+        if !self.harnesses.iter().any(|h| h.id == id) {
+            let info = match harness_type {
+                "cursor" => {
+                    let mut info = HarnessInfo::default_cursor();
+                    info.id = id.to_string();
+                    info
+                },
+                _ => HarnessInfo {
+                    id: id.to_string(),
+                    harness_type: harness_type.to_string(),
+                    name: format!("{} ({})", harness_type, id),
+                    custom_name: None,
+                    workspace: None,
+                    color: None,
+                    status: HarnessStatus::Starting,
+                    description: format!("Auto-registered {} harness", harness_type),
+                    window_name: None,
+                    capabilities: vec![],
+                    tooling: vec![],
+                    studio_enhanced: false,
+                },
+            };
+            self.harnesses.push(info);
+        }
+    }
+
+    pub fn set_harness_color(&mut self, harness_id: &str, color: Option<String>) {
+        if let Some(harness) = self.harnesses.iter_mut().find(|h| h.id == harness_id) {
+            harness.color = color;
+        }
+    }
+
+    pub fn set_harness_custom_name(&mut self, harness_id: &str, name: Option<String>) {
+        if let Some(harness) = self.harnesses.iter_mut().find(|h| h.id == harness_id) {
+            harness.custom_name = name;
+        }
+    }
+
+    pub fn set_harness_workspace(&mut self, harness_id: &str, workspace: &str) {
+        if let Some(harness) = self.harnesses.iter_mut().find(|h| h.id == harness_id) {
+            harness.workspace = Some(workspace.to_string());
+        }
+    }
+
+    pub fn set_harness_window(&mut self, harness_id: &str, window_name: &str) {
+        if let Some(harness) = self.harnesses.iter_mut().find(|h| h.id == harness_id) {
+            harness.window_name = Some(window_name.to_string());
+        }
+    }
+
+    /// Update harness metadata from Synapsix
+    pub fn set_harness_metadata(
+        &mut self,
+        harness_id: &str,
+        custom_name: Option<String>,
+        color: Option<String>,
+        window_name: Option<String>,
+        capabilities: Option<Vec<String>>,
+        tooling: Option<Vec<(String, String, bool)>>,
+        studio_enhanced: Option<bool>,
+    ) {
+        if let Some(harness) = self.harnesses.iter_mut().find(|h| h.id == harness_id) {
+            if let Some(name) = custom_name {
+                harness.custom_name = Some(name);
+            }
+            if let Some(c) = color {
+                harness.color = Some(c);
+            }
+            if let Some(w) = window_name {
+                harness.window_name = Some(w);
+            }
+            if let Some(caps) = capabilities {
+                harness.capabilities = caps;
+            }
+            if let Some(tools) = tooling {
+                harness.tooling = tools.into_iter().map(|(id, name, enabled)| {
+                    HarnessTool {
+                        id,
+                        name: name.clone(),
+                        enabled,
+                        description: format!("{} tool", name),
+                    }
+                }).collect();
+            }
+            if let Some(enhanced) = studio_enhanced {
+                harness.studio_enhanced = enhanced;
+            }
+        }
+    }
+
+    pub fn toggle_tool(&mut self, harness_id: &str, tool_id: &str) {
+        if let Some(harness) = self.harnesses.iter_mut().find(|h| h.id == harness_id) {
+            if let Some(tool) = harness.tooling.iter_mut().find(|t| t.id == tool_id) {
+                tool.enabled = !tool.enabled;
+            }
+        }
+    }
+
+    fn render_harness_card(&mut self, ui: &mut Ui, index: usize) -> Vec<WidgetEvent> {
+        let mut events = vec![];
+        let harness = &self.harnesses[index];
+        let harness_id = harness.id.clone();
+        let is_expanded = self.expanded.contains(&harness_id);
+        
+        let frame = eframe::egui::Frame::none()
+            .inner_margin(8.0)
+            .rounding(4.0)
+            .fill(eframe::egui::Color32::from_rgb(30, 30, 30));
+        
+        frame.show(ui, |ui| {
+            // Header row
+            ui.horizontal(|ui| {
+                // Expand/collapse button
+                let expand_text = if is_expanded { "▼" } else { "▶" };
+                if ui.small_button(expand_text).clicked() {
+                    if is_expanded {
+                        self.expanded.remove(&harness_id);
+                    } else {
+                        self.expanded.insert(harness_id.clone());
+                    }
+                }
+                
+                // Status indicator with animation hint
+                let status_color = harness.status.color();
+                let (rect, _response) = ui.allocate_exact_size(
+                    eframe::egui::Vec2::new(12.0, 12.0),
+                    eframe::egui::Sense::hover(),
+                );
+                ui.painter().circle_filled(rect.center(), 5.0, status_color);
+                
+                // Name with studio enhancement indicator
+                // Use custom_name if available, otherwise fall back to name
+                let display_name = harness.custom_name.as_ref().unwrap_or(&harness.name);
+                ui.label(eframe::egui::RichText::new(display_name).strong());
+                
+                if harness.studio_enhanced {
+                    ui.colored_label(
+                        eframe::egui::Color32::from_rgb(78, 201, 176),
+                        "◈"
+                    ).on_hover_text("Studio Enhanced - Extended features available");
+                }
+                
+                ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
+                    // Status label
+                    ui.colored_label(
+                        status_color,
+                        format!("{} {}", harness.status.icon(), harness.status.label()),
+                    );
+                });
+            });
+            
+            // Window info if available
+            if let Some(ref window_name) = harness.window_name {
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    ui.colored_label(
+                        eframe::egui::Color32::from_rgb(128, 128, 128),
+                        format!("🪟 {}", window_name),
+                    );
+                });
+            }
+            
+            // Expanded content
+            if self.expanded.contains(&harness_id) {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+                
+                // Description
+                ui.label(eframe::egui::RichText::new(&harness.description).italics().weak());
+                
+                ui.add_space(8.0);
+                
+                // Action buttons
+                ui.horizontal(|ui| {
+                    let can_start = matches!(harness.status, HarnessStatus::Stopped | HarnessStatus::Error);
+                    let can_stop = matches!(harness.status, HarnessStatus::Running | HarnessStatus::Paused | HarnessStatus::Searching);
+                    let is_running = harness.status == HarnessStatus::Running;
+                    
+                    ui.add_enabled_ui(can_start, |ui| {
+                        if ui.button("▶ Start").clicked() {
+                            events.push(WidgetEvent::HarnessStatusUpdate {
+                                harness_id: harness_id.clone(),
+                                status: "start".to_string(),
+                            });
+                        }
+                    });
+                    
+                    ui.add_enabled_ui(can_stop, |ui| {
+                        if ui.button("⏹ Stop").clicked() {
+                            events.push(WidgetEvent::HarnessStatusUpdate {
+                                harness_id: harness_id.clone(),
+                                status: "stop".to_string(),
+                            });
+                        }
+                    });
+                    
+                    ui.add_enabled_ui(is_running, |ui| {
+                        if ui.button("📷 Screenshot").clicked() {
+                            events.push(WidgetEvent::HarnessStatusUpdate {
+                                harness_id: harness_id.clone(),
+                                status: "screenshot".to_string(),
+                            });
+                        }
+                    });
+                    
+                    if ui.button("🎯 Focus").clicked() {
+                        events.push(WidgetEvent::HarnessStatusUpdate {
+                            harness_id: harness_id.clone(),
+                            status: "focus".to_string(),
+                        });
+                    }
+                });
+                
+                ui.add_space(8.0);
+                
+                // Tooling toggles
+                if !harness.tooling.is_empty() {
+                    ui.label(eframe::egui::RichText::new("Tooling").strong().small());
+                    ui.add_space(4.0);
+                    
+                    let tooling_snapshot: Vec<_> = harness.tooling.iter()
+                        .map(|t| (t.id.clone(), t.name.clone(), t.enabled, t.description.clone()))
+                        .collect();
+                    
+                    for (tool_id, tool_name, tool_enabled, tool_desc) in tooling_snapshot {
+                        ui.horizontal(|ui| {
+                            ui.add_space(10.0);
+                            
+                            let mut enabled = tool_enabled;
+                            if ui.checkbox(&mut enabled, &tool_name).changed() {
+                                // Toggle will be handled after the loop
+                                events.push(WidgetEvent::HarnessStatusUpdate {
+                                    harness_id: harness_id.clone(),
+                                    status: format!("toggle_tool:{}", tool_id),
+                                });
+                            }
+                            
+                            ui.colored_label(
+                                eframe::egui::Color32::from_rgb(100, 100, 100),
+                                "ⓘ",
+                            ).on_hover_text(&tool_desc);
+                        });
+                    }
+                }
+                
+                // Capabilities
+                if !harness.capabilities.is_empty() {
+                    ui.add_space(8.0);
+                    ui.label(eframe::egui::RichText::new("Capabilities").strong().small());
+                    ui.horizontal_wrapped(|ui| {
+                        for cap in &harness.capabilities {
+                            ui.add(
+                                eframe::egui::Label::new(
+                                    eframe::egui::RichText::new(cap)
+                                        .background_color(eframe::egui::Color32::from_rgb(60, 60, 60))
+                                        .small()
+                                )
+                            );
+                        }
+                    });
+                }
+            }
+        });
+        
+        events
     }
 }
 
@@ -298,27 +703,63 @@ impl Default for HarnessPanelWidget {
 
 impl Widget for HarnessPanelWidget {
     fn ui(&mut self, ui: &mut Ui) -> Result<Vec<WidgetEvent>> {
-        for harness in &self.harnesses {
-            ui.horizontal(|ui| {
-                // Status indicator
-                let status_color = harness.status.color();
-                let (rect, _response) = ui.allocate_exact_size(
-                    eframe::egui::Vec2::new(8.0, 8.0),
-                    eframe::egui::Sense::hover(),
-                );
-                ui.painter().circle_filled(rect.center(), 4.0, status_color);
-                
-                ui.label(&harness.name);
-                ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
-                    ui.colored_label(
-                        eframe::egui::Color32::GRAY,
-                        format!("({})", harness.status.label()),
-                    );
-                });
+        let mut all_events = vec![];
+        
+        // Header with mode selector
+        ui.horizontal(|ui| {
+            ui.label(eframe::egui::RichText::new("🎛 Harnesses").strong());
+            ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
+                eframe::egui::ComboBox::from_id_salt("mode_selector")
+                    .selected_text(self.active_mode.as_deref().unwrap_or("Default"))
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(self.active_mode.is_none(), "Default").clicked() {
+                            self.active_mode = None;
+                        }
+                        for mode in &self.custom_modes {
+                            if ui.selectable_label(
+                                self.active_mode.as_ref() == Some(&mode.name),
+                                &mode.name
+                            ).clicked() {
+                                self.active_mode = Some(mode.name.clone());
+                            }
+                        }
+                    });
+                ui.label("Mode:");
             });
+        });
+        
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+        
+        // Harness cards
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let harness_count = self.harnesses.len();
+                for i in 0..harness_count {
+                    let events = self.render_harness_card(ui, i);
+                    all_events.extend(events);
+                    ui.add_space(4.0);
+                }
+                
+                // Add harness button
+                ui.add_space(8.0);
+                if ui.button("+ Add Harness").clicked() {
+                    // Would open a dialog to add new harness
+                }
+            });
+        
+        // Process tool toggle events
+        for event in &all_events {
+            if let WidgetEvent::HarnessStatusUpdate { harness_id, status } = event {
+                if let Some(tool_id) = status.strip_prefix("toggle_tool:") {
+                    self.toggle_tool(harness_id, tool_id);
+                }
+            }
         }
         
-        Ok(vec![])
+        Ok(all_events)
     }
 
     fn title(&self) -> String {

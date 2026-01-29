@@ -248,6 +248,42 @@ defmodule StudioCore.Socket.Handler do
     {:noreply, state}
   end
 
+  defp handle_synapsix_event(:harness_metadata, data, state) do
+    harness = Map.get(data, :harness) || Map.get(data, "harness")
+    Logger.info("🎨 Harness metadata: #{harness} → #{inspect(data)}")
+
+    # Broadcast metadata to all UI clients
+    StudioCore.EventBus.broadcast({:harness_metadata, harness, data})
+
+    {:noreply, state}
+  end
+
+  defp handle_synapsix_event(:window_info, data, state) do
+    harness = Map.get(data, :harness) || Map.get(data, "harness")
+    window_id = Map.get(data, :window_id) || Map.get(data, "window_id") || ""
+    window_name = Map.get(data, :window_name) || Map.get(data, "window_name") || ""
+    Logger.info("🪟 Window info: #{harness} → #{window_name}")
+
+    # Broadcast window info to UI
+    StudioCore.EventBus.broadcast({:window_info, harness, window_id, window_name})
+
+    {:noreply, state}
+  end
+
+  defp handle_synapsix_event(:agent_response, data, state) do
+    harness = Map.get(data, :harness) || Map.get(data, "harness")
+    content = Map.get(data, :content) || Map.get(data, "content") || ""
+    role = Map.get(data, :role) || Map.get(data, "role") || "assistant"
+    streaming = Map.get(data, :streaming) || Map.get(data, "streaming") || false
+    complete = Map.get(data, :complete) || Map.get(data, "complete") || true
+    Logger.debug("💬 Agent response from #{harness}: #{String.slice(content, 0..50)}...")
+
+    # Broadcast to UI with full metadata
+    StudioCore.EventBus.broadcast({:agent_response_full, harness, content, role, streaming, complete})
+
+    {:noreply, state}
+  end
+
   defp handle_synapsix_event(event, data, state) do
     Logger.warning("Unknown Synapsix event: #{inspect(event)} with #{inspect(data)}")
     {:noreply, state}
@@ -272,6 +308,9 @@ defmodule StudioCore.Socket.Handler do
   defp event_type({:harness_status, _, _}), do: :harness_status
   defp event_type({:harness_registered, _, _}), do: :harness_registered
   defp event_type({:harness_disconnected, _, _}), do: :harness_disconnected
+  defp event_type({:harness_metadata, _, _}), do: :harness_metadata
+  defp event_type({:window_info, _, _, _}), do: :window_info
+  defp event_type({:agent_response_full, _, _, _, _, _}), do: :agent_response
   defp event_type({:state_changed, _, _}), do: :state_changed
   defp event_type({:state_value, _, _}), do: :state_value
   defp event_type({:agent_response, _, _}), do: :agent_response
@@ -284,6 +323,26 @@ defmodule StudioCore.Socket.Handler do
   defp event_data({:harness_status, harness, status}), do: %{harness: harness, status: status}
   defp event_data({:harness_registered, harness, type}), do: %{harness: harness, type: type}
   defp event_data({:harness_disconnected, harness, reason}), do: %{harness: harness, reason: inspect(reason)}
+  defp event_data({:harness_metadata, harness, metadata}) do
+    %{
+      harness: harness,
+      color: Map.get(metadata, :color) || Map.get(metadata, "color"),
+      custom_name: Map.get(metadata, :custom_name) || Map.get(metadata, "custom_name"),
+      workspace: Map.get(metadata, :workspace) || Map.get(metadata, "workspace")
+    }
+  end
+  defp event_data({:window_info, harness, window_id, window_name}) do
+    %{harness: harness, window_id: window_id, window_name: window_name}
+  end
+  defp event_data({:agent_response_full, harness, content, role, streaming, complete}) do
+    %{
+      harness: harness,
+      content: content,
+      role: role,
+      streaming: streaming,
+      complete: complete
+    }
+  end
   defp event_data({:state_changed, path, value}), do: %{path: path, value: value}
   defp event_data({:state_value, path, value}), do: %{path: path, value: value}
   defp event_data({:agent_response, content, role}), do: %{content: content, role: role}

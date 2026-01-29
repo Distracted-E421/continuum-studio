@@ -248,6 +248,19 @@ pub fn decode_event_json(payload: &[u8]) -> Result<Option<Event>, IpcError> {
             reason: data.get("reason").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
         }),
         
+        "harness_metadata" => Some(Event::HarnessMetadata {
+            harness: data.get("harness").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            color: data.get("color").and_then(|v| v.as_str()).map(String::from),
+            custom_name: data.get("custom_name").and_then(|v| v.as_str()).map(String::from),
+            workspace: data.get("workspace").and_then(|v| v.as_str()).map(String::from),
+        }),
+        
+        "window_info" => Some(Event::WindowInfo {
+            harness: data.get("harness").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            window_id: data.get("window_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            window_name: data.get("window_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        }),
+        
         "state_changed" => Some(Event::StateChanged {
             path: data.get("path")
                 .and_then(|v| v.as_array())
@@ -259,6 +272,9 @@ pub fn decode_event_json(payload: &[u8]) -> Result<Option<Event>, IpcError> {
         "agent_response" => Some(Event::AgentResponse {
             content: data.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             role: data.get("role").and_then(|v| v.as_str()).unwrap_or("assistant").to_string(),
+            harness: data.get("harness").and_then(|v| v.as_str()).map(String::from),
+            streaming: data.get("streaming").and_then(|v| v.as_bool()).unwrap_or(false),
+            complete: data.get("complete").and_then(|v| v.as_bool()).unwrap_or(true),
         }),
         
         "pong" => Some(Event::Pong),
@@ -311,7 +327,10 @@ fn term_to_event(term: &OtpErlangTerm) -> Result<Option<Event>, IpcError> {
                 "agent_response" => {
                     let content = get_map_string(data, "content").unwrap_or_default();
                     let role = get_map_string(data, "role").unwrap_or_else(|| "assistant".to_string());
-                    Ok(Some(Event::AgentResponse { content, role }))
+                    let harness = get_map_string(data, "harness");
+                    let streaming = get_map_bool(data, "streaming").unwrap_or(false);
+                    let complete = get_map_bool(data, "complete").unwrap_or(true);
+                    Ok(Some(Event::AgentResponse { content, role, harness, streaming, complete }))
                 }
                 
                 "pong" => Ok(Some(Event::Pong)),
@@ -358,6 +377,28 @@ fn get_map_string(term: &OtpErlangTerm, key: &str) -> Option<String> {
         for (k, v) in entries {
             if matches_key(k, key) {
                 return term_to_string(v);
+            }
+        }
+    }
+    None
+}
+
+/// Get a boolean from an ETF map by key
+fn get_map_bool(term: &OtpErlangTerm, key: &str) -> Option<bool> {
+    if let OtpErlangTerm::OtpErlangMap(entries) = term {
+        for (k, v) in entries {
+            if matches_key(k, key) {
+                return match v {
+                    OtpErlangTerm::OtpErlangAtomBool(b) => Some(*b),
+                    OtpErlangTerm::OtpErlangAtomUTF8(b) | OtpErlangTerm::OtpErlangAtom(b) => {
+                        match String::from_utf8(b.clone()).ok()?.as_str() {
+                            "true" => Some(true),
+                            "false" => Some(false),
+                            _ => None,
+                        }
+                    },
+                    _ => None,
+                };
             }
         }
     }

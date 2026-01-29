@@ -82,10 +82,29 @@ pub enum Event {
     HarnessRegistered { harness: String, harness_type: String },
     /// Harness disconnected from Core
     HarnessDisconnected { harness: String, reason: String },
+    /// Harness metadata (color, custom name, etc.)
+    HarnessMetadata { 
+        harness: String, 
+        color: Option<String>, 
+        custom_name: Option<String>,
+        workspace: Option<String>,
+    },
+    /// Window info for a harness
+    WindowInfo {
+        harness: String,
+        window_id: String,
+        window_name: String,
+    },
     /// State changed
     StateChanged { path: Vec<String>, value: serde_json::Value },
-    /// Agent response
-    AgentResponse { content: String, role: String },
+    /// Agent response (with streaming support)
+    AgentResponse { 
+        content: String, 
+        role: String,
+        harness: Option<String>,
+        streaming: bool,
+        complete: bool,
+    },
     /// Pong response
     Pong,
     /// Error occurred

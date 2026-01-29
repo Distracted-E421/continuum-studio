@@ -11,6 +11,7 @@ use continuum_studio_ui::{
         DiagramWidget, DiagramNode, DiagramEdge, NodeShape, NodeStatus,
         CodeViewWidget, Language,
         TerminalWidget,
+        HarnessStatus,
     },
     ipc::{IpcClient, Command, Event},
 };
@@ -245,15 +246,21 @@ async fn main() -> anyhow::Result<()> {
                 self.terminal_widget.write_info(&format!("🔗 Harness {}: {}", harness, status));
                 
                 // Update diagram node status based on harness
-                let node_status = match status.as_str() {
-                    "running" | "reconnected" => NodeStatus::Running,
-                    "starting" | "stopping" | "registered" => NodeStatus::Pending,
-                    "stopped" | "error" => NodeStatus::Error,
-                    _ => NodeStatus::Ready,
+                let (node_status, panel_status) = match status.as_str() {
+                    "running" | "reconnected" => (NodeStatus::Running, HarnessStatus::Running),
+                    "starting" | "stopping" | "registered" => (NodeStatus::Pending, HarnessStatus::Starting),
+                    "searching" => (NodeStatus::Pending, HarnessStatus::Searching),
+                    "stopped" => (NodeStatus::Error, HarnessStatus::Stopped),
+                    "error" => (NodeStatus::Error, HarnessStatus::Error),
+                    "paused" => (NodeStatus::Ready, HarnessStatus::Paused),
+                    _ => (NodeStatus::Ready, HarnessStatus::Stopped),
                 };
                 
                 // Update matching node in diagram (if it exists)
                 self.diagram_widget.set_node_status(&harness, node_status);
+                
+                // Update harness panel
+                self.harness_panel.set_harness_status(&harness, panel_status);
             }
             Event::HarnessRegistered { harness, harness_type } => {
                 info!("Harness registered: {} (type: {})", harness, harness_type);
@@ -261,6 +268,9 @@ async fn main() -> anyhow::Result<()> {
                 
                 // Set diagram node to pending (waiting for status)
                 self.diagram_widget.set_node_status(&harness, NodeStatus::Pending);
+                
+                // Register in harness panel
+                self.harness_panel.register_harness(&harness, &harness_type);
             }
             Event::HarnessDisconnected { harness, reason } => {
                 info!("Harness disconnected: {} (reason: {})", harness, reason);
@@ -268,10 +278,44 @@ async fn main() -> anyhow::Result<()> {
                 
                 // Update diagram node to error/stopped state
                 self.diagram_widget.set_node_status(&harness, NodeStatus::Error);
+                
+                // Update harness panel
+                self.harness_panel.set_harness_status(&harness, HarnessStatus::Stopped);
             }
-            Event::AgentResponse { content, role } => {
-                info!("Agent response from {}: {}...", role, &content[..content.len().min(50)]);
-                self.agent_stream.add_message(&role, &content);
+            Event::HarnessMetadata { harness, color, custom_name, workspace } => {
+                info!("Harness metadata: {} color={:?} name={:?}", harness, color, custom_name);
+                self.terminal_widget.write_info(&format!(
+                    "🎨 Harness {}: {} ({})", 
+                    harness,
+                    custom_name.as_deref().unwrap_or(&harness),
+                    color.as_deref().unwrap_or("#808080")
+                ));
+                
+                // Update harness panel with metadata
+                self.harness_panel.set_harness_color(&harness, color);
+                self.harness_panel.set_harness_custom_name(&harness, custom_name);
+                if let Some(ws) = workspace {
+                    self.harness_panel.set_harness_workspace(&harness, &ws);
+                }
+            }
+            Event::WindowInfo { harness, window_id, window_name } => {
+                info!("Window info for {}: {} - {}", harness, window_id, window_name);
+                self.terminal_widget.write_info(&format!("🪟 {}: {}", harness, window_name));
+                
+                // Update harness panel with window info
+                self.harness_panel.set_harness_window(&harness, &window_name);
+            }
+            Event::AgentResponse { content, role, harness, streaming, complete } => {
+                let source = harness.as_deref().unwrap_or("unknown");
+                if streaming && !complete {
+                    // Streaming chunk - append to existing message
+                    info!("Agent stream from {}/{}: {}...", source, role, &content[..content.len().min(30)]);
+                    self.agent_stream.append_to_last(&content);
+                } else {
+                    // Complete message
+                    info!("Agent response from {}/{}: {}...", source, role, &content[..content.len().min(50)]);
+                    self.agent_stream.add_message_with_source(&role, &content, harness.as_deref());
+                }
             }
             Event::StateChanged { path, value } => {
                 info!("State changed: {:?} = {:?}", path, value);
