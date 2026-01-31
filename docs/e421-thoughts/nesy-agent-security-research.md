@@ -2702,14 +2702,60 @@ The Quint spec formally verifies:
 - Carcara/Alethe is the standard SMT proof format (veriT, cvc5)
 - Full verification with Alethe requires using cvc5 instead of Z3
 
-### Remaining Phases
+### Phase 6: Distribution (In Progress 🔄)
 
-**Phase 6: Distribution** (Planned)
-- rustler_precompiled for cross-platform NIFs
-- Hex.pm package publishing
-- GitHub releases with prebuilt binaries
+**OxiZ Integration**: January 31, 2026
 
-**Phase 7: Full Integration** (Planned)
+The static linking challenges with Z3's C++ dependencies led to discovery of **OxiZ**, a pure Rust reimplementation of Z3.
+
+**Location**: `synapsix/native/synapsix_oxiz/` and `synapsix/lib/synapsix/nesy/oxiz_nif.ex`
+
+**OxiZ Advantages**:
+- **Pure Rust**: NO C/C++ dependencies - just `cargo build`!
+- **Zero toolchain complexity**: No GMP, libclang, CMake issues
+- **Cross-platform ready**: Easy rustler_precompiled distribution
+- **WASM support**: Can run in browsers
+- **Alethe proof generation**: Compatible with Carcara
+- **~90% Z3 feature parity**: Most logics supported
+
+**Supported Logics**:
+- QF_UF (Uninterpreted Functions)
+- QF_LRA (Linear Real Arithmetic)  
+- QF_LIA (Linear Integer Arithmetic)
+- QF_BV (Fixed-size BitVectors)
+- QF_S (Strings)
+- QF_FP (Floating Point)
+- QF_DT (Datatypes)
+- QF_A (Arrays)
+- QF_NRA (Nonlinear Real Arithmetic)
+- UFLIA, AUFBV, HORN (with quantifiers)
+
+**Build Performance**:
+- Development: ~2 minutes
+- Release: ~1 minute 14 seconds
+- No external dependencies needed!
+
+**Distribution Strategy**:
+1. **Primary (OxiZ)**: Use for cross-platform distribution via rustler_precompiled
+2. **Secondary (Z3 via Zig)**: Future retooling of Z3 with Zig toolchain for cases needing Z3-specific features
+
+**Elixir API** (`lib/synapsix/nesy/oxiz_nif.ex`):
+```elixir
+Synapsix.NeSy.OxizNif.check_sat/1           # SMT-LIB2 satisfiability
+Synapsix.NeSy.OxizNif.verify_constraints/1  # High-level verification
+Synapsix.NeSy.OxizNif.verify_security/1     # Security constraint checking
+Synapsix.NeSy.OxizNif.satisfiable?/1        # Quick boolean check
+Synapsix.NeSy.OxizNif.capabilities/0        # Runtime introspection
+Synapsix.NeSy.OxizNif.available/0           # Always true (pure Rust!)
+```
+
+**Next Steps for Phase 6**:
+- [ ] Configure rustler_precompiled for OxiZ NIF
+- [ ] Set up GitHub Actions for multi-platform builds
+- [ ] Publish to Hex.pm with precompiled binaries
+- [ ] Test on macOS, Linux (x86/ARM), Windows
+
+### Phase 7: Full Integration (Planned)
 - Connect to Synapsix harness orchestrator
 - Real agent verification in production
 - Metrics and observability
