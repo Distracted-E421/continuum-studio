@@ -123,9 +123,186 @@ To force companies to open source if they want to use our system:
 4. [ ] Prototype integration with cursor-proxy interception
 5. [ ] Research AGPL licensing implications
 
+## Building From Scratch: Why and How
+
+### Why Build Custom
+
+**MCP Flaws**:
+- JSON-RPC overhead and latency
+- No strong typing at protocol level
+- Trust model is implicit, not verifiable
+- No formal specification for behavior
+
+**Existing Framework Shortcomings**:
+- neuro-san: Python (slow, GIL limitations)
+- OpenSSA: Heavy dependencies, enterprise-oriented
+- Most frameworks: No formal verification integration
+
+### Custom Stack Design
+
+Using our preferred languages (Elixir, Rust, Zig, Nix):
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                    SYNAPSIX NESY STACK                             │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │                 Elixir/OTP Orchestration Layer               │  │
+│  │  • Agent lifecycle management (GenServer, Supervisors)       │  │
+│  │  • Message passing and routing                               │  │
+│  │  • Fault tolerance and hot reloading                         │  │
+│  │  • Distributed clustering (libcluster)                       │  │
+│  └──────────────────────────┬──────────────────────────────────┘  │
+│                              │                                      │
+│          ┌───────────────────┼───────────────────┐                 │
+│          │                   │                   │                 │
+│          ▼                   ▼                   ▼                 │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────────────┐  │
+│  │ Neural NIFs  │   │ Symbolic NIFs │   │ Verification NIFs    │  │
+│  │ (Rust/Zig)   │   │ (Rust/Zig)    │   │ (Rust)               │  │
+│  │              │   │               │   │                      │  │
+│  │ • LLM calls  │   │ • SMT solver  │   │ • Proof generation   │  │
+│  │ • Embedding  │   │ • Logic prog  │   │ • Constraint check   │  │
+│  │ • Inference  │   │ • Rule engine │   │ • Audit trail        │  │
+│  └──────────────┘   └───────────────┘   └──────────────────────┘  │
+│                                                                     │
+├────────────────────────────────────────────────────────────────────┤
+│  Communication Protocol (NOT MCP)                                   │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │  Option A: Cap'n Proto (zero-copy, schema-based, fast)        │ │
+│  │  Option B: Flatbuffers (memory-efficient, typed)              │ │
+│  │  Option C: Custom binary with formal spec (most control)      │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+├────────────────────────────────────────────────────────────────────┤
+│  Formal Specification Layer                                         │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │  • TLA+ or Alloy for protocol modeling                        │ │
+│  │  • Z3 or CVC5 for runtime constraint solving                  │ │
+│  │  • Lean or Coq for theorem proving (optional, advanced)       │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Component Deep Dive
+
+#### 1. Elixir Orchestration (The "Spine")
+
+Why Elixir:
+- BEAM VM: battle-tested for fault tolerance
+- Supervision trees: agents crash? restart them!
+- Hot code reloading: update rules without downtime
+- Distributed by default: scale across machines
+
+```elixir
+# Example: Agent with verification constraint
+defmodule Synapsix.NeSy.VerifiedAgent do
+  use GenServer
+  
+  def execute_action(agent, action) do
+    with {:ok, proof} <- SymbolicNif.verify_action(action),
+         {:ok, result} <- NeuralNif.execute(action) do
+      AuditLog.record(agent, action, proof)
+      {:ok, result}
+    else
+      {:error, :constraint_violation, reason} ->
+        {:blocked, reason}
+    end
+  end
+end
+```
+
+#### 2. Rust NIFs (The "Muscle")
+
+Native Implemented Functions for:
+- **Z3 bindings**: Runtime SMT solving
+- **LLM inference**: GGML/llama.cpp integration
+- **Proof checking**: Verify formal proofs
+
+```rust
+// Example: Constraint verification NIF
+#[rustler::nif]
+fn verify_action(action: ActionSpec) -> Result<Proof, VerificationError> {
+    let solver = Z3Solver::new();
+    solver.add_constraint(action.preconditions());
+    solver.add_constraint(action.safety_rules());
+    
+    match solver.check() {
+        SatResult::Sat => Ok(solver.get_proof()),
+        SatResult::Unsat => Err(VerificationError::ConstraintViolation),
+    }
+}
+```
+
+#### 3. Zig Components (The "Precision")
+
+For ultra-low-level, embedded constraints:
+- Custom memory allocators for proof objects
+- Hardware security module (HSM) integration
+- Cryptographic signature generation
+
+#### 4. Communication Protocol
+
+**NOT MCP** - Design principles:
+- Formally specified (TLA+)
+- Zero-copy serialization (Cap'n Proto)
+- Built-in authentication
+- Proof-carrying messages
+
+```
+Message := {
+  sender: AgentID,
+  action: Action,
+  proof: Option<Proof>,
+  signature: Signature,
+  timestamp: u64,
+}
+```
+
+### Phase Implementation Plan
+
+1. **Phase 1: Core Elixir Scaffolding**
+   - Agent GenServer with constraint hooks
+   - Basic rule engine in pure Elixir
+   - Audit logging system
+
+2. **Phase 2: Rust NIFs**
+   - Z3 solver bindings
+   - Basic proof generation
+   - LLM integration (Ollama client)
+
+3. **Phase 3: Formal Specification**
+   - TLA+ model of protocol
+   - Property-based testing (StreamData)
+   - Constraint language DSL
+
+4. **Phase 4: Distribution**
+   - libcluster for node discovery
+   - Distributed proof verification
+   - Cross-node audit trail
+
+5. **Phase 5: Hardware Security**
+   - TPM integration (optional)
+   - Secure enclave support
+   - Hardware-backed signatures
+
+### Advantages Over Existing Approaches
+
+| Aspect | Existing (neuro-san, etc.) | Our Stack |
+|--------|----------------------------|-----------|
+| **Language** | Python (GIL, slow) | Elixir + Rust (concurrent, fast) |
+| **Fault Tolerance** | None built-in | BEAM supervision trees |
+| **Formal Verification** | Partial/none | First-class citizen |
+| **Distribution** | Needs external tools | Native (Erlang distribution) |
+| **Hot Reloading** | Restart required | Hot code swap |
+| **Protocol** | MCP/REST | Custom, formally specified |
+
 ## Resources
 
 - neuro-san: https://github.com/cognizant-ai-lab/neuro-san
 - OpenSSA: https://aitomatic.github.io/openssa
 - Kouvaros formal verification paper: https://pkouvaros.github.io/IJCAI23-K/paper
 - Neuro-Symbolic AI for Cybersecurity: https://arxiv.org/abs/... (need to find full URL)
+- Z3 Rust bindings: https://github.com/prove-rs/z3.rs
+- Cap'n Proto: https://capnproto.org/
+- TLA+: https://lamport.azurewebsites.net/tla/tla.html
