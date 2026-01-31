@@ -22,7 +22,50 @@ fn main() -> iced::Result {
         .theme(|state: &ContinuumStudio| state.theme.clone())
         .window_size(iced::Size::new(1280.0, 800.0))
         .antialiasing(true)
+        .subscription(|state| {
+            // Subscribe to Core connection events
+            if state.core_tx.is_some() {
+                iced::Subscription::none()
+            } else {
+                // Start connection subscription
+                core_subscription()
+            }
+        })
         .run()
+}
+
+/// Subscription to handle Core IPC connection
+fn core_subscription() -> iced::Subscription<Message> {
+    iced::Subscription::run(core_worker)
+}
+
+/// Core connection worker that yields Messages
+fn core_worker() -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(100, |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+        use iced::futures::SinkExt;
+        
+        let socket_path = PathBuf::from(core::DEFAULT_SOCKET_PATH);
+        
+        // Spawn the Core connection
+        let (request_tx, mut response_rx, mut connected_rx) = 
+            spawn_core_connection(socket_path);
+        
+        // Send the request sender to the app
+        let _ = output.send(Message::CoreConnected(request_tx)).await;
+        
+        loop {
+            tokio::select! {
+                // Handle connection state changes
+                Some(connected) = connected_rx.recv() => {
+                    let _ = output.send(Message::CoreConnectionChanged(connected)).await;
+                }
+                // Handle responses from Core
+                Some(response) = response_rx.recv() => {
+                    let _ = output.send(Message::CoreResponse(response)).await;
+                }
+            }
+        }
+    })
 }
 
 /// Boot function for iced application
@@ -93,6 +136,8 @@ enum View {
 enum Message {
     /// Navigation
     NavigateTo(View),
+    /// Core connected with request sender
+    CoreConnected(mpsc::Sender<CoreRequest>),
     /// Core connection state
     CoreConnectionChanged(bool),
     /// Theme changed
@@ -119,8 +164,20 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         Message::NavigateTo(view) => {
             state.current_view = view;
         }
+        Message::CoreConnected(tx) => {
+            log::info!("Core connection established, requesting versions...");
+            state.core_tx = Some(tx.clone());
+            // Request versions immediately
+            return Task::perform(
+                async move {
+                    let _ = tx.send(CoreRequest::GetVersions).await;
+                },
+                |_| Message::CursorAction(CursorMessage::RefreshVersions),
+            );
+        }
         Message::CoreConnectionChanged(connected) => {
             state.core_connected = connected;
+            log::info!("Core connection state: {}", if connected { "connected" } else { "disconnected" });
             if connected {
                 // Request versions when connected
                 if let Some(tx) = &state.core_tx {
