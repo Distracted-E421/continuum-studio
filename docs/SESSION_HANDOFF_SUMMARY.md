@@ -1,6 +1,6 @@
 # Continuum Studio Session Handoff Summary
 
-**Last Updated**: January 31, 2026 (Synapsix Dialog Phase 1)
+**Last Updated**: January 31, 2026 (Synapsix Dialog Phase 3)
 **Purpose**: Summary of architectural decisions, implemented components, and current state to facilitate rapid context loading for the next development session.
 
 ## 1. High-Level Architecture
@@ -90,7 +90,7 @@ We are building **Continuum Studio**, a modular AI orchestration platform.
 
 ### E. Synapsix Dialog (`synapsix/dialog`)
 
-**Status**: ✅ Phase 1 Complete (Port & Rename)
+**Status**: ✅ Phase 3 Complete (Multi-Device Sync)
 
 - **Language**: Rust (daemon) + Elixir (client)
 - **Version**: 0.6.0
@@ -102,13 +102,22 @@ We are building **Continuum Studio**, a modular AI orchestration platform.
   - Settings management (font scale, sounds, focus behavior)
   - Priority queue with timeout escalation
   - Deduplication and batch responses
+  - **Multi-device client registry** (Phase 3)
+  - **Dialog routing** based on capabilities and priority
+  - **Broadcast support** (send to all clients, first response wins)
 - **Rust Components**:
   - `synapsix-dialog-daemon`: GUI daemon with egui
   - `synapsix-dialog-cli`: CLI tool for D-Bus communication
 - **Elixir Components**:
-  - `Synapsix.Dialog`: Main API facade
-  - `Synapsix.Dialog.Client`: GenServer for daemon communication
+  - `Synapsix.Dialog`: Main API facade with routing
+  - `Synapsix.Dialog.Client`: GenServer for daemon communication, auto-registers with Registry
   - `Synapsix.Dialog.Queue`: Priority queue with `gb_trees`
+  - `Synapsix.Dialog.Registry`: Multi-device client registry (Phase 3)
+    - Client registration with capabilities tracking
+    - Heartbeat mechanism for health monitoring
+    - Priority-based client selection
+    - Away mode detection
+    - Stubs for WebSocket/HTTP transport
 - **Design Doc**: `/home/e421/synapsix/docs/SYNAPSIX_DIALOG_DESIGN.md`
 
 ### F. CoreDNS Integration (`homelab/nixos/modules/services/coredns-continuum.nix`)
@@ -275,10 +284,11 @@ dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
 - `synapsix/dialog/src/cli.rs` - Rebranded to synapsix-dialog-cli
 - `synapsix/dialog/src/dbus_interface.rs` - D-Bus service renamed to sh.synapsix.Dialog
 - `synapsix/dialog/src/gui.rs` - Window title fixed, egui deprecation warnings fixed
-- `synapsix/lib/synapsix/dialog.ex` - Main API facade
-- `synapsix/lib/synapsix/dialog/client.ex` - GenServer for daemon communication
+- `synapsix/lib/synapsix/dialog.ex` - Main API facade with routing delegates
+- `synapsix/lib/synapsix/dialog/client.ex` - GenServer with auto-registration and routing
 - `synapsix/lib/synapsix/dialog/queue.ex` - Priority queue implementation
-- `synapsix/lib/synapsix/application.ex` - Added Dialog.Client and Queue to supervision
+- `synapsix/lib/synapsix/dialog/registry.ex` - Multi-device client registry (Phase 3)
+- `synapsix/lib/synapsix/application.ex` - Reordered supervision (Registry before Client)
 - `synapsix/docs/SYNAPSIX_DIALOG_DESIGN.md` - Comprehensive design document
 
 ### Continuum Studio Docs (Jan 31)
@@ -348,6 +358,17 @@ dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
    - Created `/home/e421/continuum-studio/docs/e421-thoughts/on-agent-connection-loss.md`
    - Hypotheses: server-side throttling vs client-side fixable issues
    - Investigation areas identified for future analysis
+
+8. **Synapsix Dialog Phase 3: Multi-Device Sync** ✅
+   - Created `Synapsix.Dialog.Registry` GenServer for multi-device client tracking
+   - Fixed application startup order (Registry must start before Client)
+   - Auto-registration: Local D-Bus client registers on startup with capabilities
+   - Heartbeat mechanism: Clients send periodic heartbeats, marked away after 60s inactivity
+   - Priority-based routing: `best_client/1` finds optimal client by capabilities and priority
+   - Dialog routing: `route_dialog/2` sends to best client, falls back to local daemon
+   - Broadcast support: `broadcast_dialog/1` sends to all clients, first response wins
+   - Transport stubs: WebSocket and HTTP transports defined (implementation pending)
+   - All changes committed and pushed to origin
 
 ### Still Pending
 
