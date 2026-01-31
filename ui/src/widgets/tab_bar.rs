@@ -38,6 +38,8 @@ pub enum TabType {
     Terminal { session_id: String },
     /// D2 Diagram viewer
     Diagram { diagram_id: String },
+    /// Cursor Orchestrator - multi-instance management
+    Orchestrator,
     /// Settings page
     Settings,
     /// Custom widget
@@ -123,6 +125,17 @@ impl Tab {
             closable: true,
             modified: false,
             tab_type: TabType::Settings,
+        }
+    }
+
+    pub fn orchestrator() -> Self {
+        Self {
+            id: "orchestrator".to_string(),
+            title: "Orchestrator".to_string(),
+            icon: Some("🎯".to_string()),
+            closable: true,
+            modified: false,
+            tab_type: TabType::Orchestrator,
         }
     }
 }

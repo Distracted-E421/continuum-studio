@@ -12,6 +12,7 @@ use continuum_studio_ui::{
         CodeViewWidget, Language,
         TerminalWidget,
         HarnessStatus,
+        OrchestratorWidget,
     },
     ipc::{IpcClient, Command, Event},
 };
@@ -42,6 +43,9 @@ struct ContinuumStudio {
     
     /// Demo terminal widget  
     terminal_widget: TerminalWidget,
+    
+    /// Cursor Orchestrator widget
+    orchestrator_widget: OrchestratorWidget,
     
     /// IPC client for Studio Core communication
     ipc_client: IpcClient,
@@ -165,6 +169,9 @@ async fn main() -> anyhow::Result<()> {
         terminal_widget.write_success("   Finished release [optimized] target");
         terminal_widget.write_plain("$ ");
         
+        // Create orchestrator widget
+        let orchestrator_widget = OrchestratorWidget::new();
+        
         Self {
             theme: Theme::dark(),
             tab_bar,
@@ -173,6 +180,7 @@ async fn main() -> anyhow::Result<()> {
             diagram_widget,
             code_widget,
             terminal_widget,
+            orchestrator_widget,
             ipc_client,
             runtime,
             ipc_connected: false,
@@ -193,6 +201,9 @@ async fn main() -> anyhow::Result<()> {
                 ui.horizontal(|ui| {
                     if ui.button("🎛️ Open Harnesses").clicked() {
                         self.tab_bar.add_tab(Tab::harness_panel());
+                    }
+                    if ui.button("🎯 Orchestrator").clicked() {
+                        self.tab_bar.add_tab(Tab::orchestrator());
                     }
                     if ui.button("💬 Agent Stream").clicked() {
                         self.tab_bar.add_tab(Tab::agent_stream());
@@ -216,6 +227,9 @@ async fn main() -> anyhow::Result<()> {
             }
             Some(TabType::Terminal { .. }) => {
                 let _ = self.terminal_widget.ui(ui);
+            }
+            Some(TabType::Orchestrator) => {
+                let _ = self.orchestrator_widget.ui(ui);
             }
             Some(TabType::Settings) => {
                 ui.heading("Settings");

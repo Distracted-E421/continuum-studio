@@ -701,6 +701,307 @@ impl Default for HarnessPanelWidget {
     }
 }
 
+/// Cursor Orchestrator Widget - Multi-instance management
+pub struct OrchestratorWidget {
+    instances: Vec<CursorInstanceInfo>,
+    show_launch_dialog: bool,
+    selected_version: String,
+    selected_workspace: String,
+    resource_limits: ResourceLimits,
+}
+
+#[derive(Debug, Clone)]
+pub struct CursorInstanceInfo {
+    pub id: String,
+    pub version: String,
+    pub workspace: String,
+    pub status: InstanceStatus,
+    pub memory_mb: u64,
+    pub uptime_seconds: u64,
+    pub data_dir: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InstanceStatus {
+    Starting,
+    Running,
+    Stopped,
+    Error,
+}
+
+impl InstanceStatus {
+    pub fn color(&self) -> eframe::egui::Color32 {
+        match self {
+            InstanceStatus::Starting => eframe::egui::Color32::YELLOW,
+            InstanceStatus::Running => eframe::egui::Color32::from_rgb(59, 165, 93),
+            InstanceStatus::Stopped => eframe::egui::Color32::GRAY,
+            InstanceStatus::Error => eframe::egui::Color32::from_rgb(207, 102, 121),
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            InstanceStatus::Starting => "starting",
+            InstanceStatus::Running => "running",
+            InstanceStatus::Stopped => "stopped",
+            InstanceStatus::Error => "error",
+        }
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            InstanceStatus::Starting => "⏳",
+            InstanceStatus::Running => "▶",
+            InstanceStatus::Stopped => "⏹",
+            InstanceStatus::Error => "⚠",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResourceLimits {
+    pub max_instances: usize,
+    pub max_memory_mb: u64,
+    pub memory_per_instance: u64,
+}
+
+impl Default for ResourceLimits {
+    fn default() -> Self {
+        Self {
+            max_instances: 5,
+            max_memory_mb: 16_000,
+            memory_per_instance: 4_000,
+        }
+    }
+}
+
+impl OrchestratorWidget {
+    pub fn new() -> Self {
+        Self {
+            instances: Vec::new(),
+            show_launch_dialog: false,
+            selected_version: "2.4.21".to_string(),
+            selected_workspace: "default".to_string(),
+            resource_limits: ResourceLimits::default(),
+        }
+    }
+
+    pub fn add_instance(&mut self, info: CursorInstanceInfo) {
+        self.instances.push(info);
+    }
+
+    pub fn update_instance_status(&mut self, id: &str, status: InstanceStatus) {
+        if let Some(inst) = self.instances.iter_mut().find(|i| i.id == id) {
+            inst.status = status;
+        }
+    }
+
+    pub fn remove_instance(&mut self, id: &str) {
+        self.instances.retain(|i| i.id != id);
+    }
+
+    pub fn update_instance_memory(&mut self, id: &str, memory_mb: u64) {
+        if let Some(inst) = self.instances.iter_mut().find(|i| i.id == id) {
+            inst.memory_mb = memory_mb;
+        }
+    }
+
+    fn total_memory_usage(&self) -> u64 {
+        self.instances.iter().map(|i| i.memory_mb).sum()
+    }
+
+    fn render_instance_card(&self, ui: &mut Ui, instance: &CursorInstanceInfo) -> Vec<WidgetEvent> {
+        let mut events = vec![];
+
+        let frame = eframe::egui::Frame::none()
+            .inner_margin(8.0)
+            .rounding(4.0)
+            .fill(eframe::egui::Color32::from_rgb(35, 35, 40));
+
+        frame.show(ui, |ui| {
+            // Header row
+            ui.horizontal(|ui| {
+                // Status indicator
+                let status_color = instance.status.color();
+                let (rect, _) = ui.allocate_exact_size(
+                    eframe::egui::Vec2::new(12.0, 12.0),
+                    eframe::egui::Sense::hover(),
+                );
+                ui.painter().circle_filled(rect.center(), 5.0, status_color);
+
+                // Version and workspace
+                ui.label(eframe::egui::RichText::new(&format!("v{}", instance.version)).strong());
+                ui.label(eframe::egui::RichText::new(&format!("({})", instance.workspace)).weak());
+
+                ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
+                    ui.colored_label(
+                        status_color,
+                        format!("{} {}", instance.status.icon(), instance.status.label()),
+                    );
+                });
+            });
+
+            // Details row
+            ui.horizontal(|ui| {
+                ui.add_space(20.0);
+                ui.colored_label(
+                    eframe::egui::Color32::from_rgb(128, 128, 128),
+                    format!("📊 {}MB  ⏱ {}m", instance.memory_mb, instance.uptime_seconds / 60),
+                );
+            });
+
+            // Action buttons
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if instance.status == InstanceStatus::Running {
+                    if ui.small_button("🎯 Focus").clicked() {
+                        events.push(WidgetEvent::HarnessStatusUpdate {
+                            harness_id: instance.id.clone(),
+                            status: "focus".to_string(),
+                        });
+                    }
+                    if ui.small_button("⏹ Stop").clicked() {
+                        events.push(WidgetEvent::HarnessStatusUpdate {
+                            harness_id: instance.id.clone(),
+                            status: "stop".to_string(),
+                        });
+                    }
+                } else if instance.status == InstanceStatus::Stopped {
+                    if ui.small_button("▶ Start").clicked() {
+                        events.push(WidgetEvent::HarnessStatusUpdate {
+                            harness_id: instance.id.clone(),
+                            status: "start".to_string(),
+                        });
+                    }
+                }
+                if ui.small_button("♻ Upgrade").clicked() {
+                    events.push(WidgetEvent::HarnessStatusUpdate {
+                        harness_id: instance.id.clone(),
+                        status: "upgrade".to_string(),
+                    });
+                }
+            });
+        });
+
+        events
+    }
+}
+
+impl Default for OrchestratorWidget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Widget for OrchestratorWidget {
+    fn ui(&mut self, ui: &mut Ui) -> Result<Vec<WidgetEvent>> {
+        let mut all_events = vec![];
+
+        // Header
+        ui.horizontal(|ui| {
+            ui.heading("🎯 Cursor Orchestrator");
+            ui.with_layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Center), |ui| {
+                if ui.button("+ Launch Instance").clicked() {
+                    self.show_launch_dialog = true;
+                }
+            });
+        });
+
+        ui.separator();
+        ui.add_space(8.0);
+
+        // Resource summary
+        let total_memory = self.total_memory_usage();
+        let running_count = self.instances.iter().filter(|i| i.status == InstanceStatus::Running).count();
+
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "📊 Instances: {}/{} | Memory: {}MB/{}MB",
+                running_count,
+                self.resource_limits.max_instances,
+                total_memory,
+                self.resource_limits.max_memory_mb
+            ));
+        });
+
+        // Progress bar for memory
+        ui.add(eframe::egui::ProgressBar::new(total_memory as f32 / self.resource_limits.max_memory_mb as f32)
+            .text(format!("Memory: {}MB", total_memory)));
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        // Instance list
+        if self.instances.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                ui.label(eframe::egui::RichText::new("No Cursor instances running").weak());
+                ui.add_space(10.0);
+                ui.label("Click 'Launch Instance' to start a new Cursor");
+                ui.add_space(20.0);
+            });
+        } else {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let instances_snapshot: Vec<_> = self.instances.clone();
+                    for instance in &instances_snapshot {
+                        let events = self.render_instance_card(ui, instance);
+                        all_events.extend(events);
+                        ui.add_space(4.0);
+                    }
+                });
+        }
+
+        // Launch dialog
+        if self.show_launch_dialog {
+            egui::Window::new("Launch Cursor Instance")
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Version:");
+                        ui.text_edit_singleline(&mut self.selected_version);
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Workspace:");
+                        ui.text_edit_singleline(&mut self.selected_workspace);
+                    });
+
+                    ui.add_space(8.0);
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Launch").clicked() {
+                            all_events.push(WidgetEvent::OpenWidget {
+                                widget_type: "launch_cursor".to_string(),
+                                config: serde_json::json!({
+                                    "version": self.selected_version,
+                                    "workspace": self.selected_workspace,
+                                }),
+                            });
+                            self.show_launch_dialog = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.show_launch_dialog = false;
+                        }
+                    });
+                });
+        }
+
+        Ok(all_events)
+    }
+
+    fn title(&self) -> String {
+        "Cursor Orchestrator".to_string()
+    }
+
+    fn id(&self) -> String {
+        "orchestrator".to_string()
+    }
+}
+
 impl Widget for HarnessPanelWidget {
     fn ui(&mut self, ui: &mut Ui) -> Result<Vec<WidgetEvent>> {
         let mut all_events = vec![];
