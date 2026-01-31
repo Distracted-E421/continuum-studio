@@ -8,7 +8,18 @@ defmodule StudioCore.MixProject do
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      releases: releases()
+      releases: releases(),
+      escript: escript()
+    ]
+  end
+
+  defp escript do
+    [
+      main_module: StudioCore.CLI.CursorVersions,
+      name: "cursor-versions",
+      path: "bin/cursor-versions",
+      # Don't start the full application, we'll start only what we need
+      app: nil
     ]
   end
 

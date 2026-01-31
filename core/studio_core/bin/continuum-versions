@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#
+# continuum-versions: Cursor version manager CLI
+#
+# This is a wrapper script that calls the Elixir version registry.
+# For full functionality, use the Elixir mix task directly:
+#   cd ~/continuum-studio/core/studio_core && mix cursor.versions
+#
+# Usage:
+#   continuum-versions list              # List all available versions
+#   continuum-versions installed         # List installed versions
+#   continuum-versions download <ver>    # Download specific version
+#   continuum-versions run <ver> [path]  # Run specific version
+#   continuum-versions default <ver>     # Set default version
+#   continuum-versions stats             # Show statistics
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STUDIO_CORE_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Check if we're in a nix-shell or have elixir available
+if ! command -v elixir &> /dev/null; then
+    echo "Error: Elixir not found in PATH"
+    echo "Please install Elixir or run from a nix-shell"
+    exit 1
+fi
+
+# Change to studio_core directory and run the mix task
+cd "$STUDIO_CORE_DIR"
+exec mix cursor.versions "$@"

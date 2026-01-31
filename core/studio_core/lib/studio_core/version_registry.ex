@@ -261,20 +261,48 @@ defmodule StudioCore.VersionRegistry do
   # ==========================================================================
 
   defp load_versions do
-    priv_dir = :code.priv_dir(:studio_core)
-    path = Path.join(priv_dir, @versions_file)
+    # Try multiple locations for the versions file
+    paths = [
+      # Standard priv directory (when running as part of an application)
+      Path.join(priv_dir(), @versions_file),
+      # Home directory fallback
+      Path.expand("~/.cursor-versions/cursor-versions.json"),
+      # Relative to current working directory
+      Path.join("priv", @versions_file)
+    ]
 
+    case find_and_read_versions(paths) do
+      {:ok, versions} -> versions
+      :not_found ->
+        Logger.warning("Could not find versions file in: #{inspect(paths)}")
+        []
+    end
+  end
+
+  defp priv_dir do
+    case :code.priv_dir(:studio_core) do
+      {:error, _} ->
+        # Fallback for escripts - try relative path
+        Path.join([File.cwd!(), "priv"])
+      dir when is_list(dir) ->
+        List.to_string(dir)
+    end
+  end
+
+  defp find_and_read_versions([]), do: :not_found
+  defp find_and_read_versions([path | rest]) do
     case File.read(path) do
       {:ok, content} ->
         case Jason.decode(content) do
-          {:ok, %{"versions" => versions}} -> versions
+          {:ok, %{"versions" => versions}} -> 
+            Logger.debug("Loaded versions from: #{path}")
+            {:ok, versions}
           _ ->
-            Logger.error("Invalid versions JSON format")
-            []
+            Logger.error("Invalid versions JSON format in: #{path}")
+            find_and_read_versions(rest)
         end
-      {:error, reason} ->
-        Logger.warning("Could not load versions file: #{inspect(reason)}, path: #{path}")
-        []
+      {:error, _} ->
+        find_and_read_versions(rest)
     end
   end
 
