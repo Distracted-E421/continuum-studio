@@ -2557,3 +2557,221 @@ This architecture provides:
 2. **Performance**: Dirty schedulers for SMT solving
 3. **Efficiency**: ResourceArc for persistent contexts
 4. **Distribution**: Precompiled for all platforms
+
+---
+
+## Implementation Status (January 31, 2026)
+
+### Synapsix NeSy Stack - Completed Phases
+
+The research has been translated into a working implementation in the Synapsix project.
+
+#### Phase 1: Z3 NIF (Completed ✅)
+
+**Location**: `synapsix/native/synapsix_z3/`
+
+**Features Implemented**:
+- Full SMT-LIB2 parsing via `z3_sys::Z3_parse_smtlib2_string`
+- ResourceArc context management for Z3 persistence
+- DirtyCpu scheduling for all solver operations
+- Model extraction for SAT results
+- **PROOF GENERATION** for UNSAT results (key for security!)
+- Support for Int, Real, Bool, String, Array types
+- Regex support via Z3's string theory
+
+**Elixir API** (`lib/synapsix/nesy/z3_nif.ex`):
+```elixir
+Synapsix.NeSy.Z3Nif.create_context/0
+Synapsix.NeSy.Z3Nif.check_smtlib2/2  # Full SMT-LIB2 parsing
+Synapsix.NeSy.Z3Nif.check_sat/2
+Synapsix.NeSy.Z3Nif.verify_action/3
+Synapsix.NeSy.Z3Nif.check_constraints/3
+Synapsix.NeSy.Z3Nif.z3_version/0
+```
+
+**Test Results**:
+- `/tmp` write → SAT ✓
+- `/etc/passwd` read → UNSAT with proof ✓
+- Regex pattern matching → SAT with model ✓
+
+#### Phase 2: Constraint DSL (Completed ✅)
+
+**Location**: `synapsix/lib/synapsix/nesy/constraint/`
+
+**Modules**:
+- `DSL` - Macro-based constraint definition
+- `Compiler` - Compiles Elixir AST to SMT-LIB2
+- `Security` - Pre-built security constraints
+
+**Security Module Policies**:
+- Forbidden paths: `/etc/passwd`, `/etc/shadow`, `/etc/sudoers`
+- System prefixes: `/etc/`, `/usr/`, `/bin/`, `/sbin/`
+- Permission levels: read=1, write=5, delete=9
+- Internal network blocking: `10.*`, `192.168.*`, `172.16-31.*`
+- Dangerous command blocking: `rm`, `dd`, `mkfs`, etc.
+
+**Test Results**:
+- `/etc/passwd` read → UNSAT (forbidden) ✓
+- `/tmp` delete perm 9 → SAT (allowed) ✓
+- `/tmp` delete perm 5 → UNSAT (need 9) ✓
+
+#### Phase 3: Protocol Layer (Completed ✅)
+
+**Location**: `synapsix/protocol/` and `synapsix/lib/synapsix/nesy/protocol/`
+
+**Cap'n Proto Schema** (`protocol/schema/nesy.capnp`):
+- Core types: ActionId, ActionType, Action, Constraint, Proof
+- VerificationResult: Verified/Rejected/Inconclusive
+- RPC interfaces: ConstraintEngine, VerifiedAgent, ActionExecutor
+- Capability-based security: ActionExecutor IS permission
+
+**Elixir Protocol Client**:
+- `Client` - Verify and execute actions
+- `AuditLog` - Record/query/export actions
+- `SlyData` - Private data registry (never enters LLM context)
+- `Refinement` - AutoRocq-style iterative verification
+
+**Key Pattern**: ActionExecutor capability is consumed on use:
+```elixir
+case Client.verify_action(client, action, Security) do
+  {:verified, proof, executor} ->
+    Client.execute(executor)  # Consumes capability
+  {:rejected, reason, feedback} ->
+    # Use feedback for refinement
+end
+```
+
+#### Phase 4: Formal Verification (Completed ✅)
+
+**Location**: `synapsix/formal/quint/`
+
+**Quint Specification** (`nesy_protocol.qnt`):
+- Types: ActionType, VerifyResult, Act, Executor
+- State: pending, verified, rejected, executors
+- Actions: propose, verifyOne, executeOne
+- Invariant: mainSafety (forbidden paths never verified)
+
+**Verification Results**:
+```
+[ok] No violation found (1551 traces/second)
+```
+
+The Quint spec formally verifies:
+- Forbidden paths never get verified
+- Permission levels enforced correctly
+- Executor capabilities consumed correctly
+
+### Code Statistics
+
+| Phase | Lines | Files |
+|-------|-------|-------|
+| Phase 1: Z3 NIF | 914 | 5 |
+| Phase 2: Constraint DSL | 651 | 2 |
+| Phase 3: Protocol Layer | 1561 | 5 |
+| Phase 4: Quint Formal Spec | 200 | 1 |
+| **Total** | **3326** | **13** |
+
+### Phase 5: Carcara Integration (Completed ✅)
+
+**Location**: `synapsix/native/synapsix_carcara/` and `synapsix/lib/synapsix/nesy/carcara_nif.ex`
+
+**Status**: Full Carcara 1.1.0 library integration (January 31, 2026)
+
+**Rust NIF (synapsix_carcara)**:
+- Integrated Carcara 1.1.0 via git dependency
+- Z3 proof structural validation (Z3 uses its own format, not Alethe)
+- Full Alethe proof verification via Carcara library
+- Proof elaboration (add omitted details to proofs)
+- Strict mode verification (for elaborated proofs)
+- CLI fallback for debugging
+
+**Build Requirements**:
+- m4, gmp, gcc needed for rug/gmp-mpfr-sys dependency
+- Build with: `nix shell nixpkgs#m4 nixpkgs#gmp nixpkgs#gcc -c cargo build`
+
+**Key Functions**:
+- `verify_z3_proof/1` - Structural validation of Z3 proofs
+- `verify_alethe_proof/2` - Full Carcara verification for Alethe proofs
+- `elaborate_proof/2` - Add omitted details to proofs
+- `verify_alethe_strict/2` - Strict mode for elaborated proofs
+- `detect_format/1` - Auto-detect proof format
+- `capabilities/0` - Runtime capability introspection
+
+**Note**: Z3 and Alethe are different proof formats:
+- Z3 uses its own proprietary format
+- Carcara/Alethe is the standard SMT proof format (veriT, cvc5)
+- Full verification with Alethe requires using cvc5 instead of Z3
+
+### Remaining Phases
+
+**Phase 6: Distribution** (Planned)
+- rustler_precompiled for cross-platform NIFs
+- Hex.pm package publishing
+- GitHub releases with prebuilt binaries
+
+**Phase 7: Full Integration** (Planned)
+- Connect to Synapsix harness orchestrator
+- Real agent verification in production
+- Metrics and observability
+
+### Repository
+
+All code is committed to: `github.com/Distracted-E421/synapsix`
+
+Commits:
+- `feat(nesy): Add Z3 SMT solver NIF for constraint verification`
+- `feat(nesy): Add constraint DSL and security verification module`
+- `feat(nesy): Add Cap'n Proto protocol with client and services`
+- `feat(formal): Add Quint specification for NeSy protocol`
+- `feat(nesy): Add Carcara proof verification NIF (Phase 5 scaffold)`
+- `feat(nesy): Full Carcara 1.1.0 library integration for Phase 5`
+
+---
+
+## Research Update: G-I-A Framework (January 31, 2026)
+
+From browser-based research on arXiv paper "Neuro-Symbolic AI for Cybersecurity: State of the Art, Challenges, and Opportunities" (arXiv:2509.06921)
+
+### G-I-A Framework: Grounding-Instructibility-Alignment
+
+This framework provides an evaluation methodology for NeSy cybersecurity systems:
+
+#### 1. Grounding
+- **Problem**: Inadequate conceptual grounding leads to non-robustness against novel attacks
+- **Solution**: Combine neural pattern recognition with symbolic knowledge representation
+- **Outcome**: Systems understand cybersecurity concepts via both statistical AND logical perspectives
+- **Security Benefit**: Robustness against adversarial manipulation through explicit logical constraints
+
+#### 2. Instructibility
+- **Problem**: Traditional neural approaches prevent adaptation based on analyst feedback
+- **Solution**: Integration mechanisms for analyst feedback to update both neural and symbolic components
+- **Outcome**: Rapid adaptation to evolving threats without extensive retraining
+- **Security Benefit**: Symbolic knowledge bases dynamically updated based on analyst expertise
+
+#### 3. Alignment
+- **Problem**: AI systems optimize for metrics that inadequately capture true security goals
+- **Solution**: Explicit encoding of cybersecurity principles within symbolic reasoning
+- **Outcome**: System behavior consistent with security goals when neural components adapt
+- **Security Benefit**: Causal reasoning enables understanding of attack causality and counterfactual scenarios
+
+### Key Insights from Research
+
+1. **Multi-agent NeSy Architectures** show consistent advantages
+2. **Causal reasoning integration** is the most transformative advancement
+3. **Proactive defense** transcends correlation-based approaches
+4. **Dual-use implications**: Autonomous systems can do zero-day exploitation with cost reductions
+5. **Standardization gaps** are a critical implementation challenge
+
+### Application to Synapsix NeSy Stack
+
+| G-I-A Component | Synapsix Implementation |
+|-----------------|-------------------------|
+| **Grounding** | Z3/Carcara proof verification, Security DSL with domain knowledge |
+| **Instructibility** | Quint formal spec allows dynamic policy updates |
+| **Alignment** | Forbidden paths, permission levels enforced via SMT constraints |
+
+### Research Papers for Further Study
+
+- "Towards Formal Verification of Neuro-symbolic Multi-agent Systems" (IJCAI 2023)
+- "Surveying neuro-symbolic approaches for reliable artificial intelligence of things" (Springer 2024)
+- "Experimenting with Neurosymbolic AI for Defending Against Cyber Attacks" (SAGE 2025)
