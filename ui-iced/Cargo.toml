@@ -1,0 +1,55 @@
+[package]
+name = "continuum-studio-iced"
+version = "0.1.0"
+edition = "2021"
+authors = ["e421"]
+description = "Continuum Studio UI - iced/COSMIC migration"
+license = "AGPL-3.0"
+rust-version = "1.80"
+
+[dependencies]
+# iced GUI framework (0.14.0 - latest with time travel debugging, hot reload)
+iced = { version = "0.14", features = [
+    "tokio",
+    "image",
+    "svg",
+    "canvas",
+    "advanced",
+    "wgpu",
+] }
+
+# Async runtime
+tokio = { version = "1.0", features = [
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "net",
+    "io-util",
+    "time",
+    "signal",
+] }
+futures = "0.3"
+
+# D-Bus integration for dialog daemon
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# ETF encoding for Elixir/Erlang communication
+erlang_rs = "2.0"
+
+# File system
+dirs = "5.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+[dev-dependencies]
+pretty_assertions = "1.0"
