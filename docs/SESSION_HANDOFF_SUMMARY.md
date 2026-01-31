@@ -1,6 +1,6 @@
 # Continuum Studio Session Handoff Summary
 
-**Last Updated**: January 31, 2026 (cursor-proxy scaffolding complete)
+**Last Updated**: January 31, 2026 (synapsix-dialog NixOS integration + NeSy status)
 **Purpose**: Summary of architectural decisions, implemented components, and current state to facilitate rapid context loading for the next development session.
 
 ## 1. High-Level Architecture
@@ -543,9 +543,56 @@ dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
     - Built release binary (~2MB)
     - Tested: `cursor-proxy --help`, `cursor-proxy status` working
 
+### Completed This Session (Jan 31 Evening)
+
+15. **Synapsix Dialog NixOS Integration** ✅
+    - Fixed `synapsix/dialog/default.nix`:
+      - Updated pname from `cursor-dialog-daemon` to `synapsix-dialog`
+      - Bumped version from `0.5.0` to `0.6.0`
+      - Corrected binary names to `synapsix-dialog-daemon` and `synapsix-dialog-cli`
+      - Updated meta description and homepage
+    - Created `homelab/nixos/users/e421/modules/synapsix/default.nix`:
+      - NixOS module with `homelab.synapsix` options
+      - Systemd user service for auto-start with graphical session
+      - D-Bus service file for activation
+      - Configurable web port (default 8080)
+    - Updated `homelab/nixos/users/e421/home.nix`:
+      - Added synapsix module import
+      - Enabled `homelab.synapsix` with dialog daemon
+      - Removed old `cursor-dialog-daemon` package from nixos-cursor
+    - Verified daemon works:
+      - Built release binary
+      - Tested CLI and daemon help
+      - Ping works: "pong"
+      - D-Bus service registered: `sh.synapsix.Dialog`
+      - Web server on port 8080
+
+16. **"Unsigned Binary" Security Observation** 📝
+    - Documented insight from Moltbook phenomenon about skills being "unsigned binaries"
+    - Created `/home/e421/continuum-studio/docs/e421-thoughts/unsigned-binary-skills-security.md`
+    - Key insight: Skills/harnesses/rules are essentially unverified code injected into agent context
+    - Connects directly to Synapsix NeSy security work
+    - Future harness hardening: capability manifests, action logging, constraint verification
+
+### NeSy Implementation Status (Jan 31)
+
+**Synapsix NeSy Stack** - Repository: `github.com/Distracted-E421/synapsix`
+
+| Phase | Status | Lines | Description |
+|-------|--------|-------|-------------|
+| 1: Z3 NIF | ✅ Complete | 914 | Rust NIF with SMT-LIB2 parsing, proof generation |
+| 2: Constraint DSL | ✅ Complete | 651 | Elixir macros, security module |
+| 3: Protocol Layer | ✅ Complete | 1561 | Cap'n Proto schema, client, audit log |
+| 4: Quint Formal Spec | ✅ Complete | 200 | Verified at 1551 traces/sec |
+| 5: Carcara Integration | ⏳ Planned | - | Proof verification NIF |
+| 6: Distribution | ⏳ Planned | - | rustler_precompiled |
+| 7: Harness Integration | ⏳ Planned | - | Full Synapsix integration |
+
+**Total implemented**: 3326+ lines
+
 ### Still Pending
 
-- NixOS rebuild to complete (permanent install of daemon v0.6.0).
+- **NixOS Rebuild**: Apply home.nix changes to enable synapsix-dialog systemd service
 - Test Android app dialog connectivity with new synapsix-dialog-daemon.
 - Deploy WireGuard mesh to other devices.
 - Multi-node service discovery test.
@@ -553,3 +600,5 @@ dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
 - **Cursor Version CLI**: Fix bash script to use all 100+ versions from Elixir registry
 - **Comprehensive Dialog Test**: Test all 8 phases together
 - **cursor-proxy**: Implement actual certificate generation, test with real traffic
+- **NeSy Phase 5-7**: Complete remaining phases of NeSy stack
+- **Browser Research**: Hands-on NeSy/neurosymbolic AI research in Playwright browser
