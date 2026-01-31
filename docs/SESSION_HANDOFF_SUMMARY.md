@@ -39,7 +39,7 @@ We are building **Continuum Studio**, a modular AI orchestration platform.
 
 - **Language**: Kotlin / Jetpack Compose
 - **Features**:
-  - **Dialog Client**: Connects to `cursor-dialog-daemon` via WebSocket.
+  - **Dialog Client**: Connects to `synapsix-dialog-daemon` via WebSocket.
   - **Widget Bay**: Customizable dashboard grid.
   - **Widgets**: Harness Status, Service Discovery, Dialog Queue.
 - **Key Files**:
