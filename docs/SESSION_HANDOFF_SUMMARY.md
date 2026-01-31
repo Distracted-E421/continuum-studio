@@ -373,10 +373,17 @@ dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
   - `cursor-proxy iptables` - Manage redirect rules
   - `cursor-proxy captures` - View captured payloads
   - `cursor-proxy inject` - Manage injection rules
+- **Certificate Generation**: ✅ Working with rcgen (ECDSA P-256)
+- **Test Results (Jan 31)**:
+  - Proxy starts and listens on 8443
+  - CA cert generated successfully
+  - CONNECT tunnel for explicit proxy mode fails (TLS error)
+  - Need to implement proper CONNECT handling or use transparent mode
 - **TODO**:
-  - Implement actual certificate generation (rcgen)
+  - Implement CONNECT method handling for explicit proxy mode
+  - OR implement transparent mode with iptables redirect
   - Full iptables rule management
-  - Test with real Cursor traffic
+  - Test with transparent mode and real Cursor traffic
 
 ## 9. Session Progress Summary
 
