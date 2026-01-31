@@ -1,6 +1,6 @@
 # Continuum Studio Session Handoff Summary
 
-**Last Updated**: January 31, 2026 (Synapsix Dialog COMPLETE - All 7 Phases)
+**Last Updated**: January 31, 2026 (Synapsix Dialog COMPLETE - All 8 Phases incl. AFK Busy Work)
 **Purpose**: Summary of architectural decisions, implemented components, and current state to facilitate rapid context loading for the next development session.
 
 ## 1. High-Level Architecture
@@ -90,7 +90,7 @@ We are building **Continuum Studio**, a modular AI orchestration platform.
 
 ### E. Synapsix Dialog (`synapsix/dialog`)
 
-**Status**: ✅ COMPLETE - All 7 Phases Implemented
+**Status**: ✅ COMPLETE - All 8 Phases Implemented
 
 - **Language**: Rust (daemon) + Elixir (client)
 - **Version**: 0.6.0
@@ -104,6 +104,7 @@ We are building **Continuum Studio**, a modular AI orchestration platform.
   - **Phase 5 (Decision Memory)**: Pattern learning, auto-respond, confidence decay
   - **Phase 6 (Approval Workflows)**: Multi-step workflows with rollback
   - **Phase 7 (Rules Engine)**: Dynamic cursor rule injection
+  - **Phase 8 (AFK Busy Work)**: Session state tracking, task queue, automatic work while AFK
 - **Rust Components**:
   - `synapsix-dialog-daemon`: GUI daemon with egui + context rendering
   - `synapsix-dialog-cli`: CLI tool for D-Bus communication
@@ -116,7 +117,12 @@ We are building **Continuum Studio**, a modular AI orchestration platform.
   - `Synapsix.Dialog.Memory`: Decision memory/pattern learning
   - `Synapsix.Dialog.Workflow`: Approval workflow engine
   - `Synapsix.Rules`: Dynamic cursor rules engine
-- **Design Doc**: `/home/e421/synapsix/docs/SYNAPSIX_DIALOG_DESIGN.md`
+  - `Synapsix.SessionState`: User engagement tracking
+  - `Synapsix.TaskQueue`: AFK task management
+  - `Synapsix.AFKManager`: AFK work coordinator
+- **Design Docs**:
+  - `/home/e421/synapsix/docs/SYNAPSIX_DIALOG_DESIGN.md`
+  - `/home/e421/synapsix/docs/AFK_BUSYWORK_DESIGN.md`
 
 ### F. CoreDNS Integration (`homelab/nixos/modules/services/coredns-continuum.nix`)
 
@@ -410,6 +416,30 @@ dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
     - Rule injection into .cursor/rules/ with backup and dry-run modes
     - Auto-update synapsix-managed rules while preserving user rules
 
+13. **Synapsix Dialog Phase 8: AFK Busy Work System** ✅
+    - Created `Synapsix.SessionState` GenServer for user engagement tracking
+      - State transitions: active → idle → afk → away
+      - Configurable thresholds (idle: 60s, afk: 180s, away: 600s)
+      - Subscriber notifications on state changes
+      - Dynamic check-back intervals based on state
+    - Created `Synapsix.TaskQueue` GenServer for AFK task management
+      - Priority-ordered task storage (1-10 scale)
+      - Task categories: documentation, cleanup, testing, research, maintenance, learning
+      - Checkpoint support for interruptible tasks
+      - Task conditions: workspace, files, session state requirements
+    - Created `Synapsix.AFKManager` coordinator
+      - Subscribes to SessionState transitions
+      - Picks tasks from queue based on time budget and context
+      - Check-in dialogs with options: continue, work next, wait, pick task, I'm back
+      - Task timeout and graceful interruption
+      - AFK work summary when user returns
+    - Added Task.Supervisor for safe task execution
+    - Full API exposed through main Synapsix module:
+      - `Synapsix.enable_afk_work/0`, `disable_afk_work/0`
+      - `Synapsix.add_task/1`, `list_tasks/1`, `task_stats/0`
+      - `Synapsix.session_state/0`, `user_afk?/0`
+    - Design doc: `/home/e421/synapsix/docs/AFK_BUSYWORK_DESIGN.md`
+
 ### Still Pending
 
 - NixOS rebuild to complete (permanent install of daemon v0.6.0).
@@ -417,8 +447,5 @@ dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
 - Deploy WireGuard mesh to other devices.
 - Multi-node service discovery test.
 - **UI Integration**: Add version manager panel to Rust UI.
-- **Synapsix Dialog Phase 2**: Queue & Priority system full implementation
-- **Synapsix Dialog Phase 3**: Multi-Device Sync
-- **Synapsix Dialog Phase 4**: Rich Context Display
-- **Synapsix Dialog Phase 5**: Decision Memory
-- **Synapsix Dialog Phase 6**: Approval Workflows
+- **Cursor Version CLI**: Fix bash script to use all 100+ versions from Elixir registry
+- **Comprehensive Dialog Test**: Test all 8 phases together
