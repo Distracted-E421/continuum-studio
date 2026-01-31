@@ -23,10 +23,10 @@ defmodule StudioCore.MixProject do
     [
       # JSON encoding/decoding (for protocol fallback and config)
       {:jason, "~> 1.4"},
-      
+
       # Telemetry for observability
       {:telemetry, "~> 1.2"},
-      
+
       # Ranch for TCP acceptor pool (optional, for higher concurrency)
       # {:ranch, "~> 2.1"},
     ]

@@ -196,11 +196,85 @@ defmodule StudioCore.Socket.Handler do
     {:noreply, %{state | subscribed: true}}
   end
 
+  # Version management commands
+
+  defp handle_command(:versions_list, params, state) do
+    opts = build_version_opts(params)
+    case StudioCore.VersionRegistry.list_versions(opts) do
+      {:ok, versions} ->
+        send_event(state.socket, {:versions_list, versions})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to list versions: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:versions_installed, _params, state) do
+    case StudioCore.VersionRegistry.list_installed() do
+      {:ok, versions} ->
+        send_event(state.socket, {:versions_installed, versions})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to list installed: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:versions_download, %{version: version}, state) do
+    # Start download in background task
+    Task.start(fn ->
+      case StudioCore.VersionRegistry.download(version) do
+        {:ok, :already_installed} ->
+          StudioCore.EventBus.broadcast({:version_downloaded, version, :already_installed})
+        {:ok, path} ->
+          StudioCore.EventBus.broadcast({:version_downloaded, version, path})
+        {:error, reason} ->
+          StudioCore.EventBus.broadcast({:version_download_failed, version, reason})
+      end
+    end)
+    send_event(state.socket, {:version_download_started, version})
+    {:noreply, state}
+  end
+
+  defp handle_command(:versions_run, %{version: version} = params, state) do
+    opts = if params[:folder], do: [folder: params[:folder]], else: []
+    case StudioCore.VersionRegistry.run(version, opts) do
+      {:ok, info} ->
+        send_event(state.socket, {:version_running, info})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to run version: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:versions_stats, _params, state) do
+    case StudioCore.VersionRegistry.stats() do
+      {:ok, stats} ->
+        send_event(state.socket, {:versions_stats, stats})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to get stats: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
   defp handle_command(unknown, params, state) do
     Logger.warning("Unknown command: #{inspect(unknown)} with #{inspect(params)}")
     send_error(state.socket, "Unknown command: #{unknown}")
     {:noreply, state}
   end
+
+  defp build_version_opts(params) do
+    []
+    |> maybe_add_opt(:era, parse_era(params[:era]))
+    |> maybe_add_opt(:limit, params[:limit])
+  end
+
+  defp maybe_add_opt(opts, _key, nil), do: opts
+  defp maybe_add_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp parse_era("latest"), do: :latest
+  defp parse_era("custom_modes"), do: :custom_modes
+  defp parse_era("classic"), do: :classic
+  defp parse_era(_), do: nil
 
   # Synapsix event handlers
 

@@ -96,4 +96,43 @@ defmodule StudioCore do
   Broadcast a message to all connected UI clients.
   """
   defdelegate broadcast_to_clients(message), to: StudioCore.Socket.Acceptor, as: :broadcast
+
+  # ==========================================================================
+  # Version Management
+  # ==========================================================================
+
+  @doc """
+  List all available Cursor versions.
+  """
+  defdelegate list_versions(opts \\ []), to: StudioCore.VersionRegistry
+
+  @doc """
+  Get a specific Cursor version.
+  """
+  defdelegate get_version(version), to: StudioCore.VersionRegistry
+
+  @doc """
+  Get the latest Cursor version.
+  """
+  defdelegate latest_version, to: StudioCore.VersionRegistry, as: :latest
+
+  @doc """
+  List installed Cursor versions.
+  """
+  defdelegate list_installed_versions, to: StudioCore.VersionRegistry, as: :list_installed
+
+  @doc """
+  Download a Cursor version.
+  """
+  defdelegate download_version(version, opts \\ []), to: StudioCore.VersionRegistry, as: :download
+
+  @doc """
+  Run a Cursor version.
+  """
+  defdelegate run_version(version, opts \\ []), to: StudioCore.VersionRegistry, as: :run
+
+  @doc """
+  Get version registry statistics.
+  """
+  defdelegate version_stats, to: StudioCore.VersionRegistry, as: :stats
 end

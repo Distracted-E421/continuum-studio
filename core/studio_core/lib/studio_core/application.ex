@@ -25,6 +25,9 @@ defmodule StudioCore.Application do
       # Harness registry - tracks connected harnesses
       StudioCore.HarnessRegistry,
 
+      # Version registry - Cursor version management
+      StudioCore.VersionRegistry,
+
       # Unix socket acceptor for UI connections
       {StudioCore.Socket.Acceptor, socket_path()},
     ]

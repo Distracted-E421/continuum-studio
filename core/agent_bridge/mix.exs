@@ -8,7 +8,7 @@ defmodule AgentBridge.MixProject do
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      
+
       # Docs
       name: "Agent Bridge",
       description: "Unified AI provider interface for Continuum Studio",
@@ -30,16 +30,16 @@ defmodule AgentBridge.MixProject do
     [
       # JSON encoding/decoding
       {:jason, "~> 1.4"},
-      
+
       # UUID generation for sessions
       {:uuid, "~> 1.1"},
-      
+
       # Telemetry for metrics
       {:telemetry, "~> 1.0"},
-      
+
       # HTTP client - Req is the modern Elixir HTTP client
       {:req, "~> 0.5"},
-      
+
       # Development/testing
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
     ]

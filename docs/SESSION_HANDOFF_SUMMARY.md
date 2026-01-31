@@ -1,6 +1,6 @@
 # Continuum Studio Session Handoff Summary
 
-**Date**: January 29, 2026
+**Last Updated**: January 31, 2026 (Synapsix Dialog Phase 1)
 **Purpose**: Summary of architectural decisions, implemented components, and current state to facilitate rapid context loading for the next development session.
 
 ## 1. High-Level Architecture
@@ -8,119 +8,356 @@
 We are building **Continuum Studio**, a modular AI orchestration platform.
 
 - **Architecture Style**: Layered, decoupled, message-driven.
-- **UI**: Rust (`egui`/`eframe`) for performance and native integration.
+- **UI**: Rust (`egui`/`eframe`) for desktop, Kotlin (`Jetpack Compose`) for Android.
 - **Core**: Elixir (`OTP`/`BEAM`) for fault-tolerant state management and orchestration.
+- **DNS**: Custom DNS-SD solution using CoreDNS + Synapsix Service Registry.
 - **Communication**:
   - **UI ↔ Core**: Unix Domain Sockets using **ETF (Erlang Term Format)** (primary) or JSON (fallback).
   - **Synapsix ↔ Core**: Unix Domain Sockets (JSON/ETF).
-  - **Dialogs**: D-Bus (`continuum-dialog-daemon`) for blocking user interaction.
+  - **Dialogs**: D-Bus (`synapsix-dialog-daemon`) for blocking user interaction.
+  - **KDE Integration**: D-Bus integration for window highlighting.
+  - **Service Discovery**: HTTP API for CoreDNS zone generation.
 
 ## 2. Component Inventory
 
 ### A. Studio UI (`continuum-studio/ui`)
 
-**Status**: Functional Prototype
+**Status**: Functional Prototype (v0.1.0)
 
 - **Language**: Rust
 - **Key Modules**:
   - `src/main.rs`: Entry point, `eframe` setup, main loop.
   - `src/widgets/`: Modular widget system.
-    - `diagram.rs`: Interactive D2 diagram renderer (ported).
-    - `code_view.rs`: Syntax-highlighted code editor/viewer.
-    - `terminal.rs`: ANSI-capable terminal widget.
-    - `harness_panel.rs`: Side panel for controlling harnesses.
-    - `agent_stream.rs`: Chat-like interface for agent output.
-    - `tab_bar.rs`: Tabbed container for widgets.
+    - `harness_panel.rs`: Side panel with color-coded harness status cards.
+    - `agent_stream.rs`: Displays streamed agent responses.
   - `src/ipc/`: Inter-process communication.
-    - `mod.rs`: `IpcClient` (async, cloneable).
-    - `etf.rs`: **New** ETF encoding/decoding implementation (uses `erlang` crate).
-    - `dbus.rs`: Client for `continuum-dialog-daemon`.
-  - `src/theme/`: VS Code-compatible theming engine.
+    - `etf.rs`: Robust ETF encoding/decoding.
 
-### B. Studio Core (`continuum-studio/core/studio_core`)
+### B. Android App (`continuum-studio/android`)
 
-**Status**: Initial Implementation
+**Status**: 🛠️ In Development (Widget Bay Phase)
+
+- **Language**: Kotlin / Jetpack Compose
+- **Features**:
+  - **Dialog Client**: Connects to `cursor-dialog-daemon` via WebSocket.
+  - **Widget Bay**: Customizable dashboard grid.
+  - **Widgets**: Harness Status, Service Discovery, Dialog Queue.
+- **Key Files**:
+  - `WidgetBay.kt`: Main grid composable.
+  - `WidgetContents.kt`: Individual widget UI.
+  - `WidgetBayViewModel.kt`: State & API integration.
+
+### C. Studio Core (`continuum-studio/core/studio_core`)
+
+**Status**: Operational
 
 - **Language**: Elixir
 - **Key Modules**:
-  - `StudioCore.Application`: Supervisor tree.
-  - `StudioCore.State`: ETS-backed global state KV store.
-  - `StudioCore.EventBus`: PubSub system for decoupling components.
-  - `StudioCore.HarnessRegistry`: Tracks connected Synapsix harnesses.
-  - `StudioCore.Socket.Handler`: Handles UI/Synapsix connections. Auto-detects JSON vs ETF.
-
-### C. Agent Bridge (`continuum-studio/core/agent_bridge`)
-
-**Status**: Scaffolded
-
-- **Language**: Elixir
-- **Purpose**: Connects Studio Core to LLM providers (OpenAI, Anthropic, Local).
-- **Key Modules**:
-  - `AgentBridge.AgentManager`: Supervisor for agent processes.
-  - `AgentBridge.Providers`: Abstraction for different LLM backends.
+  - `StudioCore.Socket.Handler`: Handles events (harness metadata, window info, agent responses).
+  - `StudioCore.VersionRegistry`: Cursor version management (100+ versions, download, run).
+- **CLI Tasks**:
+  - `mix cursor.versions list` - List available versions
+  - `mix cursor.versions installed` - List installed versions
+  - `mix cursor.versions download <ver>` - Download a version
+  - `mix cursor.versions run <ver> [path]` - Run with optional workspace
 
 ### D. Synapsix (`synapsix`)
 
-**Status**: Integrating
+**Status**: ✅ Fully Operational with DNS-SD
 
 - **Language**: Elixir
-- **Purpose**: Distributed harness orchestrator (runs apps like Cursor, Android Studio).
-- **Changes**:
-  - Renamed `cursor-dialog-daemon` → `continuum-dialog-daemon`.
-  - `Synapsix.CoreClient`: New client to register harnesses with Studio Core.
-  - `Synapsix.Harnesses.Cursor.ResponseCapture`: Improved OCR/screenshot logic for capturing AI output.
+- **Purpose**: Distributed harness orchestrator with service discovery.
+- **New Components (Jan 29)**:
+  - **`Synapsix.ServiceRegistry`**: GenServer for DNS-SD service tracking.
+    - ETS-backed for fast lookups.
+    - Heartbeat/expiry logic for health monitoring.
+    - Cluster sync for multi-node discovery.
+  - **`Synapsix.ServiceRegistry.HeartbeatManager`**: Auto-heartbeat for registered services.
+  - **`Synapsix.ServiceRegistry.Router`**: HTTP API on port 4001.
+    - `/api/dns/services` - List all services (with `display_name`).
+    - `/api/dns/records` - DNS records for CoreDNS.
+    - `/api/dns/register` - Register new service.
+    - `/api/dns/heartbeat/:id` - Send heartbeat.
+    - `/health` - Health check.
+  - **`Synapsix.ServiceRegistry.Service`**: Service data struct.
+- **Harness Updates**:
+  - **All harnesses** (Cursor, Android Studio, Godot) now:
+    - Register with DNS on start.
+    - Send automatic heartbeats.
+    - Deregister on stop.
+    - Have unique service types (`_cursor-harness._tcp`, etc.).
+    - Support `trap_exit` for proper cleanup.
 
-## 3. Protocol & Data Flow
+### E. Synapsix Dialog (`synapsix/dialog`)
 
-### ETF Protocol (`docs/ETF_PROTOCOL.md`)
+**Status**: ✅ Phase 1 Complete (Port & Rename)
 
-We established a binary protocol for efficiency:
+- **Language**: Rust (daemon) + Elixir (client)
+- **Version**: 0.6.0
+- **Purpose**: Advanced interactive dialog system for AI agents
+- **D-Bus Service**: `sh.synapsix.Dialog` (interface: `sh.synapsix.Dialog1`)
+- **Features**:
+  - All dialog types: confirm, choice, text input, slider, toast, file picker
+  - Hold mode control (pause timeout indefinitely)
+  - Settings management (font scale, sounds, focus behavior)
+  - Priority queue with timeout escalation
+  - Deduplication and batch responses
+- **Rust Components**:
+  - `synapsix-dialog-daemon`: GUI daemon with egui
+  - `synapsix-dialog-cli`: CLI tool for D-Bus communication
+- **Elixir Components**:
+  - `Synapsix.Dialog`: Main API facade
+  - `Synapsix.Dialog.Client`: GenServer for daemon communication
+  - `Synapsix.Dialog.Queue`: Priority queue with `gb_trees`
+- **Design Doc**: `/home/e421/synapsix/docs/SYNAPSIX_DIALOG_DESIGN.md`
 
-- **Format**: 4-byte length prefix + ETF payload.
-- **Commands (UI→Core)**: `{:command, :name, %{params}}` (e.g., `:harness_start`).
-- **Events (Core→UI)**: `{:event, :type, %{data}}` (e.g., `:harness_status`, `:agent_response`).
-- **Implementation**: Fully implemented in Rust `ui/src/ipc/etf.rs` and Elixir `Socket.Handler`.
+### F. CoreDNS Integration (`homelab/nixos/modules/services/coredns-continuum.nix`)
 
-### Workflow
+**Status**: ✅ Deployed on Obsidian
 
-1. **User** interacts with UI (Rust).
-2. **UI** sends ETF command to **Core**.
-3. **Core** updates state/registry and publishes event via `EventBus`.
-4. **Synapsix** (via `CoreClient`) receives command, controls target app (e.g., Cursor).
-5. **Synapsix** captures output, sends event back to **Core**.
-6. **Core** forwards event to **UI**.
-7. **UI** renders update (e.g., new text in `AgentStreamWidget`).
+- **NixOS Module**: Custom CoreDNS configuration for `continuum.local` domain.
+- **Zone Generator Script**: Shell script that:
+  - Fetches services from `http://localhost:4001/api/dns/services`.
+  - Generates BIND-style zone file.
+  - Atomically replaces zone file.
+  - Reloads CoreDNS.
+- **Systemd Timer**: Refreshes zone every 30 seconds.
+- **Port**: 5354 (avoids mDNS conflict on 5353).
 
-## 4. Key Documents & Diagrams
+## 3. DNS-SD Service Discovery
 
-- `docs/UI_ARCHITECTURE.md`: Detailed breakdown of the UI structure.
-- `docs/ETF_PROTOCOL.md`: Specification of the binary protocol.
-- `docs/diagrams/architecture-layers.d2`: High-level system layers.
-- `docs/diagrams/widget-system.d2`: Widget interaction model.
-- `docs/MIGRATION_ASSESSMENT.md`: Plan for moving code from `nixos-cursor`.
+### Service Types
 
-## 5. Next Steps for Next Agent
+| Type | Description |
+|------|-------------|
+| `_synapsix._tcp` | Synapsix orchestrator node |
+| `_cursor-harness._tcp` | Cursor IDE harness |
+| `_android-studio-harness._tcp` | Android Studio harness |
+| `_godot-harness._tcp` | Godot Editor harness |
 
-1. **Run the System**:
-    - Start Core: `cd core/studio_core && iex -S mix`
-    - Start Synapsix: `cd synapsix && iex -S mix`
-    - Start UI: `cd ui && cargo run`
-    - *Note: Ensure `/tmp/continuum-studio.sock` is managed correctly.*
+### DNS Queries
 
-2. **Verify End-to-End Flow**:
-    - Test if clicking "Start" in UI actually triggers Synapsix harness.
-    - Verify OCR capture from Synapsix shows up in UI Agent Stream.
+```bash
+# Enumerate services
+dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
 
-3. **Agent Bridge Implementation**:
-    - Flesh out `AgentBridge` to actually call LLM APIs.
-    - Connect `AgentBridge` to `StudioCore` event bus.
+# Resolve specific service
+dig @127.0.0.1 -p 5354 synapsix-on-obsidian._synapsix._tcp.continuum.local SRV
 
-4. **UI Polish**:
-    - Improve `CodeViewWidget` rendering (selection, line numbers).
-    - Enhance `DiagramWidget` interactivity (drag nodes, edit properties).
+# Get service metadata
+dig @127.0.0.1 -p 5354 synapsix-on-obsidian._synapsix._tcp.continuum.local TXT
+```
 
-## 6. Known Issues / Notes
+## 4. Protocol & Data Flow
 
-- The Rust UI uses `erlang` crate (v2.0) for ETF.
-- `continuum-dialog-daemon` binary name changed from `cursor-dialog-daemon`.
-- Synapsix `ResponseCapture` depends on `spectacle` (KDE), `grim` (Wayland), or `import` (X11) and `tesseract`.
+### Service Registration Flow
+
+1. **Harness starts** → Calls `Synapsix.start_harness(:cursor, workspace: "foo")`.
+2. **init/1** → Registers with `ServiceRegistry`, starts heartbeat via `HeartbeatManager`.
+3. **HeartbeatManager** → Sends heartbeat every 25 seconds.
+4. **CoreDNS timer** → Fetches services, regenerates zone file every 30 seconds.
+5. **DNS queries** → CoreDNS serves PTR/SRV/TXT records.
+6. **Harness stops** → `terminate/2` deregisters, stops heartbeat.
+
+## 5. External Network Access
+
+### Current Status: WireGuard Module Designed
+
+A self-hosted WireGuard mesh network module has been designed for cross-network access, separate from Tailscale.
+
+### WireGuard Continuum Module (`homelab/nixos/modules/services/wireguard-continuum.nix`)
+
+**Status**: ⏳ Designed, Not Yet Deployed
+
+- **Network**: `10.100.0.0/24` (Continuum mesh)
+- **Port**: 51821 (separate from Tailscale's 41641)
+- **Nodes**:
+  - `obsidian`: 10.100.0.1
+  - `neon-laptop`: 10.100.0.2
+  - `framework`: 10.100.0.3
+  - `pi-server`: 10.100.0.4
+  - `phone`: 10.100.0.10
+  - `hub` (future VPS): 10.100.0.100
+
+**Key Features**:
+- Per-node configuration via `nodeName` option.
+- Automatic peer list generation (excludes self).
+- Persistent keepalive for NAT traversal (mobile, laptops).
+- Trusted interface (`wg-continuum`) for firewall.
+- `continuum-mesh-status` convenience script.
+- Watchdog service for interface health.
+
+### Setup Script (`homelab/scripts/setup-continuum-wireguard.nu`)
+
+- `generate`: Generate WireGuard key pairs for all nodes.
+- `show-config`: Output NixOS configuration snippet.
+- `show-phone-config`: Generate WireGuard app config for mobile.
+- `status`: Show current mesh status.
+
+## 6. Known Issues
+
+### Active Bugs
+
+1. **Window flipping on Wayland**: kdotool operations cause desktop to show briefly. Alt-tab recovers.
+2. **Android dialog needs testing**: Dialog daemon has been migrated to Synapsix.
+   - **New daemon**: `synapsix-dialog-daemon` v0.6.0 in `/home/e421/synapsix/dialog/`
+   - **Web server**: Available with `--web-port 8080` flag
+   - **Hotfix**: Running manually via `./target/release/synapsix-dialog-daemon`
+   - **Android client**: Needs update to connect to new D-Bus service name
+
+### Dependencies
+
+- `kdotool` and `ydotool` required for harnesses.
+- `ydotoold` must be running.
+- KDE D-Bus interfaces (`org.kde.KWin.HighlightWindow`).
+
+## 7. Running the System
+
+### Start Services
+
+```bash
+# 1. Start Synapsix (includes Service Registry)
+cd ~/synapsix && elixir --sname synapsix -S mix run --no-halt
+
+# 2. Start Core (optional, for UI integration)
+cd ~/continuum-studio/core/studio_core && iex -S mix
+
+# 3. Start UI (optional)
+cd ~/continuum-studio/ui && cargo run --release
+
+# 4. Verify DNS
+curl http://localhost:4001/api/dns/services | jq
+dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
+```
+
+## 8. Files Changed This Session
+
+### Synapsix
+- `lib/synapsix/service_registry.ex` - New ServiceRegistry GenServer
+- `lib/synapsix/service_registry/service.ex` - Service struct
+- `lib/synapsix/service_registry/router.ex` - HTTP API
+- `lib/synapsix/service_registry/heartbeat_manager.ex` - Auto-heartbeat
+- `lib/synapsix/application.ex` - Added ServiceRegistry to supervision tree
+- `lib/synapsix/harnesses/cursor.ex` - DNS registration/deregistration
+- `lib/synapsix/harnesses/android_studio.ex` - DNS registration/deregistration
+- `lib/synapsix/harnesses/godot.ex` - DNS registration/deregistration
+- `mix.exs` - Added plug, bandit deps
+
+### Android App
+- `data/WidgetModels.kt` - Widget Bay data models
+- `viewmodel/WidgetBayViewModel.kt` - Widget Bay logic & API
+- `ui/widgets/WidgetBay.kt` - Main Widget Bay UI
+- `ui/widgets/WidgetContents.kt` - Individual widgets
+- `MainActivity.kt` - Navigation integration
+
+### Homelab
+- `nixos/modules/services/coredns-continuum.nix` - CoreDNS NixOS module
+- `nixos/modules/services/wireguard-continuum.nix` - WireGuard mesh module (new)
+- `nixos/hosts/Obsidian/configuration.nix` - Enabled CoreDNS module
+- `scripts/setup-continuum-wireguard.nu` - Key generation script (new)
+
+### Nixos-Cursor
+- `tools/cursor-dialog-daemon/default.nix` - Bumped version to 0.5.0
+
+### Studio Core (Jan 30)
+- `lib/studio_core/version_registry.ex` - New VersionRegistry GenServer (100+ versions)
+- `lib/studio_core/application.ex` - Added VersionRegistry to supervision tree
+- `lib/studio_core/socket/handler.ex` - Added version management commands
+- `lib/studio_core.ex` - Added version management delegations
+- `lib/mix/tasks/cursor_versions.ex` - CLI mix task for version management
+- `priv/cursor-versions.json` - Version history data (100 versions, 180KB)
+- `bin/continuum-versions` - Standalone CLI wrapper script
+
+### Synapsix Dialog (Jan 30-31)
+- `synapsix/dialog/` - Full Rust dialog daemon copied from nixos-cursor
+- `synapsix/dialog/Cargo.toml` - Updated to synapsix-dialog v0.6.0
+- `synapsix/dialog/src/main.rs` - Rebranded to Synapsix Dialog Daemon
+- `synapsix/dialog/src/cli.rs` - Rebranded to synapsix-dialog-cli
+- `synapsix/dialog/src/dbus_interface.rs` - D-Bus service renamed to sh.synapsix.Dialog
+- `synapsix/dialog/src/gui.rs` - Window title fixed, egui deprecation warnings fixed
+- `synapsix/lib/synapsix/dialog.ex` - Main API facade
+- `synapsix/lib/synapsix/dialog/client.ex` - GenServer for daemon communication
+- `synapsix/lib/synapsix/dialog/queue.ex` - Priority queue implementation
+- `synapsix/lib/synapsix/application.ex` - Added Dialog.Client and Queue to supervision
+- `synapsix/docs/SYNAPSIX_DIALOG_DESIGN.md` - Comprehensive design document
+
+### Continuum Studio Docs (Jan 31)
+- `docs/e421-thoughts/on-agent-connection-loss.md` - Investigation notes on agent disconnection patterns
+
+## 9. Session Progress Summary
+
+### Completed This Session (Jan 29 Late Night)
+
+1. **DNS-SD Full Lifecycle Verified** ✅
+   - Service registration → PTR/SRV/TXT records working.
+   - Harness start → Service appears in DNS queries.
+   - Harness stop → Service removed from registry & DNS.
+   - Zone file generator working with CoreDNS reload.
+
+2. **WireGuard Continuum Module** ✅
+   - Designed NixOS module for self-hosted mesh network.
+   - Created Nushell setup script for key management.
+   - Network plan: 10.100.0.0/24 for all Continuum devices.
+
+3. **Android Widget Bay Implementation** ✅
+   - Designed modular dashboard system.
+   - Implemented `WidgetBay` composable and viewmodels.
+   - Created widgets for Dialog Queue, Harness Status, Service Discovery.
+   - Added connection/node health widgets.
+   - Fixed build errors (Material Icons compatibility).
+
+4. **Android Dialog Issue Diagnosed & Hotfixed** ✅
+   - Root cause: daemon missing `--web-port` support.
+   - Fix: Rebuild with daemon v0.5.0 in progress.
+   - **Immediate Fix**: Running `cursor-dialog-daemon` manually with `--web-port 8080`.
+
+### Completed This Session (Jan 30)
+
+5. **Cursor Version Manager** ✅
+   - Ported version management from nixos-cursor to Continuum Studio (Elixir).
+   - Created `StudioCore.VersionRegistry` GenServer with 100+ versions.
+   - Source: `cursor-version-history.json` (comprehensive version data).
+   - CLI: `mix cursor.versions` with list/download/run/stats commands.
+   - Socket API: UI can request versions_list, versions_download, versions_run.
+   - Features:
+     - Filter by era (latest, custom_modes, classic)
+     - Isolated user data directories per version
+     - Download with curl (resume support)
+     - Automatic checkmark for installed versions
+   - Downloaded 2.4.21 (latest) for testing - verified working.
+
+### Completed This Session (Jan 31)
+
+6. **Synapsix Dialog Phase 1: Port & Rename** ✅
+   - Copied `cursor-dialog-daemon` from nixos-cursor to `synapsix/dialog/`
+   - Rebranded to `synapsix-dialog-daemon` (v0.6.0)
+   - D-Bus service renamed: `sh.synapsix.Dialog` (interface: `sh.synapsix.Dialog1`)
+   - Window title fixed: "Synapsix Dialog" (was "Cursor Dialog")
+   - Fixed egui deprecation warnings:
+     - `Rounding` → `CornerRadius`
+     - `Frame::none()` → `Frame::NONE`
+     - `.rounding()` → `.corner_radius()`
+   - Elixir integration working:
+     - `Synapsix.Dialog.Client` GenServer communicates with daemon
+     - `Synapsix.Dialog.Queue` implements priority queue with `gb_trees`
+     - Hold mode, settings, and all dialog types functional
+   - CLI symlinked to `~/.local/bin/synapsix-dialog-cli`
+
+7. **Agent Connection Loss Investigation** 📝
+   - Documented observation about agents "losing connection"
+   - Created `/home/e421/continuum-studio/docs/e421-thoughts/on-agent-connection-loss.md`
+   - Hypotheses: server-side throttling vs client-side fixable issues
+   - Investigation areas identified for future analysis
+
+### Still Pending
+
+- NixOS rebuild to complete (permanent install of daemon v0.6.0).
+- Test Android app dialog connectivity with new synapsix-dialog-daemon.
+- Deploy WireGuard mesh to other devices.
+- Multi-node service discovery test.
+- **UI Integration**: Add version manager panel to Rust UI.
+- **Synapsix Dialog Phase 2**: Queue & Priority system full implementation
+- **Synapsix Dialog Phase 3**: Multi-Device Sync
+- **Synapsix Dialog Phase 4**: Rich Context Display
+- **Synapsix Dialog Phase 5**: Decision Memory
+- **Synapsix Dialog Phase 6**: Approval Workflows
