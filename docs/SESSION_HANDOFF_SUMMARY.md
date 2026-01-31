@@ -1,6 +1,6 @@
 # Continuum Studio Session Handoff Summary
 
-**Last Updated**: January 31, 2026 (Synapsix Dialog Phase 3)
+**Last Updated**: January 31, 2026 (Synapsix Dialog Phase 5)
 **Purpose**: Summary of architectural decisions, implemented components, and current state to facilitate rapid context loading for the next development session.
 
 ## 1. High-Level Architecture
@@ -90,7 +90,7 @@ We are building **Continuum Studio**, a modular AI orchestration platform.
 
 ### E. Synapsix Dialog (`synapsix/dialog`)
 
-**Status**: ✅ Phase 3 Complete (Multi-Device Sync)
+**Status**: ✅ Phase 5 Complete (Decision Memory)
 
 - **Language**: Rust (daemon) + Elixir (client)
 - **Version**: 0.6.0
@@ -100,24 +100,27 @@ We are building **Continuum Studio**, a modular AI orchestration platform.
   - All dialog types: confirm, choice, text input, slider, toast, file picker
   - Hold mode control (pause timeout indefinitely)
   - Settings management (font scale, sounds, focus behavior)
-  - Priority queue with timeout escalation
-  - Deduplication and batch responses
-  - **Multi-device client registry** (Phase 3)
-  - **Dialog routing** based on capabilities and priority
-  - **Broadcast support** (send to all clients, first response wins)
+  - Priority queue with timeout escalation (Phase 2)
+  - Deduplication and batch responses (Phase 2)
+  - Multi-device client registry (Phase 3)
+  - Dialog routing based on capabilities and priority (Phase 3)
+  - Broadcast support - send to all clients, first response wins (Phase 3)
+  - **Rich context display** - code diffs, file previews, progress, tables (Phase 4)
+  - **Decision memory** - learn patterns, auto-respond (Phase 5)
 - **Rust Components**:
-  - `synapsix-dialog-daemon`: GUI daemon with egui
+  - `synapsix-dialog-daemon`: GUI daemon with egui + context rendering
   - `synapsix-dialog-cli`: CLI tool for D-Bus communication
 - **Elixir Components**:
-  - `Synapsix.Dialog`: Main API facade with routing
-  - `Synapsix.Dialog.Client`: GenServer for daemon communication, auto-registers with Registry
+  - `Synapsix.Dialog`: Main API facade with routing and memory
+  - `Synapsix.Dialog.Client`: GenServer for daemon communication
   - `Synapsix.Dialog.Queue`: Priority queue with `gb_trees`
-  - `Synapsix.Dialog.Registry`: Multi-device client registry (Phase 3)
-    - Client registration with capabilities tracking
-    - Heartbeat mechanism for health monitoring
-    - Priority-based client selection
-    - Away mode detection
-    - Stubs for WebSocket/HTTP transport
+  - `Synapsix.Dialog.Registry`: Multi-device client registry
+  - `Synapsix.Dialog.Context`: Rich context builders (code_diff, file_preview, etc.)
+  - `Synapsix.Dialog.Memory`: Decision memory with pattern learning (Phase 5)
+    - Explicit rules ("always do X for Y")
+    - Learned patterns (auto-learn after 3 identical responses)
+    - Confidence-based matching with decay
+    - Auto-response for high-confidence matches
 - **Design Doc**: `/home/e421/synapsix/docs/SYNAPSIX_DIALOG_DESIGN.md`
 
 ### F. CoreDNS Integration (`homelab/nixos/modules/services/coredns-continuum.nix`)
@@ -369,6 +372,31 @@ dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
    - Broadcast support: `broadcast_dialog/1` sends to all clients, first response wins
    - Transport stubs: WebSocket and HTTP transports defined (implementation pending)
    - All changes committed and pushed to origin
+
+9. **Synapsix Dialog Phase 4: Rich Context Display** ✅
+   - Created `Synapsix.Dialog.Context` module with 8 context types:
+     - code_diff: Show unified diffs with add/remove highlighting
+     - file_preview: Syntax-highlighted file content with line numbers
+     - progress: Progress bars with percentage, ETA, sub-progress
+     - tree: File/directory tree views with icons
+     - table: Structured data tables
+     - terminal: Scrollable monospace terminal output
+     - image: Image placeholder (full rendering TBD)
+     - markdown: CommonMark rendering
+   - Added `DialogContext` enum to Rust with full GUI rendering
+   - CLI accepts `--context` flag (JSON)
+   - Full data flow: Elixir → CLI → D-Bus → Daemon → egui panel
+
+10. **Synapsix Dialog Phase 5: Decision Memory** ✅
+    - Created `Synapsix.Dialog.Memory` GenServer for pattern learning
+    - Explicit rules: User-defined "always do X" patterns with conditions
+    - Learned rules: Auto-learn after 3 identical responses to same dialog
+    - Condition types: title_contains, title_exact, prompt_contains, dialog_type, etc.
+    - Actions: auto_approve, auto_reject, suggest, ask
+    - Confidence scoring with decay for unused rules (0.95/day)
+    - `smart_dialog/3` function for auto-response from memory
+    - Max 1000 rules with LRU eviction for learned rules
+    - Periodic cleanup of expired rules
 
 ### Still Pending
 
