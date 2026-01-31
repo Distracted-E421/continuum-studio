@@ -1,6 +1,6 @@
 # Continuum Studio Session Handoff Summary
 
-**Last Updated**: January 31, 2026 (Synapsix Dialog COMPLETE - All 8 Phases incl. AFK Busy Work)
+**Last Updated**: January 31, 2026 (cursor-versions CLI + Cursor Orchestrator + UI Integration)
 **Purpose**: Summary of architectural decisions, implemented components, and current state to facilitate rapid context loading for the next development session.
 
 ## 1. High-Level Architecture
@@ -297,6 +297,64 @@ dig @127.0.0.1 -p 5354 _synapsix._tcp.continuum.local PTR
 
 ### Continuum Studio Docs (Jan 31)
 - `docs/e421-thoughts/on-agent-connection-loss.md` - Investigation notes on agent disconnection patterns
+- `docs/e421-thoughts/cursor-harness-architecture.md` - "Cushion harness" concept for multi-instance orchestration
+- `docs/e421-thoughts/tui-optimization-ideas.md` - TUI optimization research for GPU-accelerated terminals
+
+### cursor-versions CLI (Jan 31)
+**Elixir escript** (`continuum-studio/core/studio_core`):
+- `lib/studio_core/cli/cursor_versions.ex` - Main escript entry point
+- `mix.exs` - Added escript configuration with `app: nil` for clean startup
+- Symlinked to `~/.local/bin/cursor-versions`
+- ~320ms startup (BEAM VM overhead)
+
+**Rust binary** (`synapsix/tools/cursor-versions`):
+- `src/main.rs` - Full implementation with list/latest/info/download/run/install/stats
+- Uses rustls (no OpenSSL dependency on NixOS)
+- Symlinked to `~/.local/bin/cursor-versions-rs`
+- ~3ms startup (100x faster than Elixir)
+
+**Both support**:
+- 100+ Cursor versions (up to 2.4.21)
+- Era filtering: latest, custom_modes, classic
+- Platform-aware downloads (linux-x64 default)
+- Version 2.0.77 marked as last with custom modes
+
+### Cursor Orchestrator (Jan 31)
+**Backend** (`synapsix/lib/synapsix/harnesses/cursor/`):
+- `orchestrator.ex` - DynamicSupervisor managing multiple instances
+  - Resource limits (max instances, memory, per-instance limits)
+  - Periodic resource monitoring via /proc
+  - Hot-swap version upgrades with state preservation
+  - CPU affinity (taskset) and priority (renice) control
+- `instance.ex` - GenServer for individual Cursor process
+  - Port-based OS process management
+  - Isolated XDG directories per instance
+  - Window detection integration
+  - Graceful SIGTERM/SIGKILL shutdown
+
+**Frontend** (`continuum-studio/ui/src/`):
+- `widgets/mod.rs` - Added OrchestratorWidget
+  - Instance cards: version, workspace, status, memory usage
+  - Resource limits display with progress bar
+  - Launch dialog for new instances
+  - Per-instance actions: Focus, Stop, Upgrade
+- `widgets/tab_bar.rs` - Added TabType::Orchestrator, Tab::orchestrator()
+- `main.rs` - Wired orchestrator widget to dashboard
+
+**New Synapsix APIs**:
+- `Synapsix.launch_cursor/2` - Launch versioned instance
+- `Synapsix.stop_cursor/1` - Stop instance
+- `Synapsix.list_cursor_instances/0` - List running instances
+- `Synapsix.cursor_resource_report/0` - Resource usage
+- `Synapsix.upgrade_cursor/2` - Hot-swap versions
+- `Synapsix.focus_cursor/1` - Focus window
+
+### IPC Proxy (In Progress)
+**cursor-proxy** (`nixos-cursor/tools/cursor-proxy`):
+- `src/injection.rs` - System prompt injection, header modification, version spoofing
+- `src/dashboard.rs` - Terminal dashboard with LED-style status indicators
+- `src/proxy.rs` - MITM proxy for AI API calls
+- Needs: `events.rs` module creation, IPC client for external connection
 
 ## 9. Session Progress Summary
 
