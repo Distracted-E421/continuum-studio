@@ -2775,3 +2775,62 @@ This framework provides an evaluation methodology for NeSy cybersecurity systems
 - "Towards Formal Verification of Neuro-symbolic Multi-agent Systems" (IJCAI 2023)
 - "Surveying neuro-symbolic approaches for reliable artificial intelligence of things" (Springer 2024)
 - "Experimenting with Neurosymbolic AI for Defending Against Cyber Attacks" (SAGE 2025)
+
+---
+
+## Research Update: Formal Verification for LLM Agents (January 31, 2026)
+
+Additional browser research found highly relevant papers on formal verification of LLM agent actions.
+
+### Key Paper: "Towards Verifiably Safe Tool Use for LLM Agents"
+**arXiv:2601.08012** - Accepted to ICSE NIER 2026
+
+**Key Concepts**:
+1. **STPA (System-Theoretic Process Analysis)**: Systematic method to identify hazards in agent workflows
+2. **Capability-enhanced MCP**: Extends Model Context Protocol with structured labels for:
+   - Capabilities (what the tool can do)
+   - Confidentiality (data sensitivity levels)
+   - Trust level (how much to trust the tool)
+3. **Enforceable Specifications**: Formal rules on data flows and tool sequences
+4. **Information Flow Control (IFC)**: Prevent sensitive data leakage
+5. **Temporal Constraints**: Sequence-based restrictions on tool invocations
+
+**Relevance to Synapsix**:
+| Paper Concept | Synapsix Implementation |
+|---------------|-------------------------|
+| Capability-enhanced MCP | Cap'n Proto capabilities (ActionExecutor) |
+| Data flow specifications | SlyData registry (private, out-of-context data) |
+| Temporal constraints | Quint formal spec (action sequences) |
+| Trust levels | Permission levels in Security DSL |
+
+### Other Relevant Papers Found
+
+1. **VeriGuard** (arXiv:2510.05156): "Enhancing LLM Agent Safety via Verified Code Generation"
+   - Formal verification paradigm for proving correctness of agent actions
+   - Verification before execution
+
+2. **AgentSpec** (SMU, ICSE 2026): "Customizable Runtime Enforcement for Safe and Reliable LLM Agents"
+   - Embedding symbolic rule enforcement into agents
+   - Aligns with our vision of formal methods + LLMs
+
+3. **Pro2Guard** (arXiv:2508.00500): "Proactive Runtime Enforcement via Probabilistic Model Checking"
+   - Formally verified safety constraints
+   - Probabilistic approach to runtime enforcement
+
+4. **VeriSafe Agent** (KAIST): "Logic-based Action Verification for Mobile GUI Agents"
+   - Formal verification system for agent actions
+   - 9 citations, practical implementation
+
+5. **Position Paper** (OpenReview/ICML): "Trustworthy AI Agents Require LLMs + Formal Methods"
+   - 7 citations
+   - Argues for integration of formal methods with LLMs
+
+### Key Insight: Community Consensus
+
+The research community is converging on the same approach we're taking with Synapsix:
+- **Formal methods** for verification (SMT solvers, model checking)
+- **Capability-based** access control
+- **Symbolic constraints** on agent behavior
+- **Proactive** verification before execution (not just reactive monitoring)
+
+This validates our architectural decisions in the NeSy stack.
