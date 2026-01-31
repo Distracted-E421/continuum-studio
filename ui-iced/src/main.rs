@@ -3,11 +3,16 @@
 //! This is the iced-based UI for Continuum Studio, designed for integration
 //! with the COSMIC desktop ecosystem.
 
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, row, text, Space, scrollable};
 use iced::{Alignment, Element, Length, Task, Theme};
+use std::path::PathBuf;
+use tokio::sync::mpsc;
 
+pub mod core;
 pub mod theme;
 pub mod widgets;
+
+use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, spawn_core_connection};
 
 fn main() -> iced::Result {
     env_logger::init();
@@ -23,11 +28,36 @@ fn main() -> iced::Result {
 /// Boot function for iced application
 impl ContinuumStudio {
     fn new() -> (Self, Task<Message>) {
+        // Initialize with placeholder versions for now
+        // Real versions will come from Core connection
+        let versions = vec![
+            CursorVersion {
+                version: "0.44.11".to_string(),
+                status: VersionStatus::Running,
+                release_date: Some("2026-01-30".to_string()),
+                size_mb: Some(250),
+            },
+            CursorVersion {
+                version: "0.44.10".to_string(),
+                status: VersionStatus::Installed,
+                release_date: Some("2026-01-28".to_string()),
+                size_mb: Some(248),
+            },
+            CursorVersion {
+                version: "0.44.9".to_string(),
+                status: VersionStatus::Available,
+                release_date: Some("2026-01-25".to_string()),
+                size_mb: Some(245),
+            },
+        ];
+
         (
             Self {
                 theme: Theme::Dark,
                 core_connected: false,
                 current_view: View::Dashboard,
+                versions,
+                core_tx: None,
             },
             Task::none(),
         )
@@ -35,7 +65,6 @@ impl ContinuumStudio {
 }
 
 /// Main application state
-#[derive(Debug)]
 struct ContinuumStudio {
     /// Current theme
     theme: Theme,
@@ -43,6 +72,10 @@ struct ContinuumStudio {
     core_connected: bool,
     /// Current page/view
     current_view: View,
+    /// Available Cursor versions
+    versions: Vec<CursorVersion>,
+    /// Core request sender
+    core_tx: Option<mpsc::Sender<CoreRequest>>,
 }
 
 
@@ -66,6 +99,10 @@ enum Message {
     ThemeChanged(Theme),
     /// Cursor version management
     CursorAction(CursorMessage),
+    /// Versions updated from Core
+    VersionsUpdated(Vec<CursorVersion>),
+    /// Core response received
+    CoreResponse(CoreResponse),
 }
 
 /// Cursor-related messages
@@ -84,6 +121,18 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::CoreConnectionChanged(connected) => {
             state.core_connected = connected;
+            if connected {
+                // Request versions when connected
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::GetVersions).await;
+                        },
+                        |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                    );
+                }
+            }
         }
         Message::ThemeChanged(theme) => {
             state.theme = theme;
@@ -95,12 +144,56 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 }
                 CursorMessage::LaunchVersion(version) => {
                     log::info!("Launching Cursor version: {}", version);
+                    if let Some(tx) = &state.core_tx {
+                        let tx = tx.clone();
+                        return Task::perform(
+                            async move {
+                                let _ = tx.send(CoreRequest::LaunchVersion { version }).await;
+                            },
+                            |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                        );
+                    }
                 }
                 CursorMessage::InstallVersion(version) => {
                     log::info!("Installing Cursor version: {}", version);
+                    if let Some(tx) = &state.core_tx {
+                        let tx = tx.clone();
+                        return Task::perform(
+                            async move {
+                                let _ = tx.send(CoreRequest::InstallVersion { version }).await;
+                            },
+                            |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                        );
+                    }
                 }
                 CursorMessage::UninstallVersion(version) => {
                     log::info!("Uninstalling Cursor version: {}", version);
+                }
+            }
+        }
+        Message::VersionsUpdated(versions) => {
+            state.versions = versions;
+        }
+        Message::CoreResponse(response) => {
+            match response {
+                CoreResponse::Versions(versions) => {
+                    state.versions = versions;
+                }
+                CoreResponse::LaunchResult { success, message } => {
+                    if success {
+                        log::info!("Launch success: {}", message);
+                    } else {
+                        log::error!("Launch failed: {}", message);
+                    }
+                }
+                CoreResponse::Pong => {
+                    log::debug!("Received pong from Core");
+                }
+                CoreResponse::Error { message } => {
+                    log::error!("Core error: {}", message);
+                }
+                CoreResponse::Sessions(_) => {
+                    // Handle sessions in future
                 }
             }
         }
@@ -191,59 +284,96 @@ fn view_dashboard(_state: &ContinuumStudio) -> Element<Message> {
 }
 
 /// Cursor version management view
-fn view_cursor_versions(_state: &ContinuumStudio) -> Element<Message> {
+fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
+    let version_rows: Vec<Element<Message>> = state
+        .versions
+        .iter()
+        .map(|v| {
+            version_row_from_data(v)
+        })
+        .collect();
+
+    let version_list = if version_rows.is_empty() {
+        column![text("No versions available").size(14)]
+    } else {
+        column(version_rows).spacing(4)
+    };
+
     column![
         text("Cursor Versions").size(24),
         text("Manage installed Cursor versions").size(14),
-        container(column![]).height(20),
+        row![
+            button("Refresh")
+                .padding([6, 12])
+                .on_press(Message::CursorAction(CursorMessage::RefreshVersions)),
+        ],
+        container(column![]).height(10),
+        
+        // Version list header
+        row![
+            text("Version").size(12).width(120),
+            text("Status").size(12).width(100),
+            text("Release Date").size(12).width(120),
+            text("Size").size(12).width(80),
+            Space::new().width(Length::Fill),
+            text("Actions").size(12).width(100),
+        ]
+        .padding([8, 12]),
         
         // Version list
-        container(
-            column![
-                version_row("0.44.11", "Installed", true),
-                version_row("0.44.10", "Installed", false),
-                version_row("0.44.9", "Available", false),
-            ]
-            .spacing(8)
+        scrollable(
+            container(version_list).padding(8)
         )
-        .padding(16),
+        .height(400),
     ]
-    .spacing(16)
+    .spacing(12)
     .into()
 }
 
-/// Single version row in the list
-fn version_row<'a>(version: &'a str, status: &'a str, is_current: bool) -> Element<'a, Message> {
-    let version_str = version.to_string();
-    let version_str2 = version.to_string();
+/// Create a version row from CursorVersion data
+fn version_row_from_data(version: &CursorVersion) -> Element<Message> {
+    let v = version.version.clone();
+    let v2 = version.version.clone();
     
-    let action_button: Element<Message> = if is_current {
-        button("Running")
-            .padding([6, 12])
-            .into()
-    } else if status == "Installed" {
-        button("Launch")
-            .padding([6, 12])
-            .on_press(Message::CursorAction(CursorMessage::LaunchVersion(version_str)))
-            .into()
-    } else {
-        button("Install")
-            .padding([6, 12])
-            .on_press(Message::CursorAction(CursorMessage::InstallVersion(version_str2)))
-            .into()
+    let action_button: Element<Message> = match version.status {
+        VersionStatus::Running => {
+            button("Running")
+                .padding([4, 8])
+                .into()
+        }
+        VersionStatus::Installed => {
+            button("Launch")
+                .padding([4, 8])
+                .on_press(Message::CursorAction(CursorMessage::LaunchVersion(v)))
+                .into()
+        }
+        VersionStatus::Available => {
+            button("Install")
+                .padding([4, 8])
+                .on_press(Message::CursorAction(CursorMessage::InstallVersion(v2)))
+                .into()
+        }
+        VersionStatus::Downloading => {
+            button("Downloading...")
+                .padding([4, 8])
+                .into()
+        }
     };
     
     row![
-        text(version).size(14).width(100),
-        text(status).size(12).width(100),
+        text(&version.version).size(14).width(120),
+        text(version.status.to_string()).size(12).width(100),
+        text(version.release_date.as_deref().unwrap_or("-")).size(12).width(120),
+        text(version.size_mb.map(|s| format!("{} MB", s)).unwrap_or("-".to_string())).size(12).width(80),
         Space::new().width(Length::Fill),
-        action_button
+        container(action_button).width(100),
     ]
     .spacing(8)
     .align_y(Alignment::Center)
-    .padding([8, 12])
+    .padding([6, 12])
     .into()
 }
+
 
 /// Sessions view
 fn view_sessions(_state: &ContinuumStudio) -> Element<Message> {
