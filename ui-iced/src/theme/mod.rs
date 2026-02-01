@@ -1,12 +1,20 @@
 //! Theme system for Continuum Studio iced UI
 //!
-//! This module provides VS Code theme compatibility for iced applications.
-//! It parses VS Code theme JSON files and converts them to iced themes.
+//! This module provides theme support including:
+//! - VS Code theme compatibility (parsing JSON theme files)
+//! - COSMIC Desktop-inspired themes
+//!
+//! The theming system allows users to choose from built-in presets
+//! or load custom VS Code themes.
 
 use iced::Color;
 use std::path::Path;
 
+pub mod cosmic;
 pub mod vscode;
+
+// Re-export COSMIC theme types
+pub use cosmic::{CosmicPalette, CosmicThemePreset};
 
 /// Semantic color tokens matching VS Code's color system
 /// These can be translated to both iced's built-in themes and COSMIC themes

@@ -10,5 +10,5 @@ pub mod widgets;
 
 // Re-export common types
 pub use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, Session};
-pub use settings::{Settings, ThemePreference};
-pub use theme::SemanticColors;
+pub use settings::{Settings, ThemePreference, CosmicPreset};
+pub use theme::{SemanticColors, CosmicPalette, CosmicThemePreset};

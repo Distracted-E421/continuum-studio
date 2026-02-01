@@ -14,7 +14,8 @@ pub mod theme;
 pub mod widgets;
 
 use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, spawn_core_connection};
-use settings::{Settings, ThemePreference};
+use settings::{Settings, ThemePreference, CosmicPreset};
+use theme::CosmicThemePreset;
 
 fn main() -> iced::Result {
     env_logger::init();
@@ -70,6 +71,27 @@ fn core_worker() -> impl iced::futures::Stream<Item = Message> {
     })
 }
 
+/// Derive iced Theme from Settings
+fn derive_theme(settings: &Settings) -> Theme {
+    match settings.theme {
+        ThemePreference::Dark => Theme::Dark,
+        ThemePreference::Light => Theme::Light,
+        ThemePreference::System => Theme::Dark, // TODO: Detect system theme
+        ThemePreference::Cosmic => {
+            // Convert CosmicPreset to CosmicThemePreset and get theme
+            let cosmic_preset = match settings.cosmic_preset {
+                CosmicPreset::Dark => CosmicThemePreset::Dark,
+                CosmicPreset::Light => CosmicThemePreset::Light,
+                CosmicPreset::PopOrange => CosmicThemePreset::PopOrange,
+                CosmicPreset::WarmAmber => CosmicThemePreset::WarmAmber,
+                CosmicPreset::CoolBlue => CosmicThemePreset::CoolBlue,
+                CosmicPreset::Mint => CosmicThemePreset::Mint,
+            };
+            cosmic_preset.to_iced_theme()
+        }
+    }
+}
+
 /// Boot function for iced application
 impl ContinuumStudio {
     fn new() -> (Self, Task<Message>) {
@@ -77,11 +99,7 @@ impl ContinuumStudio {
         let settings = Settings::load();
         
         // Derive theme from settings
-        let theme = match settings.theme {
-            ThemePreference::Dark => Theme::Dark,
-            ThemePreference::Light => Theme::Light,
-            ThemePreference::System => Theme::Dark, // TODO: Detect system theme
-        };
+        let theme = derive_theme(&settings);
         
         // Initialize with placeholder versions for now
         // Real versions will come from Core connection
@@ -163,6 +181,8 @@ enum Message {
     CoreConnectionChanged(bool),
     /// Theme preference changed
     ThemePreferenceChanged(ThemePreference),
+    /// COSMIC preset changed
+    CosmicPresetChanged(CosmicPreset),
     /// Cursor version management
     CursorAction(CursorMessage),
     /// Versions updated from Core
@@ -224,11 +244,13 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::ThemePreferenceChanged(pref) => {
             state.settings.theme = pref;
-            state.theme = match pref {
-                ThemePreference::Dark => Theme::Dark,
-                ThemePreference::Light => Theme::Light,
-                ThemePreference::System => Theme::Dark, // TODO: Detect system theme
-            };
+            state.theme = derive_theme(&state.settings);
+            state.settings_dirty = true;
+        }
+        Message::CosmicPresetChanged(preset) => {
+            state.settings.cosmic_preset = preset;
+            state.settings.theme = ThemePreference::Cosmic;
+            state.theme = derive_theme(&state.settings);
             state.settings_dirty = true;
         }
         Message::SettingsAction(settings_msg) => {
@@ -512,9 +534,46 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
         button(if state.settings.theme == ThemePreference::Light { "● Light" } else { "Light" })
             .padding([6, 12])
             .on_press(Message::ThemePreferenceChanged(ThemePreference::Light)),
+        button(if state.settings.theme == ThemePreference::Cosmic { "● COSMIC" } else { "COSMIC" })
+            .padding([6, 12])
+            .on_press(Message::ThemePreferenceChanged(ThemePreference::Cosmic)),
     ]
     .spacing(10)
     .align_y(Alignment::Center);
+    
+    // COSMIC preset row (only visible when COSMIC theme is selected)
+    let cosmic_presets = if state.settings.theme == ThemePreference::Cosmic {
+        row![
+            text("COSMIC Preset:").size(14).width(150),
+            button(if state.settings.cosmic_preset == CosmicPreset::Dark { "● Dark" } else { "Dark" })
+                .padding([4, 8])
+                .on_press(Message::CosmicPresetChanged(CosmicPreset::Dark)),
+            button(if state.settings.cosmic_preset == CosmicPreset::Light { "● Light" } else { "Light" })
+                .padding([4, 8])
+                .on_press(Message::CosmicPresetChanged(CosmicPreset::Light)),
+            button(if state.settings.cosmic_preset == CosmicPreset::PopOrange { "● Pop" } else { "Pop" })
+                .padding([4, 8])
+                .on_press(Message::CosmicPresetChanged(CosmicPreset::PopOrange)),
+            button(if state.settings.cosmic_preset == CosmicPreset::WarmAmber { "● Amber" } else { "Amber" })
+                .padding([4, 8])
+                .on_press(Message::CosmicPresetChanged(CosmicPreset::WarmAmber)),
+            button(if state.settings.cosmic_preset == CosmicPreset::CoolBlue { "● Blue" } else { "Blue" })
+                .padding([4, 8])
+                .on_press(Message::CosmicPresetChanged(CosmicPreset::CoolBlue)),
+            button(if state.settings.cosmic_preset == CosmicPreset::Mint { "● Mint" } else { "Mint" })
+                .padding([4, 8])
+                .on_press(Message::CosmicPresetChanged(CosmicPreset::Mint)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+    } else {
+        row![
+            text("COSMIC Preset:").size(14).width(150),
+            text("Select COSMIC theme to choose preset").size(12),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+    };
     
     let auto_connect = row![
         text("Auto-connect to Core:").size(14).width(150),
@@ -563,6 +622,7 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
         
         text("Appearance").size(16),
         theme_buttons,
+        cosmic_presets,
         
         container(column![]).height(10),
         text("Connection").size(16),

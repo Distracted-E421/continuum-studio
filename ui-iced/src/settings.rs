@@ -12,6 +12,10 @@ pub struct Settings {
     #[serde(default = "default_theme")]
     pub theme: ThemePreference,
     
+    /// COSMIC theme preset (when theme is Cosmic)
+    #[serde(default)]
+    pub cosmic_preset: CosmicPreset,
+    
     /// Path to Core socket
     #[serde(default = "default_socket_path")]
     pub core_socket_path: String,
@@ -41,6 +45,21 @@ pub enum ThemePreference {
     System,
     Dark,
     Light,
+    /// Use COSMIC-inspired theme
+    Cosmic,
+}
+
+/// COSMIC theme preset selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CosmicPreset {
+    #[default]
+    Dark,
+    Light,
+    PopOrange,
+    WarmAmber,
+    CoolBlue,
+    Mint,
 }
 
 fn default_theme() -> ThemePreference {
@@ -63,6 +82,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: ThemePreference::System,
+            cosmic_preset: CosmicPreset::Dark,
             core_socket_path: default_socket_path(),
             default_cursor_version: None,
             notify_new_versions: true,
