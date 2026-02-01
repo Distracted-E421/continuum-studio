@@ -9,5 +9,11 @@
 // pub mod terminal;
 // pub mod code_view;
 
-// For now, export any shared widget utilities
+// Shared widget utilities
 pub mod helpers;
+
+// COSMIC-inspired styling
+pub mod cosmic_style;
+
+// Re-export commonly used items
+pub use cosmic_style::{CosmicButton, CosmicContainer, ContainerVariant};
