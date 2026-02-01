@@ -9,10 +9,12 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 pub mod core;
+pub mod settings;
 pub mod theme;
 pub mod widgets;
 
 use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, spawn_core_connection};
+use settings::{Settings, ThemePreference};
 
 fn main() -> iced::Result {
     env_logger::init();
@@ -71,6 +73,16 @@ fn core_worker() -> impl iced::futures::Stream<Item = Message> {
 /// Boot function for iced application
 impl ContinuumStudio {
     fn new() -> (Self, Task<Message>) {
+        // Load settings
+        let settings = Settings::load();
+        
+        // Derive theme from settings
+        let theme = match settings.theme {
+            ThemePreference::Dark => Theme::Dark,
+            ThemePreference::Light => Theme::Light,
+            ThemePreference::System => Theme::Dark, // TODO: Detect system theme
+        };
+        
         // Initialize with placeholder versions for now
         // Real versions will come from Core connection
         let versions = vec![
@@ -94,13 +106,18 @@ impl ContinuumStudio {
             },
         ];
 
+        log::info!("Loaded settings: theme={:?}, socket={}", 
+            settings.theme, settings.core_socket_path);
+
         (
             Self {
-                theme: Theme::Dark,
+                settings,
+                theme,
                 core_connected: false,
                 current_view: View::Dashboard,
                 versions,
                 core_tx: None,
+                settings_dirty: false,
             },
             Task::none(),
         )
@@ -109,7 +126,9 @@ impl ContinuumStudio {
 
 /// Main application state
 struct ContinuumStudio {
-    /// Current theme
+    /// Application settings
+    settings: Settings,
+    /// Current theme (derived from settings)
     theme: Theme,
     /// Connection state to Elixir Core
     core_connected: bool,
@@ -119,6 +138,8 @@ struct ContinuumStudio {
     versions: Vec<CursorVersion>,
     /// Core request sender
     core_tx: Option<mpsc::Sender<CoreRequest>>,
+    /// Settings have been modified
+    settings_dirty: bool,
 }
 
 
@@ -140,14 +161,24 @@ enum Message {
     CoreConnected(mpsc::Sender<CoreRequest>),
     /// Core connection state
     CoreConnectionChanged(bool),
-    /// Theme changed
-    ThemeChanged(Theme),
+    /// Theme preference changed
+    ThemePreferenceChanged(ThemePreference),
     /// Cursor version management
     CursorAction(CursorMessage),
     /// Versions updated from Core
     VersionsUpdated(Vec<CursorVersion>),
     /// Core response received
     CoreResponse(CoreResponse),
+    /// Settings action
+    SettingsAction(SettingsMessage),
+}
+
+/// Settings-related messages
+#[derive(Debug, Clone)]
+enum SettingsMessage {
+    SaveSettings,
+    ToggleAutoConnect,
+    ToggleNotifications,
 }
 
 /// Cursor-related messages
@@ -191,8 +222,32 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 }
             }
         }
-        Message::ThemeChanged(theme) => {
-            state.theme = theme;
+        Message::ThemePreferenceChanged(pref) => {
+            state.settings.theme = pref;
+            state.theme = match pref {
+                ThemePreference::Dark => Theme::Dark,
+                ThemePreference::Light => Theme::Light,
+                ThemePreference::System => Theme::Dark, // TODO: Detect system theme
+            };
+            state.settings_dirty = true;
+        }
+        Message::SettingsAction(settings_msg) => {
+            match settings_msg {
+                SettingsMessage::SaveSettings => {
+                    if let Err(e) = state.settings.save() {
+                        log::error!("Failed to save settings: {}", e);
+                    }
+                    state.settings_dirty = false;
+                }
+                SettingsMessage::ToggleAutoConnect => {
+                    state.settings.auto_connect = !state.settings.auto_connect;
+                    state.settings_dirty = true;
+                }
+                SettingsMessage::ToggleNotifications => {
+                    state.settings.notify_new_versions = !state.settings.notify_new_versions;
+                    state.settings_dirty = true;
+                }
+            }
         }
         Message::CursorAction(cursor_msg) => {
             match cursor_msg {
@@ -445,24 +500,85 @@ fn view_sessions(_state: &ContinuumStudio) -> Element<Message> {
 }
 
 /// Settings view
-fn view_settings(_state: &ContinuumStudio) -> Element<Message> {
+fn view_settings(state: &ContinuumStudio) -> Element<Message> {
+    let theme_buttons = row![
+        text("Theme:").size(14).width(150),
+        button(if state.settings.theme == ThemePreference::System { "● System" } else { "System" })
+            .padding([6, 12])
+            .on_press(Message::ThemePreferenceChanged(ThemePreference::System)),
+        button(if state.settings.theme == ThemePreference::Dark { "● Dark" } else { "Dark" })
+            .padding([6, 12])
+            .on_press(Message::ThemePreferenceChanged(ThemePreference::Dark)),
+        button(if state.settings.theme == ThemePreference::Light { "● Light" } else { "Light" })
+            .padding([6, 12])
+            .on_press(Message::ThemePreferenceChanged(ThemePreference::Light)),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+    
+    let auto_connect = row![
+        text("Auto-connect to Core:").size(14).width(150),
+        button(if state.settings.auto_connect { "✓ Enabled" } else { "Disabled" })
+            .padding([6, 12])
+            .on_press(Message::SettingsAction(SettingsMessage::ToggleAutoConnect)),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+    
+    let notifications = row![
+        text("Version notifications:").size(14).width(150),
+        button(if state.settings.notify_new_versions { "✓ Enabled" } else { "Disabled" })
+            .padding([6, 12])
+            .on_press(Message::SettingsAction(SettingsMessage::ToggleNotifications)),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+    
+    let socket_path = row![
+        text("Core socket:").size(14).width(150),
+        text(&state.settings.core_socket_path).size(12),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+    
+    let save_button = if state.settings_dirty {
+        button("Save Settings")
+            .padding([10, 20])
+            .on_press(Message::SettingsAction(SettingsMessage::SaveSettings))
+    } else {
+        button("Settings Saved")
+            .padding([10, 20])
+    };
+    
+    let settings_path = row![
+        text("Settings file:").size(12),
+        text(Settings::file_path().display().to_string()).size(11),
+    ]
+    .spacing(10);
+    
     column![
         text("Settings").size(24),
         text("Configure Continuum Studio").size(14),
         container(column![]).height(20),
         
-        row![
-            text("Theme:").size(14),
-            button("Dark")
-                .padding([6, 12])
-                .on_press(Message::ThemeChanged(Theme::Dark)),
-            button("Light")
-                .padding([6, 12])
-                .on_press(Message::ThemeChanged(Theme::Light)),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center),
+        text("Appearance").size(16),
+        theme_buttons,
+        
+        container(column![]).height(10),
+        text("Connection").size(16),
+        auto_connect,
+        socket_path,
+        
+        container(column![]).height(10),
+        text("Notifications").size(16),
+        notifications,
+        
+        container(column![]).height(20),
+        save_button,
+        
+        container(column![]).height(20),
+        settings_path,
     ]
-    .spacing(16)
+    .spacing(12)
     .into()
 }
