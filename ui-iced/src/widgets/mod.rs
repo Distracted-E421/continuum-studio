@@ -16,4 +16,4 @@ pub mod helpers;
 pub mod cosmic_style;
 
 // Re-export commonly used items
-pub use cosmic_style::{CosmicButton, CosmicContainer, ContainerVariant};
+pub use cosmic_style::{ContainerVariant, CosmicButton, CosmicContainer};

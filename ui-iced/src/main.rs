@@ -31,14 +31,10 @@ fn main() -> iced::Result {
         .theme(|state: &ContinuumStudio| state.theme.clone())
         .window_size(iced::Size::new(1280.0, 800.0))
         .antialiasing(true)
-        .subscription(|state| {
-            // Subscribe to Core connection events
-            if state.core_tx.is_some() {
-                iced::Subscription::none()
-            } else {
-                // Start connection subscription
-                core_subscription()
-            }
+        .subscription(|_state| {
+            // Always maintain the Core connection subscription
+            // The worker handles connection state internally
+            core_subscription()
         })
         .run()
 }
@@ -239,22 +235,30 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             state.current_view = view;
         }
         Message::CoreConnected(tx) => {
-            log::info!("Core connection established, requesting versions...");
-            state.core_tx = Some(tx.clone());
-            // Request versions immediately
-            return Task::perform(
-                async move {
-                    let _ = tx.send(CoreRequest::GetVersions).await;
-                },
-                |_| Message::CursorAction(CursorMessage::RefreshVersions),
-            );
+            // Only process if we don't already have a connection
+            if state.core_tx.is_none() {
+                log::info!("Core connection established, requesting versions...");
+                state.core_tx = Some(tx.clone());
+                // Request versions immediately
+                return Task::perform(
+                    async move {
+                        let _ = tx.send(CoreRequest::GetVersions).await;
+                    },
+                    |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                );
+            }
         }
         Message::CoreConnectionStateChanged(new_state) => {
             let was_connected = matches!(state.connection_state, ConnectionState::Connected);
             let is_connected = matches!(new_state, ConnectionState::Connected);
-            state.connection_state = new_state;
+            state.connection_state = new_state.clone();
 
             log::info!("Core connection state: {:?}", new_state);
+
+            // Clear tx when disconnected to allow reconnection
+            if matches!(new_state, ConnectionState::Disconnected) {
+                state.core_tx = None;
+            }
 
             // Request versions when newly connected
             if is_connected && !was_connected {

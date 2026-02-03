@@ -44,26 +44,17 @@ impl CosmicButton {
 
 impl button::Catalog for CosmicButton {
     type Class<'a> = ();
-    
+
     fn default<'a>() -> Self::Class<'a> {
         ()
     }
-    
+
     fn style(&self, _class: &Self::Class<'_>, status: button::Status) -> button::Style {
         let (bg, text_color) = if self.is_destructive {
             match status {
-                button::Status::Active => (
-                    self.palette.destructive,
-                    Color::WHITE,
-                ),
-                button::Status::Hovered => (
-                    lighten(self.palette.destructive, 0.1),
-                    Color::WHITE,
-                ),
-                button::Status::Pressed => (
-                    darken(self.palette.destructive, 0.1),
-                    Color::WHITE,
-                ),
+                button::Status::Active => (self.palette.destructive, Color::WHITE),
+                button::Status::Hovered => (lighten(self.palette.destructive, 0.1), Color::WHITE),
+                button::Status::Pressed => (darken(self.palette.destructive, 0.1), Color::WHITE),
                 button::Status::Disabled => (
                     with_alpha(self.palette.destructive, 0.5),
                     with_alpha(Color::WHITE, 0.5),
@@ -71,18 +62,13 @@ impl button::Catalog for CosmicButton {
             }
         } else if self.is_primary {
             match status {
-                button::Status::Active => (
-                    self.palette.accent,
-                    self.palette.on_accent,
-                ),
-                button::Status::Hovered => (
-                    lighten(self.palette.accent, 0.1),
-                    self.palette.on_accent,
-                ),
-                button::Status::Pressed => (
-                    darken(self.palette.accent, 0.1),
-                    self.palette.on_accent,
-                ),
+                button::Status::Active => (self.palette.accent, self.palette.on_accent),
+                button::Status::Hovered => {
+                    (lighten(self.palette.accent, 0.1), self.palette.on_accent)
+                }
+                button::Status::Pressed => {
+                    (darken(self.palette.accent, 0.1), self.palette.on_accent)
+                }
                 button::Status::Disabled => (
                     with_alpha(self.palette.accent, 0.5),
                     with_alpha(self.palette.on_accent, 0.5),
@@ -91,10 +77,7 @@ impl button::Catalog for CosmicButton {
         } else {
             // Standard button
             match status {
-                button::Status::Active => (
-                    self.palette.button_bg,
-                    self.palette.on_bg_color,
-                ),
+                button::Status::Active => (self.palette.button_bg, self.palette.on_bg_color),
                 button::Status::Hovered => (
                     lighten(self.palette.button_bg, 0.1),
                     self.palette.on_bg_color,
@@ -109,7 +92,7 @@ impl button::Catalog for CosmicButton {
                 ),
             }
         };
-        
+
         button::Style {
             background: Some(Background::Color(bg)),
             text_color,
@@ -189,11 +172,11 @@ impl CosmicContainer {
 
 impl container::Catalog for CosmicContainer {
     type Class<'a> = ();
-    
+
     fn default<'a>() -> Self::Class<'a> {
         ()
     }
-    
+
     fn style(&self, _class: &Self::Class<'_>) -> container::Style {
         match self.variant {
             ContainerVariant::Transparent => container::Style {
@@ -284,10 +267,7 @@ fn darken(color: Color, amount: f32) -> Color {
 }
 
 fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color {
-        a: alpha,
-        ..color
-    }
+    Color { a: alpha, ..color }
 }
 
 #[cfg(test)]

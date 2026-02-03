@@ -411,10 +411,10 @@ defmodule StudioCore.WorkspaceTracker do
 
     {:ok, stmt} = Exqlite.Sqlite3.prepare(db, """
     INSERT INTO workspaces (id, path, name, created_at, last_opened_at, open_count, pinned, tags, git_stats)
-    VALUES (?, ?, ?, ?, ?, 1, 0, '[]', ?)
+    VALUES (?1, ?2, ?3, ?4, ?5, 1, 0, '[]', ?6)
     """)
 
-    Exqlite.Sqlite3.bind(db, stmt, [id, path, name, now_str, now_str, git_stats_json])
+    :ok = Exqlite.Sqlite3.bind(stmt, [id, path, name, now_str, now_str, git_stats_json])
     :done = Exqlite.Sqlite3.step(db, stmt)
     Exqlite.Sqlite3.release(db, stmt)
 
@@ -441,10 +441,10 @@ defmodule StudioCore.WorkspaceTracker do
     now_str = DateTime.to_iso8601(now)
 
     {:ok, stmt} = Exqlite.Sqlite3.prepare(db, """
-    UPDATE workspaces SET last_opened_at = ?, open_count = open_count + 1 WHERE id = ?
+    UPDATE workspaces SET last_opened_at = ?1, open_count = open_count + 1 WHERE id = ?2
     """)
 
-    Exqlite.Sqlite3.bind(db, stmt, [now_str, workspace.id])
+    :ok = Exqlite.Sqlite3.bind(stmt, [now_str, workspace.id])
     :done = Exqlite.Sqlite3.step(db, stmt)
     Exqlite.Sqlite3.release(db, stmt)
 
@@ -457,13 +457,13 @@ defmodule StudioCore.WorkspaceTracker do
 
     {:ok, stmt} = Exqlite.Sqlite3.prepare(db, """
     INSERT INTO workspace_versions (workspace_id, version, first_opened, last_opened, open_count)
-    VALUES (?, ?, ?, ?, 1)
+    VALUES (?1, ?2, ?3, ?4, 1)
     ON CONFLICT(workspace_id, version) DO UPDATE SET
       last_opened = excluded.last_opened,
       open_count = open_count + 1
     """)
 
-    Exqlite.Sqlite3.bind(db, stmt, [workspace.id, version, now_str, now_str])
+    :ok = Exqlite.Sqlite3.bind(stmt, [workspace.id, version, now_str, now_str])
     :done = Exqlite.Sqlite3.step(db, stmt)
     Exqlite.Sqlite3.release(db, stmt)
 
@@ -484,20 +484,20 @@ defmodule StudioCore.WorkspaceTracker do
 
   defp update_field(db, workspace_id, field, value) do
     # Note: field is trusted (internal use only)
-    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, "UPDATE workspaces SET #{field} = ? WHERE id = ?")
-    Exqlite.Sqlite3.bind(db, stmt, [value, workspace_id])
+    {:ok, stmt} = Exqlite.Sqlite3.prepare(db, "UPDATE workspaces SET #{field} = ?1 WHERE id = ?2")
+    :ok = Exqlite.Sqlite3.bind(stmt, [value, workspace_id])
     :done = Exqlite.Sqlite3.step(db, stmt)
     Exqlite.Sqlite3.release(db, stmt)
   end
 
   defp delete_workspace(db, workspace_id) do
-    {:ok, stmt1} = Exqlite.Sqlite3.prepare(db, "DELETE FROM workspace_versions WHERE workspace_id = ?")
-    Exqlite.Sqlite3.bind(db, stmt1, [workspace_id])
+    {:ok, stmt1} = Exqlite.Sqlite3.prepare(db, "DELETE FROM workspace_versions WHERE workspace_id = ?1")
+    :ok = Exqlite.Sqlite3.bind(stmt1, [workspace_id])
     :done = Exqlite.Sqlite3.step(db, stmt1)
     Exqlite.Sqlite3.release(db, stmt1)
 
-    {:ok, stmt2} = Exqlite.Sqlite3.prepare(db, "DELETE FROM workspaces WHERE id = ?")
-    Exqlite.Sqlite3.bind(db, stmt2, [workspace_id])
+    {:ok, stmt2} = Exqlite.Sqlite3.prepare(db, "DELETE FROM workspaces WHERE id = ?1")
+    :ok = Exqlite.Sqlite3.bind(stmt2, [workspace_id])
     :done = Exqlite.Sqlite3.step(db, stmt2)
     Exqlite.Sqlite3.release(db, stmt2)
   end
