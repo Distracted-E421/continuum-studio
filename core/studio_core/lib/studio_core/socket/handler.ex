@@ -367,11 +367,12 @@ defmodule StudioCore.Socket.Handler do
 
   defp send_event(socket, event) do
     # Send as JSON for Rust UI compatibility
+    # IMPORTANT: Must include newline as Rust reader uses read_line()
     message = %{
       "event" => Atom.to_string(event_type(event)),
       "data" => event_data(event)
     }
-    encoded = Jason.encode!(message)
+    encoded = Jason.encode!(message) <> "\n"
     :gen_tcp.send(socket, encoded)
   end
 
@@ -422,6 +423,12 @@ defmodule StudioCore.Socket.Handler do
   defp event_data({:agent_response, content, role}), do: %{content: content, role: role}
   defp event_data({:pong, _}), do: %{}
   defp event_data({:error, data}), do: data
+  # Version events - data is a list of versions
+  defp event_data({:versions_list, versions}) when is_list(versions), do: versions
+  defp event_data({:versions_installed, versions}) when is_list(versions), do: versions
+  defp event_data({:versions_stats, stats}) when is_map(stats), do: stats
+  defp event_data({:version_download_started, version}), do: %{version: version}
+  defp event_data({:version_running, info}) when is_map(info), do: info
   defp event_data({_, data}) when is_map(data), do: data
   defp event_data(_), do: %{}
 end

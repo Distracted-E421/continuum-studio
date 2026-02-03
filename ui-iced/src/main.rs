@@ -109,28 +109,8 @@ impl ContinuumStudio {
         // Derive theme from settings
         let theme = derive_theme(&settings);
 
-        // Initialize with placeholder versions for now
-        // Real versions will come from Core connection
-        let versions = vec![
-            CursorVersion {
-                version: "0.44.11".to_string(),
-                status: VersionStatus::Running,
-                release_date: Some("2026-01-30".to_string()),
-                size_mb: Some(250),
-            },
-            CursorVersion {
-                version: "0.44.10".to_string(),
-                status: VersionStatus::Installed,
-                release_date: Some("2026-01-28".to_string()),
-                size_mb: Some(248),
-            },
-            CursorVersion {
-                version: "0.44.9".to_string(),
-                status: VersionStatus::Available,
-                release_date: Some("2026-01-25".to_string()),
-                size_mb: Some(245),
-            },
-        ];
+        // Start with empty version list - real versions come from Core connection
+        let versions: Vec<CursorVersion> = vec![];
 
         log::info!(
             "Loaded settings: theme={:?}, socket={}",
@@ -800,7 +780,7 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
                 .size(11)
                 .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
                 .width(100),
-            text("Size")
+            text("Era")
                 .size(11)
                 .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
                 .width(80),
@@ -863,19 +843,14 @@ fn version_row_from_data(version: &CursorVersion) -> Element<Message> {
         row![
             text(&version.version).size(13).width(120),
             text(status_text).size(12).color(status_color).width(100),
-            text(version.release_date.as_deref().unwrap_or("-"))
+            text(version.date.as_deref().unwrap_or("-"))
                 .size(12)
                 .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
                 .width(100),
-            text(
-                version
-                    .size_mb
-                    .map(|s| format!("{} MB", s))
-                    .unwrap_or("-".to_string())
-            )
-            .size(12)
-            .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
-            .width(80),
+            text(version.era.as_deref().unwrap_or("-"))
+                .size(12)
+                .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
+                .width(80),
             Space::new().width(Length::Fill),
             container(action_button).width(100),
         ]

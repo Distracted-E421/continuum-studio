@@ -144,8 +144,12 @@ impl CoreResponse {
         
         match event {
             "versions_list" => {
-                let versions: Vec<CursorVersion> = serde_json::from_value(data)
+                let mut versions: Vec<CursorVersion> = serde_json::from_value(data)
                     .map_err(|e| format!("Failed to parse versions: {}", e))?;
+                // Compute UI status from installed flag
+                for v in &mut versions {
+                    v.compute_status();
+                }
                 Ok(CoreResponse::Versions(versions))
             }
             "versions_installed" => {
@@ -215,21 +219,48 @@ pub struct VersionStats {
     pub versions_dir: String,
 }
 
-/// Cursor version information
+/// Cursor version information (matches Elixir VersionRegistry output)
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct CursorVersion {
     pub version: String,
+    /// Release date in YYYY-MM-DD format
+    #[serde(default)]
+    pub date: Option<String>,
+    /// Download URL for this version
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Whether this version is installed
+    #[serde(default)]
+    pub installed: bool,
+    /// Era category (latest, custom_modes, classic)
+    #[serde(default)]
+    pub era: Option<String>,
+    /// Version notes (e.g., "Last version with custom modes")
+    #[serde(default)]
+    pub notes: Option<String>,
+    
+    // UI state fields (not from Elixir)
+    #[serde(skip)]
     pub status: VersionStatus,
-    pub release_date: Option<String>,
-    pub size_mb: Option<u32>,
 }
 
-/// Version installation status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
+impl CursorVersion {
+    /// Compute display status from installed flag
+    pub fn compute_status(&mut self) {
+        self.status = if self.installed {
+            VersionStatus::Installed
+        } else {
+            VersionStatus::Available
+        };
+    }
+}
+
+/// Version installation status (for UI display)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VersionStatus {
-    Installed,
+    #[default]
     Available,
+    Installed,
     Running,
     Downloading,
 }

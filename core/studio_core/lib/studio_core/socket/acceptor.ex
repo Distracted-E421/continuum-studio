@@ -7,15 +7,13 @@ defmodule StudioCore.Socket.Acceptor do
 
   ## Protocol
 
-  Messages are framed with a 4-byte big-endian length prefix:
+  Messages are newline-delimited JSON:
 
-      +--------+----------------+
-      | length | ETF payload    |
-      | 4 bytes| variable       |
-      +--------+----------------+
+      {"command": "versions_list", "params": {}}\n
+      {"event": "versions_list", "data": [...]}\n
 
-  The payload is Erlang External Term Format (ETF), which
-  is the native serialization format for BEAM languages.
+  This format is compatible with the Rust iced UI which uses
+  read_line() for receiving messages.
   """
   use GenServer
   require Logger
@@ -57,7 +55,7 @@ defmodule StudioCore.Socket.Acceptor do
 
     case :gen_tcp.listen(0, [
       :binary,
-      packet: 4,
+      packet: :line,  # Line-delimited JSON for Rust UI compatibility
       active: false,
       reuseaddr: true,
       ifaddr: {:local, String.to_charlist(socket_path)}
