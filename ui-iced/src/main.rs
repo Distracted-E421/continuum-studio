@@ -67,6 +67,7 @@ fn core_worker() -> impl iced::futures::Stream<Item = Message> {
                     }
                     // Handle responses from Core
                     Some(response) = response_rx.recv() => {
+                        log::debug!("Forwarding CoreResponse to app: {:?}", std::mem::discriminant(&response));
                         let _ = output.send(Message::CoreResponse(response)).await;
                     }
                 }
@@ -242,10 +243,16 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 // Request versions immediately
                 return Task::perform(
                     async move {
-                        let _ = tx.send(CoreRequest::GetVersions).await;
+                        log::info!("Sending GetVersions request to Core");
+                        match tx.send(CoreRequest::GetVersions).await {
+                            Ok(_) => log::info!("GetVersions request sent successfully"),
+                            Err(e) => log::error!("Failed to send GetVersions: {}", e),
+                        }
                     },
                     |_| Message::CursorAction(CursorMessage::RefreshVersions),
                 );
+            } else {
+                log::debug!("CoreConnected received but already connected, ignoring");
             }
         }
         Message::CoreConnectionStateChanged(new_state) => {
@@ -428,8 +435,10 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             state.versions = versions;
         }
         Message::CoreResponse(response) => {
+            log::info!("CoreResponse received: {:?}", std::mem::discriminant(&response));
             match response {
                 CoreResponse::Versions(versions) => {
+                    log::info!("Got {} versions from Core!", versions.len());
                     state.versions = versions;
                 }
                 CoreResponse::InstalledVersions(installed) => {
