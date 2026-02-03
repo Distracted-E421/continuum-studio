@@ -45,6 +45,7 @@ dirs = "5.0"
 
 # HTTP client for update checking
 ureq = { version = "2.9", features = ["json"] }
+chrono = "0.4"
 
 # Logging
 log = "0.4"

@@ -12,6 +12,7 @@ use continuum_studio_iced::core::{
     spawn_core_connection, ConnectionState, CoreRequest, CoreResponse, CursorVersion, VersionStatus,
     Workspace, DEFAULT_SOCKET_PATH,
 };
+use continuum_studio_iced::log_capture::{init_logger, LogBuffer, LogEntry};
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
 use continuum_studio_iced::theme::CosmicThemePreset;
 use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo};
@@ -24,9 +25,14 @@ async fn check_for_updates_task() -> Result<Option<UpdateInfo>, String> {
 }
 
 fn main() -> iced::Result {
-    env_logger::init();
+    // Use capture logger instead of env_logger
+    let log_level = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(log::LevelFilter::Info);
+    let log_buffer = init_logger(log_level);
 
-    iced::application(ContinuumStudio::new, update, view)
+    iced::application(move || ContinuumStudio::new(log_buffer.clone()), update, view)
         .title("Continuum Studio")
         .theme(|state: &ContinuumStudio| state.theme.clone())
         .window_size(iced::Size::new(1280.0, 800.0))
@@ -99,7 +105,7 @@ fn derive_theme(settings: &Settings) -> Theme {
 
 /// Boot function for iced application
 impl ContinuumStudio {
-    fn new() -> (Self, Task<Message>) {
+    fn new(log_buffer: LogBuffer) -> (Self, Task<Message>) {
         // Load settings
         let settings = Settings::load();
 
@@ -130,6 +136,8 @@ impl ContinuumStudio {
                 settings_dirty: false,
                 available_update: None,
                 checking_updates: check_updates,
+                log_buffer,
+                log_filter: log::Level::Info,
             },
             if check_updates {
                 Task::perform(check_for_updates_task(), Message::UpdateCheckResult)
@@ -162,6 +170,10 @@ struct ContinuumStudio {
     available_update: Option<UpdateInfo>,
     /// Update check in progress
     checking_updates: bool,
+    /// Log buffer for in-app log viewer
+    log_buffer: LogBuffer,
+    /// Current log filter level
+    log_filter: log::Level,
 }
 
 /// Available views in the application
@@ -172,6 +184,7 @@ enum View {
     Workspaces,
     Sessions,
     Settings,
+    Logs,
 }
 
 /// Application messages (Elm architecture)
@@ -191,6 +204,8 @@ enum Message {
     CursorAction(CursorMessage),
     /// Workspace management
     WorkspaceAction(WorkspaceMessage),
+    /// Log viewer actions
+    LogAction(LogMessage),
     /// Versions updated from Core
     VersionsUpdated(Vec<CursorVersion>),
     /// Core response received
@@ -228,6 +243,14 @@ enum WorkspaceMessage {
     TogglePinned(String),
     RefreshGitStats(String),
     OpenInCursor(String, String), // workspace_id, version
+}
+
+/// Log viewer messages
+#[derive(Debug, Clone)]
+enum LogMessage {
+    SetFilter(log::Level),
+    CopyLogs,
+    ClearLogs,
 }
 
 fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
@@ -431,6 +454,18 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 }
             }
         },
+        Message::LogAction(log_msg) => match log_msg {
+            LogMessage::SetFilter(level) => {
+                state.log_filter = level;
+            }
+            LogMessage::CopyLogs => {
+                let logs = state.log_buffer.format_all();
+                return iced::clipboard::write(logs);
+            }
+            LogMessage::ClearLogs => {
+                state.log_buffer.clear();
+            }
+        },
         Message::VersionsUpdated(versions) => {
             state.versions = versions;
         }
@@ -522,6 +557,7 @@ fn view(state: &ContinuumStudio) -> Element<Message> {
         View::Workspaces => view_workspaces(state),
         View::Sessions => view_sessions(state),
         View::Settings => view_settings(state),
+        View::Logs => view_logs(state),
     };
 
     let main_content = row![
@@ -586,6 +622,7 @@ fn sidebar(state: &ContinuumStudio) -> Element<Message> {
         nav_button("📁  Workspaces", View::Workspaces, current),
         nav_button("💬  Sessions", View::Sessions, current),
         Space::new().height(Length::Fill),
+        nav_button("📋  Logs", View::Logs, current),
         nav_button("⚙️  Settings", View::Settings, current),
     ]
     .spacing(4);
@@ -1294,6 +1331,154 @@ fn view_sessions(_state: &ContinuumStudio) -> Element<Message> {
 
     column![header_card, Space::new().height(16), empty_state,]
         .spacing(0)
+        .into()
+}
+
+/// Logs view for in-app debugging
+fn view_logs(state: &ContinuumStudio) -> Element<Message> {
+    let entries = state.log_buffer.entries_filtered(state.log_filter);
+    
+    let log_rows: Vec<Element<Message>> = entries
+        .iter()
+        .map(|entry| {
+            container(
+                text(entry.format())
+                    .size(11)
+                    .color(entry.level_color())
+                    .font(iced::Font::MONOSPACE),
+            )
+            .padding([4, 8])
+            .width(Length::Fill)
+            .into()
+        })
+        .collect();
+
+    let log_content: Element<Message> = if log_rows.is_empty() {
+        container(
+            column![
+                text("📋").size(48),
+                Space::new().height(16),
+                text("No log entries").size(16),
+                Space::new().height(8),
+                text("Logs will appear here as they are generated")
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            ]
+            .align_x(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding(40)
+        .into()
+    } else {
+        column(log_rows).spacing(2).into()
+    };
+
+    // Filter buttons
+    let filter_row = row![
+        text("Filter:").size(12).color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+        Space::new().width(12),
+        log_filter_button("Error", log::Level::Error, state.log_filter),
+        log_filter_button("Warn", log::Level::Warn, state.log_filter),
+        log_filter_button("Info", log::Level::Info, state.log_filter),
+        log_filter_button("Debug", log::Level::Debug, state.log_filter),
+        log_filter_button("Trace", log::Level::Trace, state.log_filter),
+        Space::new().width(Length::Fill),
+        styled_button("Copy All", false)
+            .on_press(Message::LogAction(LogMessage::CopyLogs)),
+        Space::new().width(8),
+        styled_button("Clear", false)
+            .on_press(Message::LogAction(LogMessage::ClearLogs)),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
+
+    // Header card with controls
+    let header_card = container(
+        column![
+            row![
+                column![
+                    text("Logs").size(20),
+                    text(format!("{} entries", entries.len()))
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                ]
+                .spacing(4),
+            ],
+            Space::new().height(12),
+            filter_row,
+        ],
+    )
+    .padding(20)
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.15, 0.15, 0.15,
+        ))),
+        border: iced::Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.22, 0.22, 0.22),
+        },
+        ..container::Style::default()
+    });
+
+    // Log container with monospace font
+    let log_container = container(scrollable(log_content).height(500))
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.08, 0.08, 0.08,
+            ))),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.15, 0.15, 0.15),
+            },
+            ..container::Style::default()
+        });
+
+    column![
+        header_card,
+        Space::new().height(16),
+        log_container,
+    ]
+    .spacing(0)
+    .into()
+}
+
+/// Filter button for log level selection
+fn log_filter_button(label: &'static str, level: log::Level, current: log::Level) -> Element<'static, Message> {
+    let is_active = level == current;
+    
+    button(text(label).size(11))
+        .padding([4, 10])
+        .style(move |_theme, status| {
+            let bg = if is_active {
+                iced::Color::from_rgb(0.25, 0.45, 0.7)
+            } else {
+                match status {
+                    button::Status::Hovered => iced::Color::from_rgb(0.25, 0.25, 0.25),
+                    _ => iced::Color::from_rgb(0.18, 0.18, 0.18),
+                }
+            };
+            
+            button::Style {
+                background: Some(iced::Background::Color(bg)),
+                text_color: if is_active {
+                    iced::Color::WHITE
+                } else {
+                    iced::Color::from_rgb(0.7, 0.7, 0.7)
+                },
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 0.0,
+                    color: iced::Color::TRANSPARENT,
+                },
+                shadow: iced::Shadow::default(),
+                snap: false,
+            }
+        })
+        .on_press(Message::LogAction(LogMessage::SetFilter(level)))
         .into()
 }
 

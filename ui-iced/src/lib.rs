@@ -4,6 +4,7 @@
 //! built with iced and designed for COSMIC desktop integration.
 
 pub mod core;
+pub mod log_capture;
 pub mod settings;
 pub mod theme;
 pub mod updater;
