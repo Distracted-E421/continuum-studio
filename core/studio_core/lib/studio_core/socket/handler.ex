@@ -27,7 +27,7 @@ defmodule StudioCore.Socket.Handler do
 
   defmodule State do
     @moduledoc false
-    defstruct [:socket, :subscribed]
+    defstruct [:socket, :subscribed, buffer: ""]
   end
 
   # Client API
@@ -52,19 +52,46 @@ defmodule StudioCore.Socket.Handler do
 
   @impl true
   def handle_info({:tcp, _socket, data}, state) do
-    # Try JSON first (Rust UI), then fall back to ETF (Elixir clients)
-    case decode_message(data) do
+    # Buffer data and process complete lines
+    buffer = state.buffer <> data
+    {lines, remaining} = split_lines(buffer)
+    
+    # Process each complete line
+    new_state = Enum.reduce(lines, %{state | buffer: remaining}, fn line, acc ->
+      process_line(line, acc)
+    end)
+    
+    {:noreply, new_state}
+  end
+  
+  # Split buffer into complete lines and remaining partial
+  defp split_lines(buffer) do
+    case String.split(buffer, "\n") do
+      [single] -> {[], single}  # No complete line yet
+      parts ->
+        {complete, [remaining]} = Enum.split(parts, -1)
+        # Filter out empty lines
+        complete = Enum.filter(complete, &(&1 != ""))
+        {complete, remaining}
+    end
+  end
+  
+  # Process a single complete line
+  defp process_line(line, state) do
+    case decode_message(line) do
       {:ok, {:command, command, params}} ->
-        handle_command(command, params, state)
+        {_, new_state} = handle_command(command, params, state)
+        new_state
 
       {:ok, {:event, event, data}} ->
         # Event from Synapsix (harness events)
-        handle_synapsix_event(event, data, state)
+        {_, new_state} = handle_synapsix_event(event, data, state)
+        new_state
 
       {:error, reason} ->
-        Logger.warning("Failed to decode message: #{inspect(reason)}")
+        Logger.warning("Failed to decode message: #{inspect(reason)} - #{inspect(line)}")
         send_error(state.socket, "Invalid message format")
-        {:noreply, state}
+        state
     end
   end
 

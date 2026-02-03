@@ -55,7 +55,7 @@ defmodule StudioCore.Socket.Acceptor do
 
     case :gen_tcp.listen(0, [
       :binary,
-      packet: :line,  # Line-delimited JSON for Rust UI compatibility
+      packet: :raw,  # Raw mode - we'll handle line parsing
       active: false,
       reuseaddr: true,
       ifaddr: {:local, String.to_charlist(socket_path)}
