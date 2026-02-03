@@ -28,6 +28,9 @@ defmodule StudioCore.Application do
       # Version registry - Cursor version management
       StudioCore.VersionRegistry,
 
+      # Workspace tracker - tracks projects across versions
+      StudioCore.WorkspaceTracker,
+
       # Unix socket acceptor for UI connections
       {StudioCore.Socket.Acceptor, socket_path()},
     ]

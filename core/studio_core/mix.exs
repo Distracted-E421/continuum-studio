@@ -35,6 +35,9 @@ defmodule StudioCore.MixProject do
       # JSON encoding/decoding (for protocol fallback and config)
       {:jason, "~> 1.4"},
 
+      # SQLite for workspace tracking
+      {:exqlite, "~> 0.27"},
+
       # Telemetry for observability
       {:telemetry, "~> 1.2"},
 

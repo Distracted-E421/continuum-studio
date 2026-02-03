@@ -283,6 +283,79 @@ defmodule StudioCore.Socket.Handler do
     {:noreply, state}
   end
 
+  # Workspace management commands
+
+  defp handle_command(:workspaces_list, params, state) do
+    limit = params[:limit] || 50
+    case StudioCore.WorkspaceTracker.list_recent(limit) do
+      {:ok, workspaces} ->
+        send_event(state.socket, {:workspaces_list, workspaces})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to list workspaces: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:workspaces_register, %{path: path}, state) do
+    case StudioCore.WorkspaceTracker.register(path) do
+      {:ok, workspace} ->
+        send_event(state.socket, {:workspace_registered, workspace})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to register workspace: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:workspaces_get, %{id: id}, state) do
+    case StudioCore.WorkspaceTracker.get(id) do
+      {:ok, workspace} ->
+        send_event(state.socket, {:workspace, workspace})
+      {:error, :not_found} ->
+        send_error(state.socket, "Workspace not found")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:workspaces_record_version, %{workspace_id: workspace_id, version: version}, state) do
+    case StudioCore.WorkspaceTracker.record_version_open(workspace_id, version) do
+      :ok ->
+        send_event(state.socket, {:workspace_version_recorded, %{workspace_id: workspace_id, version: version}})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to record version: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:workspaces_toggle_pinned, %{id: id}, state) do
+    case StudioCore.WorkspaceTracker.toggle_pinned(id) do
+      {:ok, pinned} ->
+        send_event(state.socket, {:workspace_pinned, %{id: id, pinned: pinned}})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to toggle pinned: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:workspaces_refresh_git, %{id: id}, state) do
+    case StudioCore.WorkspaceTracker.refresh_git_stats(id) do
+      {:ok, git_stats} ->
+        send_event(state.socket, {:workspace_git_stats, %{id: id, git_stats: git_stats}})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to refresh git stats: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:workspaces_delete, %{id: id}, state) do
+    case StudioCore.WorkspaceTracker.delete(id) do
+      :ok ->
+        send_event(state.socket, {:workspace_deleted, %{id: id}})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to delete workspace: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
   defp handle_command(unknown, params, state) do
     Logger.warning("Unknown command: #{inspect(unknown)} with #{inspect(params)}")
     send_error(state.socket, "Unknown command: #{unknown}")
@@ -456,6 +529,14 @@ defmodule StudioCore.Socket.Handler do
   defp event_data({:versions_stats, stats}) when is_map(stats), do: stats
   defp event_data({:version_download_started, version}), do: %{version: version}
   defp event_data({:version_running, info}) when is_map(info), do: info
+  # Workspace events
+  defp event_data({:workspaces_list, workspaces}) when is_list(workspaces), do: workspaces
+  defp event_data({:workspace_registered, workspace}) when is_map(workspace), do: workspace
+  defp event_data({:workspace, workspace}) when is_map(workspace), do: workspace
+  defp event_data({:workspace_version_recorded, data}) when is_map(data), do: data
+  defp event_data({:workspace_pinned, data}) when is_map(data), do: data
+  defp event_data({:workspace_git_stats, data}) when is_map(data), do: data
+  defp event_data({:workspace_deleted, data}) when is_map(data), do: data
   defp event_data({_, data}) when is_map(data), do: data
   defp event_data(_), do: %{}
 end
