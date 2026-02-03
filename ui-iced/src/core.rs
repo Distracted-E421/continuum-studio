@@ -54,37 +54,165 @@ pub enum ConnectionState {
 }
 
 /// Messages sent to the Core
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(tag = "type", content = "data")]
+/// Format: {"command": "cmd_name", "params": {...}}
+#[derive(Debug, Clone)]
 pub enum CoreRequest {
-    #[serde(rename = "get_versions")]
+    /// List all versions (with optional filters)
     GetVersions,
-    #[serde(rename = "launch_version")]
-    LaunchVersion { version: String },
-    #[serde(rename = "install_version")]
+    /// List installed versions only
+    GetInstalled,
+    /// Launch a specific version
+    LaunchVersion { version: String, folder: Option<String> },
+    /// Download/install a version
     InstallVersion { version: String },
-    #[serde(rename = "uninstall_version")]
+    /// Uninstall a version
     UninstallVersion { version: String },
-    #[serde(rename = "get_sessions")]
+    /// Get sessions
     GetSessions,
-    #[serde(rename = "ping")]
+    /// Get version statistics
+    GetStats,
+    /// Ping for health check
     Ping,
 }
 
+impl CoreRequest {
+    /// Serialize to the JSON format expected by Elixir Core
+    pub fn to_json(&self) -> String {
+        let (command, params) = match self {
+            CoreRequest::GetVersions => ("versions_list", serde_json::json!({})),
+            CoreRequest::GetInstalled => ("versions_installed", serde_json::json!({})),
+            CoreRequest::LaunchVersion { version, folder } => {
+                let mut params = serde_json::json!({"version": version});
+                if let Some(f) = folder {
+                    params["folder"] = serde_json::Value::String(f.clone());
+                }
+                ("versions_run", params)
+            }
+            CoreRequest::InstallVersion { version } => {
+                ("versions_download", serde_json::json!({"version": version}))
+            }
+            CoreRequest::UninstallVersion { version } => {
+                ("versions_uninstall", serde_json::json!({"version": version}))
+            }
+            CoreRequest::GetSessions => ("sessions_list", serde_json::json!({})),
+            CoreRequest::GetStats => ("versions_stats", serde_json::json!({})),
+            CoreRequest::Ping => ("ping", serde_json::json!({})),
+        };
+        
+        serde_json::json!({
+            "command": command,
+            "params": params
+        }).to_string()
+    }
+}
+
 /// Messages received from the Core
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(tag = "type", content = "data")]
+/// Format: {"event": "event_name", "data": {...}}
+#[derive(Debug, Clone)]
 pub enum CoreResponse {
-    #[serde(rename = "versions")]
+    /// Version list response
     Versions(Vec<CursorVersion>),
-    #[serde(rename = "launch_result")]
+    /// Installed versions response
+    InstalledVersions(Vec<InstalledVersion>),
+    /// Launch result
     LaunchResult { success: bool, message: String },
-    #[serde(rename = "sessions")]
+    /// Version running info
+    VersionRunning { version: String, data_dir: String },
+    /// Download started
+    DownloadStarted { version: String },
+    /// Version statistics
+    Stats(VersionStats),
+    /// Sessions list
     Sessions(Vec<Session>),
-    #[serde(rename = "pong")]
+    /// Pong response
     Pong,
-    #[serde(rename = "error")]
+    /// Error occurred
     Error { message: String },
+}
+
+impl CoreResponse {
+    /// Parse from JSON format sent by Elixir Core
+    pub fn from_json(json_str: &str) -> Result<Self, String> {
+        let value: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+        
+        let event = value.get("event")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing event field")?;
+        
+        let data = value.get("data").cloned().unwrap_or(serde_json::json!({}));
+        
+        match event {
+            "versions_list" => {
+                let versions: Vec<CursorVersion> = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse versions: {}", e))?;
+                Ok(CoreResponse::Versions(versions))
+            }
+            "versions_installed" => {
+                let versions: Vec<InstalledVersion> = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse installed versions: {}", e))?;
+                Ok(CoreResponse::InstalledVersions(versions))
+            }
+            "version_running" => {
+                let version = data.get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let data_dir = data.get("data_dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Ok(CoreResponse::VersionRunning { version, data_dir })
+            }
+            "version_download_started" => {
+                let version = data.get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Ok(CoreResponse::DownloadStarted { version })
+            }
+            "versions_stats" => {
+                let stats: VersionStats = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse stats: {}", e))?;
+                Ok(CoreResponse::Stats(stats))
+            }
+            "sessions" => {
+                let sessions: Vec<Session> = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse sessions: {}", e))?;
+                Ok(CoreResponse::Sessions(sessions))
+            }
+            "pong" => Ok(CoreResponse::Pong),
+            "error" => {
+                let message = data.get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string();
+                Ok(CoreResponse::Error { message })
+            }
+            _ => Err(format!("Unknown event type: {}", event)),
+        }
+    }
+}
+
+/// Installed version with disk info
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct InstalledVersion {
+    pub version: String,
+    pub path: String,
+    pub size: u64,
+    pub size_human: String,
+    pub date: Option<String>,
+}
+
+/// Version statistics
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct VersionStats {
+    pub total_versions: u32,
+    pub installed_count: u32,
+    pub total_disk_usage: u64,
+    pub total_disk_usage_human: String,
+    pub platform: String,
+    pub versions_dir: String,
 }
 
 /// Cursor version information
@@ -156,7 +284,7 @@ impl CoreClient {
 }
 
 /// Spawn a background task to maintain connection to Core
-/// 
+///
 /// Returns channels for:
 /// - Sending requests to Core
 /// - Receiving responses from Core  
@@ -191,8 +319,16 @@ pub fn spawn_core_connection_with_config(
         loop {
             // Notify connecting state
             if retry_count > 0 {
-                let _ = state_tx.send(ConnectionState::Reconnecting { attempt: retry_count }).await;
-                log::info!("Reconnecting to Core (attempt {}), delay: {:?}", retry_count, retry_delay);
+                let _ = state_tx
+                    .send(ConnectionState::Reconnecting {
+                        attempt: retry_count,
+                    })
+                    .await;
+                log::info!(
+                    "Reconnecting to Core (attempt {}), delay: {:?}",
+                    retry_count,
+                    retry_delay
+                );
             } else {
                 let _ = state_tx.send(ConnectionState::Connecting).await;
             }
@@ -203,13 +339,13 @@ pub fn spawn_core_connection_with_config(
                     // Reset backoff on successful connection
                     retry_delay = config.initial_delay;
                     retry_count = 0;
-                    
+
                     let _ = state_tx.send(ConnectionState::Connected).await;
                     log::info!("Connected to Core at {:?}", socket_path);
 
                     let (read_half, mut write_half) = stream.into_split();
                     let mut reader = BufReader::new(read_half);
-                    
+
                     // Create heartbeat interval
                     let mut heartbeat = tokio::time::interval(config.heartbeat_interval);
                     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -219,7 +355,7 @@ pub fn spawn_core_connection_with_config(
                         tokio::select! {
                             // Heartbeat tick
                             _ = heartbeat.tick() => {
-                                let ping = serde_json::to_string(&CoreRequest::Ping).unwrap();
+                                let ping = CoreRequest::Ping.to_json();
                                 if let Err(e) = write_half.write_all(ping.as_bytes()).await {
                                     log::warn!("Heartbeat failed: {}", e);
                                     break;
@@ -232,7 +368,7 @@ pub fn spawn_core_connection_with_config(
                             }
                             // Handle outgoing requests
                             Some(request) = request_rx.recv() => {
-                                let json = serde_json::to_string(&request).unwrap();
+                                let json = request.to_json();
                                 if let Err(e) = write_half.write_all(json.as_bytes()).await {
                                     log::error!("Failed to send request: {}", e);
                                     break;
@@ -250,7 +386,7 @@ pub fn spawn_core_connection_with_config(
                             } => {
                                 match result {
                                     Ok(line) if !line.is_empty() => {
-                                        match serde_json::from_str::<CoreResponse>(&line) {
+                                        match CoreResponse::from_json(&line) {
                                             Ok(response) => {
                                                 // Don't send Pong to the app (internal heartbeat)
                                                 if !matches!(response, CoreResponse::Pong) {
@@ -287,11 +423,11 @@ pub fn spawn_core_connection_with_config(
             // Exponential backoff
             retry_count += 1;
             tokio::time::sleep(retry_delay).await;
-            
+
             // Increase delay with exponential backoff
             retry_delay = Duration::from_secs_f64(
                 (retry_delay.as_secs_f64() * config.backoff_multiplier)
-                    .min(config.max_delay.as_secs_f64())
+                    .min(config.max_delay.as_secs_f64()),
             );
         }
     });

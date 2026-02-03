@@ -43,6 +43,9 @@ erlang_rs = "2.0"
 # File system
 dirs = "5.0"
 
+# HTTP client for update checking
+ureq = { version = "2.9", features = ["json"] }
+
 # Logging
 log = "0.4"
 env_logger = "0.11"

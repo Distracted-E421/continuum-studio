@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::updater::UpdateSettings;
+
 /// Application settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -35,6 +37,10 @@ pub struct Settings {
     /// Window size (width, height)
     #[serde(default = "default_window_size")]
     pub window_size: (u32, u32),
+    
+    /// Auto-update settings
+    #[serde(default)]
+    pub updates: UpdateSettings,
 }
 
 /// Theme preference
@@ -88,6 +94,7 @@ impl Default for Settings {
             notify_new_versions: true,
             auto_connect: true,
             window_size: default_window_size(),
+            updates: UpdateSettings::default(),
         }
     }
 }

@@ -3,23 +3,29 @@
 //! This is the iced-based UI for Continuum Studio, designed for integration
 //! with the COSMIC desktop ecosystem.
 
-use iced::widget::{button, column, container, row, text, Space, scrollable};
+use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Alignment, Element, Length, Task, Theme};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
-pub mod core;
-pub mod settings;
-pub mod theme;
-pub mod widgets;
+use continuum_studio_iced::core::{
+    spawn_core_connection, ConnectionState, CoreRequest, CoreResponse, CursorVersion, VersionStatus,
+    DEFAULT_SOCKET_PATH,
+};
+use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
+use continuum_studio_iced::theme::CosmicThemePreset;
+use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo};
 
-use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, ConnectionState, spawn_core_connection};
-use settings::{Settings, ThemePreference, CosmicPreset};
-use theme::CosmicThemePreset;
+/// Async task to check for updates
+async fn check_for_updates_task() -> Result<Option<UpdateInfo>, String> {
+    let settings = Settings::load();
+    let checker = UpdateChecker::new();
+    checker.check_for_updates(&settings.updates).await
+}
 
 fn main() -> iced::Result {
     env_logger::init();
-    
+
     iced::application(ContinuumStudio::new, update, view)
         .title("Continuum Studio")
         .theme(|state: &ContinuumStudio| state.theme.clone())
@@ -44,31 +50,33 @@ fn core_subscription() -> iced::Subscription<Message> {
 
 /// Core connection worker that yields Messages
 fn core_worker() -> impl iced::futures::Stream<Item = Message> {
-    iced::stream::channel(100, |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-        use iced::futures::SinkExt;
-        
-        let socket_path = PathBuf::from(core::DEFAULT_SOCKET_PATH);
-        
-        // Spawn the Core connection
-        let (request_tx, mut response_rx, mut state_rx) = 
-            spawn_core_connection(socket_path);
-        
-        // Send the request sender to the app
-        let _ = output.send(Message::CoreConnected(request_tx)).await;
-        
-        loop {
-            tokio::select! {
-                // Handle connection state changes
-                Some(state) = state_rx.recv() => {
-                    let _ = output.send(Message::CoreConnectionStateChanged(state)).await;
-                }
-                // Handle responses from Core
-                Some(response) = response_rx.recv() => {
-                    let _ = output.send(Message::CoreResponse(response)).await;
+    iced::stream::channel(
+        100,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use iced::futures::SinkExt;
+
+            let socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
+
+            // Spawn the Core connection
+            let (request_tx, mut response_rx, mut state_rx) = spawn_core_connection(socket_path);
+
+            // Send the request sender to the app
+            let _ = output.send(Message::CoreConnected(request_tx)).await;
+
+            loop {
+                tokio::select! {
+                    // Handle connection state changes
+                    Some(state) = state_rx.recv() => {
+                        let _ = output.send(Message::CoreConnectionStateChanged(state)).await;
+                    }
+                    // Handle responses from Core
+                    Some(response) = response_rx.recv() => {
+                        let _ = output.send(Message::CoreResponse(response)).await;
+                    }
                 }
             }
-        }
-    })
+        },
+    )
 }
 
 /// Derive iced Theme from Settings
@@ -97,10 +105,10 @@ impl ContinuumStudio {
     fn new() -> (Self, Task<Message>) {
         // Load settings
         let settings = Settings::load();
-        
+
         // Derive theme from settings
         let theme = derive_theme(&settings);
-        
+
         // Initialize with placeholder versions for now
         // Real versions will come from Core connection
         let versions = vec![
@@ -124,8 +132,14 @@ impl ContinuumStudio {
             },
         ];
 
-        log::info!("Loaded settings: theme={:?}, socket={}", 
-            settings.theme, settings.core_socket_path);
+        log::info!(
+            "Loaded settings: theme={:?}, socket={}",
+            settings.theme,
+            settings.core_socket_path
+        );
+
+        // Check if we should check for updates on startup
+        let check_updates = settings.updates.should_check();
 
         (
             Self {
@@ -136,8 +150,14 @@ impl ContinuumStudio {
                 versions,
                 core_tx: None,
                 settings_dirty: false,
+                available_update: None,
+                checking_updates: check_updates,
             },
-            Task::none(),
+            if check_updates {
+                Task::perform(check_for_updates_task(), Message::UpdateCheckResult)
+            } else {
+                Task::none()
+            },
         )
     }
 }
@@ -158,8 +178,11 @@ struct ContinuumStudio {
     core_tx: Option<mpsc::Sender<CoreRequest>>,
     /// Settings have been modified
     settings_dirty: bool,
+    /// Available update info
+    available_update: Option<UpdateInfo>,
+    /// Update check in progress
+    checking_updates: bool,
 }
-
 
 /// Available views in the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +214,8 @@ enum Message {
     CoreResponse(CoreResponse),
     /// Settings action
     SettingsAction(SettingsMessage),
+    /// Update check result
+    UpdateCheckResult(Result<Option<UpdateInfo>, String>),
 }
 
 /// Settings-related messages
@@ -199,6 +224,9 @@ enum SettingsMessage {
     SaveSettings,
     ToggleAutoConnect,
     ToggleNotifications,
+    SetUpdateChannel(UpdateChannel),
+    ToggleAutoCheckUpdates,
+    CheckForUpdates,
 }
 
 /// Cursor-related messages
@@ -230,9 +258,9 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             let was_connected = matches!(state.connection_state, ConnectionState::Connected);
             let is_connected = matches!(new_state, ConnectionState::Connected);
             state.connection_state = new_state;
-            
+
             log::info!("Core connection state: {:?}", new_state);
-            
+
             // Request versions when newly connected
             if is_connected && !was_connected {
                 if let Some(tx) = &state.core_tx {
@@ -257,58 +285,92 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             state.theme = derive_theme(&state.settings);
             state.settings_dirty = true;
         }
-        Message::SettingsAction(settings_msg) => {
-            match settings_msg {
-                SettingsMessage::SaveSettings => {
-                    if let Err(e) = state.settings.save() {
-                        log::error!("Failed to save settings: {}", e);
-                    }
-                    state.settings_dirty = false;
+        Message::SettingsAction(settings_msg) => match settings_msg {
+            SettingsMessage::SaveSettings => {
+                if let Err(e) = state.settings.save() {
+                    log::error!("Failed to save settings: {}", e);
                 }
-                SettingsMessage::ToggleAutoConnect => {
-                    state.settings.auto_connect = !state.settings.auto_connect;
-                    state.settings_dirty = true;
+                state.settings_dirty = false;
+            }
+            SettingsMessage::ToggleAutoConnect => {
+                state.settings.auto_connect = !state.settings.auto_connect;
+                state.settings_dirty = true;
+            }
+            SettingsMessage::ToggleNotifications => {
+                state.settings.notify_new_versions = !state.settings.notify_new_versions;
+                state.settings_dirty = true;
+            }
+            SettingsMessage::SetUpdateChannel(channel) => {
+                state.settings.updates.channel = channel;
+                state.settings_dirty = true;
+                log::info!("Update channel changed to: {:?}", channel);
+            }
+            SettingsMessage::ToggleAutoCheckUpdates => {
+                state.settings.updates.auto_check = !state.settings.updates.auto_check;
+                state.settings_dirty = true;
+            }
+            SettingsMessage::CheckForUpdates => {
+                state.checking_updates = true;
+                return Task::perform(check_for_updates_task(), Message::UpdateCheckResult);
+            }
+        },
+        Message::UpdateCheckResult(result) => {
+            state.checking_updates = false;
+            state.settings.updates.mark_checked();
+            
+            match result {
+                Ok(Some(update)) => {
+                    log::info!("Update available: {} -> {}", 
+                        state.settings.updates.current_version, 
+                        update.version);
+                    state.settings.updates.available_version = Some(update.version.clone());
+                    state.settings.updates.update_notes = Some(update.notes.clone());
+                    state.available_update = Some(update);
                 }
-                SettingsMessage::ToggleNotifications => {
-                    state.settings.notify_new_versions = !state.settings.notify_new_versions;
-                    state.settings_dirty = true;
+                Ok(None) => {
+                    log::info!("No updates available");
+                    state.available_update = None;
+                }
+                Err(e) => {
+                    log::error!("Update check failed: {}", e);
                 }
             }
+            
+            // Auto-save the update check timestamp
+            let _ = state.settings.save();
         }
-        Message::CursorAction(cursor_msg) => {
-            match cursor_msg {
-                CursorMessage::RefreshVersions => {
-                    log::info!("Refreshing Cursor versions...");
-                }
-                CursorMessage::LaunchVersion(version) => {
-                    log::info!("Launching Cursor version: {}", version);
-                    if let Some(tx) = &state.core_tx {
-                        let tx = tx.clone();
-                        return Task::perform(
-                            async move {
-                                let _ = tx.send(CoreRequest::LaunchVersion { version }).await;
-                            },
-                            |_| Message::CursorAction(CursorMessage::RefreshVersions),
-                        );
-                    }
-                }
-                CursorMessage::InstallVersion(version) => {
-                    log::info!("Installing Cursor version: {}", version);
-                    if let Some(tx) = &state.core_tx {
-                        let tx = tx.clone();
-                        return Task::perform(
-                            async move {
-                                let _ = tx.send(CoreRequest::InstallVersion { version }).await;
-                            },
-                            |_| Message::CursorAction(CursorMessage::RefreshVersions),
-                        );
-                    }
-                }
-                CursorMessage::UninstallVersion(version) => {
-                    log::info!("Uninstalling Cursor version: {}", version);
+        Message::CursorAction(cursor_msg) => match cursor_msg {
+            CursorMessage::RefreshVersions => {
+                log::info!("Refreshing Cursor versions...");
+            }
+            CursorMessage::LaunchVersion(version) => {
+                log::info!("Launching Cursor version: {}", version);
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::LaunchVersion { version, folder: None }).await;
+                        },
+                        |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                    );
                 }
             }
-        }
+            CursorMessage::InstallVersion(version) => {
+                log::info!("Installing Cursor version: {}", version);
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::InstallVersion { version }).await;
+                        },
+                        |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                    );
+                }
+            }
+            CursorMessage::UninstallVersion(version) => {
+                log::info!("Uninstalling Cursor version: {}", version);
+            }
+        },
         Message::VersionsUpdated(versions) => {
             state.versions = versions;
         }
@@ -317,12 +379,38 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 CoreResponse::Versions(versions) => {
                     state.versions = versions;
                 }
+                CoreResponse::InstalledVersions(installed) => {
+                    // Update status of versions that are installed
+                    for inst in installed {
+                        if let Some(v) = state.versions.iter_mut().find(|v| v.version == inst.version) {
+                            v.status = VersionStatus::Installed;
+                        }
+                    }
+                }
                 CoreResponse::LaunchResult { success, message } => {
                     if success {
                         log::info!("Launch success: {}", message);
                     } else {
                         log::error!("Launch failed: {}", message);
                     }
+                }
+                CoreResponse::VersionRunning { version, data_dir } => {
+                    log::info!("Version {} running with data dir: {}", version, data_dir);
+                    // Update status to Running
+                    if let Some(v) = state.versions.iter_mut().find(|v| v.version == version) {
+                        v.status = VersionStatus::Running;
+                    }
+                }
+                CoreResponse::DownloadStarted { version } => {
+                    log::info!("Download started for version: {}", version);
+                    // Update status to Downloading
+                    if let Some(v) = state.versions.iter_mut().find(|v| v.version == version) {
+                        v.status = VersionStatus::Downloading;
+                    }
+                }
+                CoreResponse::Stats(stats) => {
+                    log::info!("Version stats: {} installed, {} total", 
+                        stats.installed_count, stats.total_versions);
                 }
                 CoreResponse::Pong => {
                     log::debug!("Received pong from Core");
@@ -365,39 +453,45 @@ fn view(state: &ContinuumStudio) -> Element<Message> {
 /// Sidebar navigation with COSMIC-inspired styling
 fn sidebar(state: &ContinuumStudio) -> Element<Message> {
     let current = state.current_view;
-    
+
     let (status_text, status_color) = match state.connection_state {
         ConnectionState::Connected => ("● Connected", iced::Color::from_rgb(0.25, 0.75, 0.35)),
         ConnectionState::Connecting => ("◐ Connecting...", iced::Color::from_rgb(0.75, 0.65, 0.25)),
         ConnectionState::Reconnecting { attempt: _ } => {
             ("◐ Reconnecting...", iced::Color::from_rgb(0.75, 0.55, 0.25))
         }
-        ConnectionState::Disconnected => ("○ Disconnected", iced::Color::from_rgb(0.75, 0.35, 0.35)),
+        ConnectionState::Disconnected => {
+            ("○ Disconnected", iced::Color::from_rgb(0.75, 0.35, 0.35))
+        }
     };
-    
+
     let connection_status = text(status_text).color(status_color);
 
     // Logo/header section
     let header = column![
         text("Continuum").size(22),
-        text("Studio").size(14).color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+        text("Studio")
+            .size(14)
+            .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
     ]
     .spacing(2);
 
     // Version and connection status section
-    let status_section = column![
-        row![
-            text("v0.1.0").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
-            Space::new().width(Length::Fill),
-            connection_status.size(10),
-        ]
-        .align_y(Alignment::Center),
+    let status_section = column![row![
+        text("v0.1.0")
+            .size(11)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        Space::new().width(Length::Fill),
+        connection_status.size(10),
     ]
+    .align_y(Alignment::Center),]
     .padding([8, 0]);
 
     // Navigation section with better visual hierarchy
     let nav_section = column![
-        text("Navigation").size(10).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        text("Navigation")
+            .size(10)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
         Space::new().height(8),
         nav_button("🏠  Dashboard", View::Dashboard, current),
         nav_button("📦  Versions", View::CursorVersions, current),
@@ -414,7 +508,9 @@ fn sidebar(state: &ContinuumStudio) -> Element<Message> {
             container(Space::new().height(1))
                 .width(Length::Fill)
                 .style(|_theme| container::Style {
-                    background: Some(iced::Background::Color(iced::Color::from_rgb(0.3, 0.3, 0.3))),
+                    background: Some(iced::Background::Color(iced::Color::from_rgb(
+                        0.3, 0.3, 0.3
+                    ))),
                     ..container::Style::default()
                 }),
             Space::new().height(16),
@@ -422,11 +518,13 @@ fn sidebar(state: &ContinuumStudio) -> Element<Message> {
         ]
         .spacing(0)
         .padding(16)
-        .width(220)
+        .width(220),
     )
     .height(Length::Fill)
     .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.12, 0.12))),
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.12, 0.12, 0.12,
+        ))),
         border: iced::Border {
             radius: 0.0.into(),
             width: 1.0,
@@ -440,16 +538,12 @@ fn sidebar(state: &ContinuumStudio) -> Element<Message> {
 /// Create a navigation button with active state styling
 fn nav_button(label: &'static str, view: View, current: View) -> Element<'static, Message> {
     let is_active = view == current;
-    
-    let btn = button(
-        text(label)
-            .size(13)
-            .color(if is_active {
-                iced::Color::WHITE
-            } else {
-                iced::Color::from_rgb(0.75, 0.75, 0.75)
-            })
-    )
+
+    let btn = button(text(label).size(13).color(if is_active {
+        iced::Color::WHITE
+    } else {
+        iced::Color::from_rgb(0.75, 0.75, 0.75)
+    }))
     .padding([10, 14])
     .width(Length::Fill)
     .on_press(Message::NavigateTo(view))
@@ -469,7 +563,7 @@ fn nav_button(label: &'static str, view: View, current: View) -> Element<'static
                 button::Status::Disabled => iced::Color::TRANSPARENT,
             }
         };
-        
+
         button::Style {
             background: Some(iced::Background::Color(bg_color)),
             text_color: if is_active {
@@ -486,7 +580,7 @@ fn nav_button(label: &'static str, view: View, current: View) -> Element<'static
             snap: false,
         }
     });
-    
+
     btn.into()
 }
 
@@ -495,7 +589,9 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
     // Status card
     let status_card = card(
         column![
-            text("System Status").size(14).color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+            text("System Status")
+                .size(14)
+                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
             Space::new().height(12),
             row![
                 text("Core Connection:").size(13),
@@ -505,7 +601,9 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
                     ConnectionState::Connecting => "Connecting...",
                     ConnectionState::Reconnecting { .. } => "Reconnecting...",
                     ConnectionState::Disconnected => "Disconnected",
-                }).size(13).color(match state.connection_state {
+                })
+                .size(13)
+                .color(match state.connection_state {
                     ConnectionState::Connected => iced::Color::from_rgb(0.25, 0.75, 0.35),
                     _ => iced::Color::from_rgb(0.75, 0.55, 0.25),
                 }),
@@ -517,35 +615,36 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
                 text(format!("{}", state.versions.len())).size(13),
             ],
         ]
-        .spacing(4)
+        .spacing(4),
     );
 
     // Quick actions card
     let actions_card = card(
         column![
-            text("Quick Actions").size(14).color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+            text("Quick Actions")
+                .size(14)
+                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
             Space::new().height(12),
             row![
-                styled_button("Launch Cursor", true)
-                    .on_press(Message::CursorAction(CursorMessage::LaunchVersion("latest".to_string()))),
+                styled_button("Launch Cursor", true).on_press(Message::CursorAction(
+                    CursorMessage::LaunchVersion("latest".to_string())
+                )),
                 Space::new().width(12),
                 styled_button("Refresh Versions", false)
                     .on_press(Message::CursorAction(CursorMessage::RefreshVersions)),
             ]
             .spacing(0),
         ]
-        .spacing(4)
+        .spacing(4),
     );
 
     column![
         text("Dashboard").size(26),
-        text("Welcome back to Continuum Studio").size(14).color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+        text("Welcome back to Continuum Studio")
+            .size(14)
+            .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
         Space::new().height(24),
-        row![
-            status_card,
-            Space::new().width(16),
-            actions_card,
-        ],
+        row![status_card, Space::new().width(16), actions_card,],
     ]
     .spacing(8)
     .into()
@@ -557,7 +656,9 @@ fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
         .padding(20)
         .width(300)
         .style(|_theme| container::Style {
-            background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.15))),
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.15, 0.15, 0.15,
+            ))),
             border: iced::Border {
                 radius: 12.0.into(),
                 width: 1.0,
@@ -580,18 +681,15 @@ fn styled_button(label: &'static str, is_primary: bool) -> button::Button<'stati
         .style(move |_theme, status| {
             let (bg, fg) = if is_primary {
                 match status {
-                    button::Status::Active => (
-                        iced::Color::from_rgb(0.4, 0.6, 1.0),
-                        iced::Color::WHITE,
-                    ),
-                    button::Status::Hovered => (
-                        iced::Color::from_rgb(0.45, 0.65, 1.0),
-                        iced::Color::WHITE,
-                    ),
-                    button::Status::Pressed => (
-                        iced::Color::from_rgb(0.35, 0.55, 0.95),
-                        iced::Color::WHITE,
-                    ),
+                    button::Status::Active => {
+                        (iced::Color::from_rgb(0.4, 0.6, 1.0), iced::Color::WHITE)
+                    }
+                    button::Status::Hovered => {
+                        (iced::Color::from_rgb(0.45, 0.65, 1.0), iced::Color::WHITE)
+                    }
+                    button::Status::Pressed => {
+                        (iced::Color::from_rgb(0.35, 0.55, 0.95), iced::Color::WHITE)
+                    }
                     button::Status::Disabled => (
                         iced::Color::from_rgb(0.3, 0.4, 0.6),
                         iced::Color::from_rgba(1.0, 1.0, 1.0, 0.5),
@@ -603,21 +701,19 @@ fn styled_button(label: &'static str, is_primary: bool) -> button::Button<'stati
                         iced::Color::from_rgb(0.25, 0.25, 0.25),
                         iced::Color::from_rgb(0.85, 0.85, 0.85),
                     ),
-                    button::Status::Hovered => (
-                        iced::Color::from_rgb(0.3, 0.3, 0.3),
-                        iced::Color::WHITE,
-                    ),
-                    button::Status::Pressed => (
-                        iced::Color::from_rgb(0.2, 0.2, 0.2),
-                        iced::Color::WHITE,
-                    ),
+                    button::Status::Hovered => {
+                        (iced::Color::from_rgb(0.3, 0.3, 0.3), iced::Color::WHITE)
+                    }
+                    button::Status::Pressed => {
+                        (iced::Color::from_rgb(0.2, 0.2, 0.2), iced::Color::WHITE)
+                    }
                     button::Status::Disabled => (
                         iced::Color::from_rgb(0.18, 0.18, 0.18),
                         iced::Color::from_rgba(0.85, 0.85, 0.85, 0.5),
                     ),
                 }
             };
-            
+
             button::Style {
                 background: Some(iced::Background::Color(bg)),
                 text_color: fg,
@@ -643,9 +739,13 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
     let version_list: Element<Message> = if version_rows.is_empty() {
         column![
             Space::new().height(40),
-            text("No versions available").size(14).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            text("No versions available")
+                .size(14)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
             Space::new().height(8),
-            text("Connect to Core to load versions").size(12).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+            text("Connect to Core to load versions")
+                .size(12)
+                .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
             Space::new().height(40),
         ]
         .align_x(Alignment::Center)
@@ -660,19 +760,23 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
         row![
             column![
                 text("Cursor Versions").size(20),
-                text("Manage installed versions").size(12).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                text("Manage installed versions")
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
             ]
             .spacing(4),
             Space::new().width(Length::Fill),
             styled_button("Refresh", false)
                 .on_press(Message::CursorAction(CursorMessage::RefreshVersions)),
         ]
-        .align_y(Alignment::Center)
+        .align_y(Alignment::Center),
     )
     .padding(20)
     .width(Length::Fill)
     .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.15))),
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.15, 0.15, 0.15,
+        ))),
         border: iced::Border {
             radius: 12.0.into(),
             width: 1.0,
@@ -684,14 +788,29 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
     // Table header
     let table_header = container(
         row![
-            text("Version").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)).width(120),
-            text("Status").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)).width(100),
-            text("Release").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)).width(100),
-            text("Size").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)).width(80),
+            text("Version")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(120),
+            text("Status")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(100),
+            text("Release")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(100),
+            text("Size")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(80),
             Space::new().width(Length::Fill),
-            text("Actions").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)).width(100),
+            text("Actions")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(100),
         ]
-        .padding([0, 16])
+        .padding([0, 16]),
     );
 
     column![
@@ -709,57 +828,66 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
 fn version_row_from_data(version: &CursorVersion) -> Element<Message> {
     let v = version.version.clone();
     let v2 = version.version.clone();
-    
+
     let (status_text, status_color) = match version.status {
         VersionStatus::Running => ("Running", iced::Color::from_rgb(0.25, 0.75, 0.35)),
         VersionStatus::Installed => ("Installed", iced::Color::from_rgb(0.4, 0.6, 1.0)),
         VersionStatus::Available => ("Available", iced::Color::from_rgb(0.5, 0.5, 0.5)),
         VersionStatus::Downloading => ("Downloading...", iced::Color::from_rgb(0.75, 0.65, 0.25)),
     };
-    
+
     let action_button: Element<Message> = match version.status {
-        VersionStatus::Running => {
-            container(
-                text("● Active").size(11).color(iced::Color::from_rgb(0.25, 0.75, 0.35))
-            )
-            .padding([6, 12])
-            .into()
-        }
-        VersionStatus::Installed => {
-            small_button("Launch", true)
-                .on_press(Message::CursorAction(CursorMessage::LaunchVersion(v)))
-                .into()
-        }
-        VersionStatus::Available => {
-            small_button("Install", false)
-                .on_press(Message::CursorAction(CursorMessage::InstallVersion(v2)))
-                .into()
-        }
-        VersionStatus::Downloading => {
-            container(
-                text("⏳ ...").size(11).color(iced::Color::from_rgb(0.75, 0.65, 0.25))
-            )
-            .padding([6, 12])
-            .into()
-        }
+        VersionStatus::Running => container(
+            text("● Active")
+                .size(11)
+                .color(iced::Color::from_rgb(0.25, 0.75, 0.35)),
+        )
+        .padding([6, 12])
+        .into(),
+        VersionStatus::Installed => small_button("Launch", true)
+            .on_press(Message::CursorAction(CursorMessage::LaunchVersion(v)))
+            .into(),
+        VersionStatus::Available => small_button("Install", false)
+            .on_press(Message::CursorAction(CursorMessage::InstallVersion(v2)))
+            .into(),
+        VersionStatus::Downloading => container(
+            text("⏳ ...")
+                .size(11)
+                .color(iced::Color::from_rgb(0.75, 0.65, 0.25)),
+        )
+        .padding([6, 12])
+        .into(),
     };
-    
+
     container(
         row![
             text(&version.version).size(13).width(120),
             text(status_text).size(12).color(status_color).width(100),
-            text(version.release_date.as_deref().unwrap_or("-")).size(12).color(iced::Color::from_rgb(0.6, 0.6, 0.6)).width(100),
-            text(version.size_mb.map(|s| format!("{} MB", s)).unwrap_or("-".to_string())).size(12).color(iced::Color::from_rgb(0.6, 0.6, 0.6)).width(80),
+            text(version.release_date.as_deref().unwrap_or("-"))
+                .size(12)
+                .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
+                .width(100),
+            text(
+                version
+                    .size_mb
+                    .map(|s| format!("{} MB", s))
+                    .unwrap_or("-".to_string())
+            )
+            .size(12)
+            .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
+            .width(80),
             Space::new().width(Length::Fill),
             container(action_button).width(100),
         ]
         .spacing(8)
         .align_y(Alignment::Center)
-        .padding([12, 16])
+        .padding([12, 16]),
     )
     .width(Length::Fill)
     .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(0.13, 0.13, 0.13))),
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.13, 0.13, 0.13,
+        ))),
         border: iced::Border {
             radius: 8.0.into(),
             width: 1.0,
@@ -777,18 +905,15 @@ fn small_button(label: &'static str, is_primary: bool) -> button::Button<'static
         .style(move |_theme, status| {
             let (bg, fg) = if is_primary {
                 match status {
-                    button::Status::Active => (
-                        iced::Color::from_rgb(0.3, 0.5, 0.9),
-                        iced::Color::WHITE,
-                    ),
-                    button::Status::Hovered => (
-                        iced::Color::from_rgb(0.35, 0.55, 0.95),
-                        iced::Color::WHITE,
-                    ),
-                    button::Status::Pressed => (
-                        iced::Color::from_rgb(0.25, 0.45, 0.85),
-                        iced::Color::WHITE,
-                    ),
+                    button::Status::Active => {
+                        (iced::Color::from_rgb(0.3, 0.5, 0.9), iced::Color::WHITE)
+                    }
+                    button::Status::Hovered => {
+                        (iced::Color::from_rgb(0.35, 0.55, 0.95), iced::Color::WHITE)
+                    }
+                    button::Status::Pressed => {
+                        (iced::Color::from_rgb(0.25, 0.45, 0.85), iced::Color::WHITE)
+                    }
                     button::Status::Disabled => (
                         iced::Color::from_rgb(0.2, 0.3, 0.5),
                         iced::Color::from_rgba(1.0, 1.0, 1.0, 0.5),
@@ -800,21 +925,19 @@ fn small_button(label: &'static str, is_primary: bool) -> button::Button<'static
                         iced::Color::from_rgb(0.2, 0.2, 0.2),
                         iced::Color::from_rgb(0.75, 0.75, 0.75),
                     ),
-                    button::Status::Hovered => (
-                        iced::Color::from_rgb(0.25, 0.25, 0.25),
-                        iced::Color::WHITE,
-                    ),
-                    button::Status::Pressed => (
-                        iced::Color::from_rgb(0.15, 0.15, 0.15),
-                        iced::Color::WHITE,
-                    ),
+                    button::Status::Hovered => {
+                        (iced::Color::from_rgb(0.25, 0.25, 0.25), iced::Color::WHITE)
+                    }
+                    button::Status::Pressed => {
+                        (iced::Color::from_rgb(0.15, 0.15, 0.15), iced::Color::WHITE)
+                    }
                     button::Status::Disabled => (
                         iced::Color::from_rgb(0.15, 0.15, 0.15),
                         iced::Color::from_rgba(0.75, 0.75, 0.75, 0.5),
                     ),
                 }
             };
-            
+
             button::Style {
                 background: Some(iced::Background::Color(bg)),
                 text_color: fg,
@@ -829,21 +952,24 @@ fn small_button(label: &'static str, is_primary: bool) -> button::Button<'static
         })
 }
 
-
 /// Sessions view with polished styling
 fn view_sessions(_state: &ContinuumStudio) -> Element<Message> {
     // Header card
     let header_card = container(
         column![
             text("Sessions").size(20),
-            text("View active and past Cursor sessions").size(12).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            text("View active and past Cursor sessions")
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
         ]
-        .spacing(4)
+        .spacing(4),
     )
     .padding(20)
     .width(Length::Fill)
     .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.15))),
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.15, 0.15, 0.15,
+        ))),
         border: iced::Border {
             radius: 12.0.into(),
             width: 1.0,
@@ -859,14 +985,18 @@ fn view_sessions(_state: &ContinuumStudio) -> Element<Message> {
             Space::new().height(16),
             text("No active sessions").size(16),
             Space::new().height(8),
-            text("Start a Cursor session to see it here").size(12).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            text("Start a Cursor session to see it here")
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
         ]
-        .align_x(Alignment::Center)
+        .align_x(Alignment::Center),
     )
     .width(Length::Fill)
     .padding(60)
     .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.12, 0.12))),
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.12, 0.12, 0.12,
+        ))),
         border: iced::Border {
             radius: 12.0.into(),
             width: 1.0,
@@ -875,13 +1005,9 @@ fn view_sessions(_state: &ContinuumStudio) -> Element<Message> {
         ..container::Style::default()
     });
 
-    column![
-        header_card,
-        Space::new().height(16),
-        empty_state,
-    ]
-    .spacing(0)
-    .into()
+    column![header_card, Space::new().height(16), empty_state,]
+        .spacing(0)
+        .into()
 }
 
 /// Settings view with polished card-based layout
@@ -889,7 +1015,9 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
     // Header
     let header = column![
         text("Settings").size(26),
-        text("Configure Continuum Studio").size(14).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        text("Configure Continuum Studio")
+            .size(14)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
     ]
     .spacing(4);
 
@@ -900,26 +1028,61 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
             settings_row(
                 "Theme",
                 row![
-                    theme_pill("System", state.settings.theme == ThemePreference::System, ThemePreference::System),
-                    theme_pill("Dark", state.settings.theme == ThemePreference::Dark, ThemePreference::Dark),
-                    theme_pill("Light", state.settings.theme == ThemePreference::Light, ThemePreference::Light),
-                    theme_pill("COSMIC", state.settings.theme == ThemePreference::Cosmic, ThemePreference::Cosmic),
-                ].spacing(6)
+                    theme_pill(
+                        "System",
+                        state.settings.theme == ThemePreference::System,
+                        ThemePreference::System
+                    ),
+                    theme_pill(
+                        "Dark",
+                        state.settings.theme == ThemePreference::Dark,
+                        ThemePreference::Dark
+                    ),
+                    theme_pill(
+                        "Light",
+                        state.settings.theme == ThemePreference::Light,
+                        ThemePreference::Light
+                    ),
+                    theme_pill(
+                        "COSMIC",
+                        state.settings.theme == ThemePreference::Cosmic,
+                        ThemePreference::Cosmic
+                    ),
+                ]
+                .spacing(6)
             ),
             if state.settings.theme == ThemePreference::Cosmic {
                 settings_row(
                     "COSMIC Preset",
                     row![
-                        cosmic_pill("Dark", state.settings.cosmic_preset == CosmicPreset::Dark, CosmicPreset::Dark),
-                        cosmic_pill("Light", state.settings.cosmic_preset == CosmicPreset::Light, CosmicPreset::Light),
-                        cosmic_pill("Pop", state.settings.cosmic_preset == CosmicPreset::PopOrange, CosmicPreset::PopOrange),
-                        cosmic_pill("Blue", state.settings.cosmic_preset == CosmicPreset::CoolBlue, CosmicPreset::CoolBlue),
-                    ].spacing(6)
+                        cosmic_pill(
+                            "Dark",
+                            state.settings.cosmic_preset == CosmicPreset::Dark,
+                            CosmicPreset::Dark
+                        ),
+                        cosmic_pill(
+                            "Light",
+                            state.settings.cosmic_preset == CosmicPreset::Light,
+                            CosmicPreset::Light
+                        ),
+                        cosmic_pill(
+                            "Pop",
+                            state.settings.cosmic_preset == CosmicPreset::PopOrange,
+                            CosmicPreset::PopOrange
+                        ),
+                        cosmic_pill(
+                            "Blue",
+                            state.settings.cosmic_preset == CosmicPreset::CoolBlue,
+                            CosmicPreset::CoolBlue
+                        ),
+                    ]
+                    .spacing(6),
                 )
             } else {
                 Space::new().height(0).into()
             },
-        ].spacing(16)
+        ]
+        .spacing(16),
     );
 
     // Connection card
@@ -928,13 +1091,19 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
         column![
             settings_row(
                 "Auto-connect",
-                toggle_button(state.settings.auto_connect, SettingsMessage::ToggleAutoConnect)
+                toggle_button(
+                    state.settings.auto_connect,
+                    SettingsMessage::ToggleAutoConnect
+                )
             ),
             settings_row(
                 "Socket path",
-                text(&state.settings.core_socket_path).size(12).color(iced::Color::from_rgb(0.6, 0.6, 0.6))
+                text(&state.settings.core_socket_path)
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
             ),
-        ].spacing(16)
+        ]
+        .spacing(16),
     );
 
     // Notifications card
@@ -942,8 +1111,70 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
         "Notifications",
         settings_row(
             "Version updates",
-            toggle_button(state.settings.notify_new_versions, SettingsMessage::ToggleNotifications)
-        )
+            toggle_button(
+                state.settings.notify_new_versions,
+                SettingsMessage::ToggleNotifications,
+            ),
+        ),
+    );
+    
+    // Updates card
+    let update_status: Element<Message> = if state.checking_updates {
+        text("Checking for updates...")
+            .size(12)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+            .into()
+    } else if let Some(ref update) = state.available_update {
+        column![
+            text(format!("Update available: v{}", update.version))
+                .size(12)
+                .color(iced::Color::from_rgb(0.3, 0.7, 0.4)),
+            text("Run 'nix build' to update")
+                .size(10)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        ]
+        .spacing(4)
+        .into()
+    } else {
+        text(format!("Current: v{}", state.settings.updates.current_version))
+            .size(12)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+            .into()
+    };
+    
+    let updates_card = settings_card(
+        "Updates",
+        column![
+            settings_row(
+                "Update channel",
+                row![
+                    channel_pill("Stable", state.settings.updates.channel == UpdateChannel::Stable, UpdateChannel::Stable),
+                    channel_pill("Beta", state.settings.updates.channel == UpdateChannel::Beta, UpdateChannel::Beta),
+                    channel_pill("Nightly", state.settings.updates.channel == UpdateChannel::Nightly, UpdateChannel::Nightly),
+                ]
+                .spacing(6),
+            ),
+            Space::new().height(8),
+            settings_row(
+                "Auto-check updates",
+                toggle_button(
+                    state.settings.updates.auto_check,
+                    SettingsMessage::ToggleAutoCheckUpdates,
+                ),
+            ),
+            Space::new().height(8),
+            settings_row(
+                "Status",
+                row![
+                    update_status,
+                    Space::new().width(12),
+                    styled_button("Check Now", false)
+                        .on_press(Message::SettingsAction(SettingsMessage::CheckForUpdates)),
+                ]
+                .align_y(Alignment::Center),
+            ),
+        ]
+        .spacing(8),
     );
 
     // Save button
@@ -971,6 +1202,8 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
         connection_card,
         Space::new().height(12),
         notifications_card,
+        Space::new().height(12),
+        updates_card,
         Space::new().height(24),
         save_section,
         Space::new().height(16),
@@ -980,20 +1213,40 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
     .into()
 }
 
+/// Update channel pill button
+fn channel_pill(
+    label: &'static str,
+    is_active: bool,
+    channel: UpdateChannel,
+) -> Element<'static, Message> {
+    button(text(label).size(11))
+        .padding([6, 12])
+        .on_press(Message::SettingsAction(SettingsMessage::SetUpdateChannel(channel)))
+        .style(move |_theme, status| pill_style(is_active, status))
+        .into()
+}
+
 /// Settings card container
-fn settings_card<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+fn settings_card<'a>(
+    title: &'a str,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
     container(
         column![
-            text(title).size(14).color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+            text(title)
+                .size(14)
+                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
             Space::new().height(12),
             content.into(),
         ]
-        .spacing(0)
+        .spacing(0),
     )
     .padding(20)
     .width(Length::Fill)
     .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.15))),
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.15, 0.15, 0.15,
+        ))),
         border: iced::Border {
             radius: 12.0.into(),
             width: 1.0,
@@ -1005,7 +1258,10 @@ fn settings_card<'a>(title: &'a str, content: impl Into<Element<'a, Message>>) -
 }
 
 /// Settings row with label and control
-fn settings_row<'a>(label: &'a str, control: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+fn settings_row<'a>(
+    label: &'a str,
+    control: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
     row![
         text(label).size(13),
         Space::new().width(Length::Fill),
@@ -1016,7 +1272,11 @@ fn settings_row<'a>(label: &'a str, control: impl Into<Element<'a, Message>>) ->
 }
 
 /// Theme selection pill button
-fn theme_pill(label: &'static str, is_active: bool, pref: ThemePreference) -> Element<'static, Message> {
+fn theme_pill(
+    label: &'static str,
+    is_active: bool,
+    pref: ThemePreference,
+) -> Element<'static, Message> {
     button(text(label).size(11))
         .padding([6, 12])
         .on_press(Message::ThemePreferenceChanged(pref))
@@ -1025,7 +1285,11 @@ fn theme_pill(label: &'static str, is_active: bool, pref: ThemePreference) -> El
 }
 
 /// COSMIC preset pill button
-fn cosmic_pill(label: &'static str, is_active: bool, preset: CosmicPreset) -> Element<'static, Message> {
+fn cosmic_pill(
+    label: &'static str,
+    is_active: bool,
+    preset: CosmicPreset,
+) -> Element<'static, Message> {
     button(text(label).size(11))
         .padding([6, 12])
         .on_press(Message::CosmicPresetChanged(preset))
@@ -1054,7 +1318,7 @@ fn toggle_button(is_enabled: bool, msg: SettingsMessage) -> Element<'static, Mes
                     button::Status::Disabled => iced::Color::from_rgb(0.18, 0.18, 0.18),
                 }
             };
-            
+
             button::Style {
                 background: Some(iced::Background::Color(bg)),
                 text_color: iced::Color::WHITE,
@@ -1087,10 +1351,14 @@ fn pill_style(is_active: bool, status: button::Status) -> button::Style {
             button::Status::Disabled => iced::Color::from_rgb(0.18, 0.18, 0.18),
         }
     };
-    
+
     button::Style {
         background: Some(iced::Background::Color(bg)),
-        text_color: if is_active { iced::Color::WHITE } else { iced::Color::from_rgb(0.7, 0.7, 0.7) },
+        text_color: if is_active {
+            iced::Color::WHITE
+        } else {
+            iced::Color::from_rgb(0.7, 0.7, 0.7)
+        },
         border: iced::Border {
             radius: 6.0.into(),
             width: 0.0,

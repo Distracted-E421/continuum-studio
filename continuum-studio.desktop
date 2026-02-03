@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Continuum Studio
+Comment=Cursor version manager and AI development companion
+Exec=continuum-studio
+Icon=continuum-studio
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+Keywords=cursor;ai;development;version;manager;
+StartupWMClass=continuum-studio
+StartupNotify=true
+MimeType=
