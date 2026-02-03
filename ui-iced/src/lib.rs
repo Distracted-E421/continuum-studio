@@ -10,7 +10,7 @@ pub mod updater;
 pub mod widgets;
 
 // Re-export common types
-pub use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, Session, InstalledVersion, VersionStats};
+pub use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, Session, InstalledVersion, VersionStats, Workspace, GitStats, WorkspaceVersion};
 pub use settings::{Settings, ThemePreference, CosmicPreset};
 pub use theme::{SemanticColors, CosmicPalette, CosmicThemePreset};
 pub use updater::{UpdateChannel, UpdateSettings, UpdateInfo, UpdateChecker};

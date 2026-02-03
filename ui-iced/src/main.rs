@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use continuum_studio_iced::core::{
     spawn_core_connection, ConnectionState, CoreRequest, CoreResponse, CursorVersion, VersionStatus,
-    DEFAULT_SOCKET_PATH,
+    Workspace, DEFAULT_SOCKET_PATH,
 };
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
 use continuum_studio_iced::theme::CosmicThemePreset;
@@ -128,6 +128,7 @@ impl ContinuumStudio {
                 connection_state: ConnectionState::Disconnected,
                 current_view: View::Dashboard,
                 versions,
+                workspaces: vec![],
                 core_tx: None,
                 settings_dirty: false,
                 available_update: None,
@@ -154,6 +155,8 @@ struct ContinuumStudio {
     current_view: View,
     /// Available Cursor versions
     versions: Vec<CursorVersion>,
+    /// Tracked workspaces
+    workspaces: Vec<Workspace>,
     /// Core request sender
     core_tx: Option<mpsc::Sender<CoreRequest>>,
     /// Settings have been modified
@@ -169,6 +172,7 @@ struct ContinuumStudio {
 enum View {
     Dashboard,
     CursorVersions,
+    Workspaces,
     Sessions,
     Settings,
 }
@@ -188,6 +192,8 @@ enum Message {
     CosmicPresetChanged(CosmicPreset),
     /// Cursor version management
     CursorAction(CursorMessage),
+    /// Workspace management
+    WorkspaceAction(WorkspaceMessage),
     /// Versions updated from Core
     VersionsUpdated(Vec<CursorVersion>),
     /// Core response received
@@ -216,6 +222,15 @@ enum CursorMessage {
     LaunchVersion(String),
     InstallVersion(String),
     UninstallVersion(String),
+}
+
+/// Workspace-related messages
+#[derive(Debug, Clone)]
+enum WorkspaceMessage {
+    RefreshWorkspaces,
+    TogglePinned(String),
+    RefreshGitStats(String),
+    OpenInCursor(String, String), // workspace_id, version
 }
 
 fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
@@ -351,6 +366,60 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 log::info!("Uninstalling Cursor version: {}", version);
             }
         },
+        Message::WorkspaceAction(ws_msg) => match ws_msg {
+            WorkspaceMessage::RefreshWorkspaces => {
+                log::info!("Refreshing workspaces...");
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::GetWorkspaces { limit: Some(50) }).await;
+                        },
+                        |_| Message::WorkspaceAction(WorkspaceMessage::RefreshWorkspaces),
+                    );
+                }
+            }
+            WorkspaceMessage::TogglePinned(id) => {
+                log::info!("Toggling pinned status for workspace: {}", id);
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::ToggleWorkspacePinned { id }).await;
+                        },
+                        |_| Message::WorkspaceAction(WorkspaceMessage::RefreshWorkspaces),
+                    );
+                }
+            }
+            WorkspaceMessage::RefreshGitStats(id) => {
+                log::info!("Refreshing git stats for workspace: {}", id);
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::RefreshWorkspaceGit { id }).await;
+                        },
+                        |_| Message::WorkspaceAction(WorkspaceMessage::RefreshWorkspaces),
+                    );
+                }
+            }
+            WorkspaceMessage::OpenInCursor(ws_id, version) => {
+                log::info!("Opening workspace {} in Cursor {}", ws_id, version);
+                // Find workspace path
+                if let Some(ws) = state.workspaces.iter().find(|w| w.id == ws_id) {
+                    let folder = ws.path.clone();
+                    if let Some(tx) = &state.core_tx {
+                        let tx = tx.clone();
+                        return Task::perform(
+                            async move {
+                                let _ = tx.send(CoreRequest::LaunchVersion { version, folder: Some(folder) }).await;
+                            },
+                            |_| Message::WorkspaceAction(WorkspaceMessage::RefreshWorkspaces),
+                        );
+                    }
+                }
+            }
+        },
         Message::VersionsUpdated(versions) => {
             state.versions = versions;
         }
@@ -401,6 +470,31 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 CoreResponse::Sessions(_) => {
                     // Handle sessions in future
                 }
+                CoreResponse::Workspaces(workspaces) => {
+                    log::info!("Received {} workspaces", workspaces.len());
+                    state.workspaces = workspaces;
+                }
+                CoreResponse::WorkspaceRegistered(workspace) => {
+                    log::info!("Workspace registered: {}", workspace.name);
+                    // Add or update in list
+                    if let Some(existing) = state.workspaces.iter_mut().find(|w| w.id == workspace.id) {
+                        *existing = workspace;
+                    } else {
+                        state.workspaces.insert(0, workspace);
+                    }
+                }
+                CoreResponse::WorkspacePinned { id, pinned } => {
+                    log::info!("Workspace {} pinned: {}", id, pinned);
+                    if let Some(ws) = state.workspaces.iter_mut().find(|w| w.id == id) {
+                        ws.pinned = pinned;
+                    }
+                }
+                CoreResponse::WorkspaceGitStats { id, git_stats } => {
+                    log::info!("Updated git stats for workspace {}", id);
+                    if let Some(ws) = state.workspaces.iter_mut().find(|w| w.id == id) {
+                        ws.git_stats = git_stats;
+                    }
+                }
             }
         }
     }
@@ -412,6 +506,7 @@ fn view(state: &ContinuumStudio) -> Element<Message> {
     let content = match state.current_view {
         View::Dashboard => view_dashboard(state),
         View::CursorVersions => view_cursor_versions(state),
+        View::Workspaces => view_workspaces(state),
         View::Sessions => view_sessions(state),
         View::Settings => view_settings(state),
     };
@@ -475,6 +570,7 @@ fn sidebar(state: &ContinuumStudio) -> Element<Message> {
         Space::new().height(8),
         nav_button("🏠  Dashboard", View::Dashboard, current),
         nav_button("📦  Versions", View::CursorVersions, current),
+        nav_button("📁  Workspaces", View::Workspaces, current),
         nav_button("💬  Sessions", View::Sessions, current),
         Space::new().height(Length::Fill),
         nav_button("⚙️  Settings", View::Settings, current),
@@ -925,6 +1021,209 @@ fn small_button(label: &'static str, is_primary: bool) -> button::Button<'static
                 snap: false,
             }
         })
+}
+
+/// Workspaces view with tracked projects
+fn view_workspaces(state: &ContinuumStudio) -> Element<Message> {
+    let workspace_rows: Vec<Element<Message>> = state
+        .workspaces
+        .iter()
+        .map(|ws| workspace_row(ws))
+        .collect();
+
+    let workspace_list: Element<Message> = if workspace_rows.is_empty() {
+        column![
+            Space::new().height(40),
+            text("📁").size(48),
+            Space::new().height(16),
+            text("No workspaces tracked")
+                .size(14)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            Space::new().height(8),
+            text("Open a folder in Cursor to start tracking")
+                .size(12)
+                .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+            Space::new().height(40),
+        ]
+        .align_x(Alignment::Center)
+        .width(Length::Fill)
+        .into()
+    } else {
+        column(workspace_rows).spacing(8).into()
+    };
+
+    // Header card with controls
+    let header_card = container(
+        row![
+            column![
+                text("Workspaces").size(20),
+                text(format!("{} tracked projects", state.workspaces.len()))
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            ]
+            .spacing(4),
+            Space::new().width(Length::Fill),
+            styled_button("Refresh", false)
+                .on_press(Message::WorkspaceAction(WorkspaceMessage::RefreshWorkspaces)),
+        ]
+        .align_y(Alignment::Center),
+    )
+    .padding(20)
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.15, 0.15, 0.15,
+        ))),
+        border: iced::Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.22, 0.22, 0.22),
+        },
+        ..container::Style::default()
+    });
+
+    // Table header
+    let table_header = container(
+        row![
+            text("Name")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(180),
+            text("Git Branch")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(100),
+            text("Changes")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(80),
+            text("Last Opened")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(100),
+            Space::new().width(Length::Fill),
+            text("Actions")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(100),
+        ]
+        .padding([0, 16]),
+    );
+
+    column![
+        header_card,
+        Space::new().height(16),
+        table_header,
+        Space::new().height(8),
+        scrollable(workspace_list).height(400),
+    ]
+    .spacing(0)
+    .into()
+}
+
+/// Create a workspace row with git info
+fn workspace_row(workspace: &Workspace) -> Element<Message> {
+    let id = workspace.id.clone();
+    let id2 = workspace.id.clone();
+    let name = workspace.name.clone();
+    let path = workspace.path.clone();
+
+    let git_branch = workspace
+        .git_stats
+        .as_ref()
+        .map(|g| g.branch.clone())
+        .unwrap_or_else(|| "-".to_string());
+
+    let uncommitted = workspace
+        .git_stats
+        .as_ref()
+        .map(|g| g.uncommitted_changes)
+        .unwrap_or(0);
+
+    let uncommitted_text = if uncommitted > 0 {
+        format!("{} files", uncommitted)
+    } else {
+        "Clean".to_string()
+    };
+
+    let uncommitted_color = if uncommitted > 0 {
+        iced::Color::from_rgb(0.75, 0.65, 0.25)
+    } else {
+        iced::Color::from_rgb(0.25, 0.75, 0.35)
+    };
+
+    let last_opened = workspace
+        .last_opened_at
+        .as_ref()
+        .and_then(|s| s.split('T').next())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "-".to_string());
+
+    let pin_icon = if workspace.pinned { "📌" } else { "📍" };
+
+    container(
+        row![
+            row![
+                button(text(pin_icon).size(12))
+                    .padding(4)
+                    .style(|_theme, _status| button::Style {
+                        background: None,
+                        text_color: iced::Color::from_rgb(0.6, 0.6, 0.6),
+                        border: iced::Border::default(),
+                        shadow: iced::Shadow::default(),
+                        snap: false,
+                    })
+                    .on_press(Message::WorkspaceAction(WorkspaceMessage::TogglePinned(id))),
+                column![
+                    text(name).size(13),
+                    text(path)
+                        .size(10)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                ]
+                .spacing(2),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .width(180),
+            text(git_branch)
+                .size(12)
+                .color(iced::Color::from_rgb(0.4, 0.6, 1.0))
+                .width(100),
+            text(uncommitted_text)
+                .size(12)
+                .color(uncommitted_color)
+                .width(80),
+            text(last_opened)
+                .size(12)
+                .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
+                .width(100),
+            Space::new().width(Length::Fill),
+            container(
+                small_button("Open", true)
+                    .on_press(Message::WorkspaceAction(WorkspaceMessage::OpenInCursor(
+                        id2,
+                        "latest".to_string(),
+                    )))
+            )
+            .width(100),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .padding([12, 16]),
+    )
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.13, 0.13, 0.13,
+        ))),
+        border: iced::Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.2, 0.2, 0.2),
+        },
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// Sessions view with polished styling

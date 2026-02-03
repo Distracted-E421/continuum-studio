@@ -71,6 +71,14 @@ pub enum CoreRequest {
     GetSessions,
     /// Get version statistics
     GetStats,
+    /// List workspaces
+    GetWorkspaces { limit: Option<u32> },
+    /// Register a workspace
+    RegisterWorkspace { path: String },
+    /// Toggle workspace pinned status
+    ToggleWorkspacePinned { id: String },
+    /// Refresh workspace git stats
+    RefreshWorkspaceGit { id: String },
     /// Ping for health check
     Ping,
 }
@@ -96,6 +104,22 @@ impl CoreRequest {
             }
             CoreRequest::GetSessions => ("sessions_list", serde_json::json!({})),
             CoreRequest::GetStats => ("versions_stats", serde_json::json!({})),
+            CoreRequest::GetWorkspaces { limit } => {
+                let mut params = serde_json::json!({});
+                if let Some(l) = limit {
+                    params["limit"] = serde_json::json!(l);
+                }
+                ("workspaces_list", params)
+            }
+            CoreRequest::RegisterWorkspace { path } => {
+                ("workspaces_register", serde_json::json!({"path": path}))
+            }
+            CoreRequest::ToggleWorkspacePinned { id } => {
+                ("workspaces_toggle_pinned", serde_json::json!({"id": id}))
+            }
+            CoreRequest::RefreshWorkspaceGit { id } => {
+                ("workspaces_refresh_git", serde_json::json!({"id": id}))
+            }
             CoreRequest::Ping => ("ping", serde_json::json!({})),
         };
         
@@ -124,6 +148,14 @@ pub enum CoreResponse {
     Stats(VersionStats),
     /// Sessions list
     Sessions(Vec<Session>),
+    /// Workspaces list
+    Workspaces(Vec<Workspace>),
+    /// Single workspace
+    WorkspaceRegistered(Workspace),
+    /// Workspace pinned status changed
+    WorkspacePinned { id: String, pinned: bool },
+    /// Workspace git stats updated
+    WorkspaceGitStats { id: String, git_stats: Option<GitStats> },
     /// Pong response
     Pong,
     /// Error occurred
@@ -184,6 +216,27 @@ impl CoreResponse {
                 let sessions: Vec<Session> = serde_json::from_value(data)
                     .map_err(|e| format!("Failed to parse sessions: {}", e))?;
                 Ok(CoreResponse::Sessions(sessions))
+            }
+            "workspaces_list" => {
+                let workspaces: Vec<Workspace> = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse workspaces: {}", e))?;
+                Ok(CoreResponse::Workspaces(workspaces))
+            }
+            "workspace_registered" => {
+                let workspace: Workspace = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse workspace: {}", e))?;
+                Ok(CoreResponse::WorkspaceRegistered(workspace))
+            }
+            "workspace_pinned" => {
+                let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let pinned = data.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+                Ok(CoreResponse::WorkspacePinned { id, pinned })
+            }
+            "workspace_git_stats" => {
+                let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let git_stats: Option<GitStats> = data.get("git_stats")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                Ok(CoreResponse::WorkspaceGitStats { id, git_stats })
             }
             "pong" => Ok(CoreResponse::Pong),
             "error" => {
@@ -283,6 +336,61 @@ pub struct Session {
     pub name: String,
     pub status: String,
     pub started_at: Option<String>,
+}
+
+/// Workspace information (from Elixir Core)
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
+pub struct Workspace {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub last_opened_at: Option<String>,
+    #[serde(default)]
+    pub open_count: u32,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub git_stats: Option<GitStats>,
+    #[serde(default)]
+    pub versions: Vec<WorkspaceVersion>,
+}
+
+/// Git statistics for a workspace
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
+pub struct GitStats {
+    #[serde(default)]
+    pub branch: String,
+    #[serde(default)]
+    pub commit_count: Option<u32>,
+    #[serde(default)]
+    pub uncommitted_changes: u32,
+    #[serde(default)]
+    pub last_commit: Option<String>,
+    #[serde(default)]
+    pub last_commit_message: Option<String>,
+    #[serde(default)]
+    pub total_files: Option<u32>,
+}
+
+/// Version record for a workspace
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct WorkspaceVersion {
+    pub version: String,
+    #[serde(default)]
+    pub first_opened: Option<String>,
+    #[serde(default)]
+    pub last_opened: Option<String>,
+    #[serde(default)]
+    pub open_count: u32,
 }
 
 /// Core client for IPC communication
