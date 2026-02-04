@@ -1004,15 +1004,129 @@ fn styled_button(label: &'static str, is_primary: bool) -> button::Button<'stati
         })
 }
 
-/// Cursor version management view with polished styling
+/// Cursor version management view with improved organization
 fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
-    let version_rows: Vec<Element<Message>> = state
-        .versions
-        .iter()
-        .map(|v| version_row_from_data(v))
-        .collect();
+    // Count versions by category
+    let total = state.versions.len();
+    let installed_count = state.versions.iter().filter(|v| v.installed).count();
+    let supported_count = state.versions.iter().filter(|v| is_supported_version(&v.version)).count();
 
-    let version_list: Element<Message> = if version_rows.is_empty() {
+    // Group versions by major.minor era
+    let mut era_groups: Vec<(&str, Vec<&CursorVersion>)> = Vec::new();
+    let mut current_era = String::new();
+    let mut current_group: Vec<&CursorVersion> = Vec::new();
+
+    for v in &state.versions {
+        let era = get_version_era(&v.version);
+        if era != current_era {
+            if !current_group.is_empty() {
+                era_groups.push((Box::leak(current_era.clone().into_boxed_str()), current_group));
+                current_group = Vec::new();
+            }
+            current_era = era.to_string();
+        }
+        current_group.push(v);
+    }
+    if !current_group.is_empty() {
+        era_groups.push((Box::leak(current_era.into_boxed_str()), current_group));
+    }
+
+    // Build version list with era headers
+    let mut version_elements: Vec<Element<Message>> = Vec::new();
+
+    for (era_name, era_versions) in &era_groups {
+        // Era header
+        let is_supported = is_supported_era(era_name);
+        let header_color = if is_supported {
+            iced::Color::from_rgb(0.3, 0.7, 0.4)
+        } else {
+            iced::Color::from_rgb(0.5, 0.5, 0.5)
+        };
+
+        let support_badge = if is_supported {
+            container(
+                text("SUPPORTED")
+                    .size(9)
+                    .color(iced::Color::from_rgb(0.3, 0.7, 0.4))
+            )
+            .padding([2, 6])
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(
+                    iced::Color::from_rgba(0.3, 0.7, 0.4, 0.15)
+                )),
+                border: iced::Border {
+                    radius: 3.0.into(),
+                    ..Default::default()
+                },
+                ..container::Style::default()
+            })
+        } else {
+            container(
+                text("LEGACY")
+                    .size(9)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+            )
+            .padding([2, 6])
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(
+                    iced::Color::from_rgba(0.5, 0.5, 0.5, 0.15)
+                )),
+                border: iced::Border {
+                    radius: 3.0.into(),
+                    ..Default::default()
+                },
+                ..container::Style::default()
+            })
+        };
+
+        let era_header = container(
+            row![
+                text(format!("Cursor {}", era_name))
+                    .size(14)
+                    .color(header_color),
+                Space::new().width(12),
+                support_badge,
+                Space::new().width(Length::Fill),
+                text(format!("{} versions", era_versions.len()))
+                    .size(11)
+                    .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+            ]
+            .align_y(Alignment::Center),
+        )
+        .padding([12, 16])
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(
+                if is_supported {
+                    iced::Color::from_rgb(0.12, 0.15, 0.12)
+                } else {
+                    iced::Color::from_rgb(0.1, 0.1, 0.1)
+                }
+            )),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: if is_supported {
+                    iced::Color::from_rgb(0.2, 0.28, 0.2)
+                } else {
+                    iced::Color::from_rgb(0.15, 0.15, 0.15)
+                },
+            },
+            ..container::Style::default()
+        });
+
+        version_elements.push(era_header.into());
+        version_elements.push(Space::new().height(4).into());
+
+        // Version rows for this era
+        for v in era_versions {
+            version_elements.push(version_row_from_data(v));
+        }
+
+        version_elements.push(Space::new().height(16).into());
+    }
+
+    let version_list: Element<Message> = if version_elements.is_empty() {
         column![
             Space::new().height(40),
             text("No versions available")
@@ -1028,17 +1142,31 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
         .width(Length::Fill)
         .into()
     } else {
-        column(version_rows).spacing(8).into()
+        column(version_elements).spacing(4).into()
     };
 
-    // Header card with controls
+    // Header card with stats
     let header_card = container(
         row![
             column![
                 text("Cursor Versions").size(20),
-                text("Manage installed versions")
-                    .size(12)
-                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                row![
+                    text(format!("{} total", total))
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    text(" · ")
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.3, 0.3, 0.3)),
+                    text(format!("{} supported", supported_count))
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.3, 0.7, 0.4)),
+                    text(" · ")
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.3, 0.3, 0.3)),
+                    text(format!("{} installed", installed_count))
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.4, 0.6, 1.0)),
+                ],
             ]
             .spacing(4),
             Space::new().width(Length::Fill),
@@ -1061,43 +1189,86 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
         ..container::Style::default()
     });
 
-    // Table header
-    let table_header = container(
+    // Quick jump section
+    let quick_jump = container(
         row![
-            text("Version")
+            text("Jump to: ")
                 .size(11)
-                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
-                .width(120),
-            text("Status")
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            text("2.4.x")
                 .size(11)
-                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
-                .width(100),
-            text("Release")
+                .color(iced::Color::from_rgb(0.3, 0.7, 0.4)),
+            text(" · ")
                 .size(11)
-                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
-                .width(100),
-            text("Era")
+                .color(iced::Color::from_rgb(0.3, 0.3, 0.3)),
+            text("2.3.x")
                 .size(11)
-                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
-                .width(80),
-            Space::new().width(Length::Fill),
-            text("Actions")
+                .color(iced::Color::from_rgb(0.3, 0.7, 0.4)),
+            text(" · ")
                 .size(11)
-                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
-                .width(100),
-        ]
-        .padding([0, 16]),
-    );
+                .color(iced::Color::from_rgb(0.3, 0.3, 0.3)),
+            text("2.2.x")
+                .size(11)
+                .color(iced::Color::from_rgb(0.3, 0.7, 0.4)),
+            text(" · ")
+                .size(11)
+                .color(iced::Color::from_rgb(0.3, 0.3, 0.3)),
+            text("2.1.x")
+                .size(11)
+                .color(iced::Color::from_rgb(0.3, 0.7, 0.4)),
+            text(" · ")
+                .size(11)
+                .color(iced::Color::from_rgb(0.3, 0.3, 0.3)),
+            text("Legacy")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        ],
+    )
+    .padding([8, 16]);
 
-    column![
-        header_card,
-        Space::new().height(16),
-        table_header,
-        Space::new().height(8),
-        scrollable(version_list).height(400),
-    ]
-    .spacing(0)
+    scrollable(
+        column![
+            header_card,
+            Space::new().height(12),
+            quick_jump,
+            Space::new().height(12),
+            version_list,
+        ]
+    )
     .into()
+}
+
+/// Check if a version string is in the supported range (2.1.x and newer)
+fn is_supported_version(version: &str) -> bool {
+    // Parse version like "2.4.27" or "2.1.0"
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() >= 2 {
+        if let (Ok(major), Ok(minor)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+            return major > 2 || (major == 2 && minor >= 1);
+        }
+    }
+    false
+}
+
+/// Check if an era (like "2.4.x") is supported
+fn is_supported_era(era: &str) -> bool {
+    let parts: Vec<&str> = era.split('.').collect();
+    if parts.len() >= 2 {
+        if let (Ok(major), Ok(minor)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+            return major > 2 || (major == 2 && minor >= 1);
+        }
+    }
+    false
+}
+
+/// Get the era string from a version (e.g., "2.4.27" -> "2.4.x")
+fn get_version_era(version: &str) -> String {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() >= 2 {
+        format!("{}.{}.x", parts[0], parts[1])
+    } else {
+        version.to_string()
+    }
 }
 
 /// Create a version row from CursorVersion data with polished styling
