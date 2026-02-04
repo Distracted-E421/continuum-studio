@@ -169,7 +169,7 @@ impl UpdateChecker {
     /// Create a new update checker for the continuum-studio repo
     pub fn new() -> Self {
         Self {
-            repo: "e421/continuum-studio".to_string(),
+            repo: "Distracted-E421/continuum-studio".to_string(),
             user_agent: format!(
                 "continuum-studio/{} (update-checker)",
                 env!("CARGO_PKG_VERSION")
