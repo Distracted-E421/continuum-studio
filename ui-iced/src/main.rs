@@ -14,6 +14,7 @@ use continuum_studio_iced::core::{
 };
 use continuum_studio_iced::log_capture::{init_logger, LogBuffer, LogEntry};
 use continuum_studio_iced::services::{ServiceConfig, ServiceInfo, ServiceManager, ServiceStatus};
+use continuum_studio_iced::sessions::{CursorSession, SessionTracker};
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
 use continuum_studio_iced::theme::{AppColors, CosmicThemePreset};
 use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo};
@@ -183,6 +184,8 @@ impl ContinuumStudio {
                 colors: AppColors::dark(), // Use dark theme colors by default
                 services,
                 service_manager,
+                session_tracker: SessionTracker::new(),
+                cursor_sessions: Vec::new(),
             },
             startup_task,
         )
@@ -221,6 +224,10 @@ struct ContinuumStudio {
     services: Vec<ServiceInfo>,
     /// Service manager
     service_manager: ServiceManager,
+    /// Session tracker for running Cursor instances
+    session_tracker: SessionTracker,
+    /// Detected Cursor sessions
+    cursor_sessions: Vec<CursorSession>,
 }
 
 /// Available views in the application
@@ -256,6 +263,8 @@ enum Message {
     LogAction(LogMessage),
     /// Service management actions
     ServiceAction(ServiceMessage),
+    /// Session management actions
+    SessionAction(SessionMessage),
     /// Versions updated from Core
     VersionsUpdated(Vec<CursorVersion>),
     /// Core response received
@@ -317,6 +326,15 @@ enum ServiceMessage {
     CopyCommand(String),
     /// Service start result
     ServiceStartResult(String, Result<(), String>),
+}
+
+/// Session management messages
+#[derive(Debug, Clone)]
+enum SessionMessage {
+    /// Scan for running Cursor processes
+    RefreshSessions,
+    /// Sessions found
+    SessionsFound(Vec<CursorSession>),
 }
 
 fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
@@ -580,6 +598,17 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 }
                 // Refresh service status
                 state.services = state.service_manager.get_services();
+            }
+        },
+        Message::SessionAction(session_msg) => match session_msg {
+            SessionMessage::RefreshSessions => {
+                log::info!("Scanning for Cursor sessions...");
+                let sessions = state.session_tracker.scan_processes();
+                state.cursor_sessions = sessions;
+                log::info!("Found {} Cursor sessions", state.cursor_sessions.len());
+            }
+            SessionMessage::SessionsFound(sessions) => {
+                state.cursor_sessions = sessions;
             }
         },
         Message::VersionsUpdated(versions) => {
@@ -1397,17 +1426,23 @@ fn workspace_row(workspace: &Workspace) -> Element<Message> {
     .into()
 }
 
-/// Sessions view with polished styling
-fn view_sessions(_state: &ContinuumStudio) -> Element<Message> {
-    // Header card
+/// Sessions view with detected running Cursor instances
+fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
+    // Header card with refresh button
     let header_card = container(
-        column![
-            text("Sessions").size(20),
-            text("View active and past Cursor sessions")
-                .size(12)
-                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        row![
+            column![
+                text("Sessions").size(20),
+                text(format!("{} running Cursor instances", state.cursor_sessions.len()))
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            ]
+            .spacing(4),
+            Space::new().width(Length::Fill),
+            styled_button("Scan Processes", false)
+                .on_press(Message::SessionAction(SessionMessage::RefreshSessions)),
         ]
-        .spacing(4),
+        .align_y(Alignment::Center),
     )
     .padding(20)
     .width(Length::Fill)
@@ -1423,36 +1458,126 @@ fn view_sessions(_state: &ContinuumStudio) -> Element<Message> {
         ..container::Style::default()
     });
 
-    // Empty state
-    let empty_state = container(
-        column![
-            text("💬").size(48),
-            Space::new().height(16),
-            text("No active sessions").size(16),
-            Space::new().height(8),
-            text("Start a Cursor session to see it here")
-                .size(12)
-                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
-        ]
-        .align_x(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .padding(60)
-    .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(
-            0.12, 0.12, 0.12,
-        ))),
-        border: iced::Border {
-            radius: 12.0.into(),
-            width: 1.0,
-            color: iced::Color::from_rgb(0.18, 0.18, 0.18),
-        },
-        ..container::Style::default()
-    });
-
-    column![header_card, Space::new().height(16), empty_state,]
-        .spacing(0)
+    let content: Element<Message> = if state.cursor_sessions.is_empty() {
+        // Empty state
+        container(
+            column![
+                text("💬").size(48),
+                Space::new().height(16),
+                text("No active sessions detected").size(16),
+                Space::new().height(8),
+                text("Click 'Scan Processes' to detect running Cursor instances")
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            ]
+            .align_x(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding(60)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.12, 0.12, 0.12,
+            ))),
+            border: iced::Border {
+                radius: 12.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.18, 0.18, 0.18),
+            },
+            ..container::Style::default()
+        })
         .into()
+    } else {
+        // Session cards
+        let session_cards: Vec<Element<Message>> = state
+            .cursor_sessions
+            .iter()
+            .map(|session| {
+                let version_text = session.version.as_deref().unwrap_or("Unknown version");
+                let workspace_text = session.workspace.as_deref().unwrap_or("No workspace");
+                let data_dir_text = session.data_dir.as_deref().unwrap_or("Default data dir");
+
+                container(
+                    column![
+                        // Header row with PID and version
+                        row![
+                            text(format!("PID {}", session.pid))
+                                .size(14)
+                                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                            Space::new().width(12),
+                            text(format!("Cursor {}", version_text))
+                                .size(16),
+                            Space::new().width(Length::Fill),
+                            container(
+                                text("Running")
+                                    .size(11)
+                                    .color(iced::Color::from_rgb(0.3, 0.8, 0.3))
+                            )
+                            .padding([4, 8])
+                            .style(|_theme| container::Style {
+                                background: Some(iced::Background::Color(
+                                    iced::Color::from_rgba(0.3, 0.8, 0.3, 0.15)
+                                )),
+                                border: iced::Border {
+                                    radius: 4.0.into(),
+                                    ..Default::default()
+                                },
+                                ..container::Style::default()
+                            }),
+                        ]
+                        .align_y(Alignment::Center),
+                        Space::new().height(8),
+                        // Workspace row
+                        row![
+                            text("Workspace:")
+                                .size(11)
+                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                            Space::new().width(8),
+                            text(workspace_text)
+                                .size(11)
+                                .font(iced::Font::MONOSPACE),
+                        ],
+                        Space::new().height(4),
+                        // Data dir row
+                        row![
+                            text("Data Dir:")
+                                .size(11)
+                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                            Space::new().width(8),
+                            text(data_dir_text)
+                                .size(11)
+                                .font(iced::Font::MONOSPACE)
+                                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                        ],
+                    ]
+                    .padding([16, 20]),
+                )
+                .width(Length::Fill)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(iced::Color::from_rgb(
+                        0.13, 0.13, 0.13,
+                    ))),
+                    border: iced::Border {
+                        radius: 8.0.into(),
+                        width: 1.0,
+                        color: iced::Color::from_rgb(0.2, 0.2, 0.2),
+                    },
+                    ..container::Style::default()
+                })
+                .into()
+            })
+            .collect();
+
+        column(session_cards).spacing(12).into()
+    };
+
+    scrollable(
+        column![
+            header_card,
+            Space::new().height(16),
+            content,
+        ]
+    )
+    .into()
 }
 
 /// Services view - manage backend services
