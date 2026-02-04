@@ -43,6 +43,9 @@ erlang_rs = "2.0"
 # File system
 dirs = "5.0"
 
+# Regex for pattern matching
+regex = "1.10"
+
 # HTTP client for update checking
 ureq = { version = "2.9", features = ["json"] }
 chrono = "0.4"
