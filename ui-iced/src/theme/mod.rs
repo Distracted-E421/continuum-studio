@@ -16,6 +16,148 @@ pub mod vscode;
 // Re-export COSMIC theme types
 pub use cosmic::{CosmicPalette, CosmicThemePreset};
 
+/// Global theme context for easy access in views
+/// 
+/// Use this in view functions to get consistent colors:
+/// ```ignore
+/// let colors = AppColors::current();
+/// text("Hello").color(colors.text_secondary);
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct AppColors {
+    // Primary colors
+    pub background: Color,
+    pub surface: Color,
+    pub surface_elevated: Color,
+    
+    // Text colors
+    pub text_primary: Color,
+    pub text_secondary: Color,
+    pub text_muted: Color,
+    
+    // Semantic colors
+    pub accent: Color,
+    pub accent_hover: Color,
+    pub success: Color,
+    pub warning: Color,
+    pub error: Color,
+    
+    // UI elements
+    pub border: Color,
+    pub border_subtle: Color,
+    pub hover: Color,
+    
+    // Status indicators
+    pub status_connected: Color,
+    pub status_connecting: Color,
+    pub status_disconnected: Color,
+}
+
+impl AppColors {
+    /// Dark theme colors (COSMIC-inspired)
+    pub fn dark() -> Self {
+        Self {
+            background: Color::from_rgb(0.08, 0.08, 0.08),     // #141414
+            surface: Color::from_rgb(0.12, 0.12, 0.12),        // #1f1f1f
+            surface_elevated: Color::from_rgb(0.15, 0.15, 0.15), // #262626
+            
+            text_primary: Color::from_rgb(0.95, 0.95, 0.95),   // #f2f2f2
+            text_secondary: Color::from_rgb(0.6, 0.6, 0.6),    // #999999
+            text_muted: Color::from_rgb(0.4, 0.4, 0.4),        // #666666
+            
+            accent: Color::from_rgb(0.35, 0.55, 0.85),         // #5a8cd9 (blue)
+            accent_hover: Color::from_rgb(0.45, 0.65, 0.95),   // #73a6f2
+            success: Color::from_rgb(0.25, 0.75, 0.35),        // #40bf5a
+            warning: Color::from_rgb(0.85, 0.65, 0.25),        // #d9a640
+            error: Color::from_rgb(0.85, 0.35, 0.35),          // #d95959
+            
+            border: Color::from_rgb(0.22, 0.22, 0.22),         // #383838
+            border_subtle: Color::from_rgb(0.18, 0.18, 0.18),  // #2e2e2e
+            hover: Color::from_rgb(0.2, 0.2, 0.2),             // #333333
+            
+            status_connected: Color::from_rgb(0.25, 0.75, 0.35),
+            status_connecting: Color::from_rgb(0.85, 0.65, 0.25),
+            status_disconnected: Color::from_rgb(0.85, 0.35, 0.35),
+        }
+    }
+    
+    /// Light theme colors
+    pub fn light() -> Self {
+        Self {
+            background: Color::from_rgb(0.98, 0.98, 0.98),
+            surface: Color::WHITE,
+            surface_elevated: Color::from_rgb(0.96, 0.96, 0.96),
+            
+            text_primary: Color::from_rgb(0.1, 0.1, 0.1),
+            text_secondary: Color::from_rgb(0.4, 0.4, 0.4),
+            text_muted: Color::from_rgb(0.6, 0.6, 0.6),
+            
+            accent: Color::from_rgb(0.2, 0.45, 0.8),
+            accent_hover: Color::from_rgb(0.3, 0.55, 0.9),
+            success: Color::from_rgb(0.2, 0.6, 0.3),
+            warning: Color::from_rgb(0.7, 0.5, 0.1),
+            error: Color::from_rgb(0.7, 0.2, 0.2),
+            
+            border: Color::from_rgb(0.85, 0.85, 0.85),
+            border_subtle: Color::from_rgb(0.9, 0.9, 0.9),
+            hover: Color::from_rgb(0.92, 0.92, 0.92),
+            
+            status_connected: Color::from_rgb(0.2, 0.6, 0.3),
+            status_connecting: Color::from_rgb(0.7, 0.5, 0.1),
+            status_disconnected: Color::from_rgb(0.7, 0.2, 0.2),
+        }
+    }
+    
+    /// Create from CosmicPalette
+    pub fn from_cosmic(palette: &CosmicPalette) -> Self {
+        Self {
+            background: palette.bg_color,
+            surface: palette.primary_container_bg,
+            surface_elevated: palette.secondary_container_bg,
+            
+            text_primary: palette.on_bg_color,
+            text_secondary: palette.secondary_text,
+            text_muted: Color::from_rgb(
+                palette.secondary_text.r * 0.7,
+                palette.secondary_text.g * 0.7,
+                palette.secondary_text.b * 0.7,
+            ),
+            
+            accent: palette.accent,
+            accent_hover: Color::from_rgb(
+                (palette.accent.r + 0.1).min(1.0),
+                (palette.accent.g + 0.1).min(1.0),
+                (palette.accent.b + 0.1).min(1.0),
+            ),
+            success: palette.success,
+            warning: palette.warning,
+            error: palette.destructive,
+            
+            border: palette.divider,
+            border_subtle: Color::from_rgb(
+                palette.divider.r * 0.8,
+                palette.divider.g * 0.8,
+                palette.divider.b * 0.8,
+            ),
+            hover: Color::from_rgb(
+                (palette.button_bg.r + 0.05).min(1.0),
+                (palette.button_bg.g + 0.05).min(1.0),
+                (palette.button_bg.b + 0.05).min(1.0),
+            ),
+            
+            status_connected: palette.success,
+            status_connecting: palette.warning,
+            status_disconnected: palette.destructive,
+        }
+    }
+}
+
+impl Default for AppColors {
+    fn default() -> Self {
+        Self::dark()
+    }
+}
+
 /// Semantic color tokens matching VS Code's color system
 /// These can be translated to both iced's built-in themes and COSMIC themes
 #[derive(Debug, Clone)]

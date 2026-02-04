@@ -14,7 +14,7 @@ use continuum_studio_iced::core::{
 };
 use continuum_studio_iced::log_capture::{init_logger, LogBuffer, LogEntry};
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
-use continuum_studio_iced::theme::CosmicThemePreset;
+use continuum_studio_iced::theme::{AppColors, CosmicThemePreset};
 use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo};
 
 /// Async task to check for updates
@@ -138,6 +138,7 @@ impl ContinuumStudio {
                 checking_updates: check_updates,
                 log_buffer,
                 log_filter: log::Level::Info,
+                colors: AppColors::dark(), // Use dark theme colors by default
             },
             if check_updates {
                 Task::perform(check_for_updates_task(), Message::UpdateCheckResult)
@@ -174,6 +175,8 @@ struct ContinuumStudio {
     log_buffer: LogBuffer,
     /// Current log filter level
     log_filter: log::Level,
+    /// Theme colors for consistent styling
+    colors: AppColors,
 }
 
 /// Available views in the application
@@ -712,12 +715,14 @@ fn nav_button(label: &'static str, view: View, current: View) -> Element<'static
 
 /// Dashboard view with cards
 fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
+    let colors = &state.colors;
+    
     // Status card
     let status_card = card(
         column![
             text("System Status")
                 .size(14)
-                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                .color(colors.text_secondary),
             Space::new().height(12),
             row![
                 text("Core Connection:").size(13),
@@ -730,8 +735,9 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
                 })
                 .size(13)
                 .color(match state.connection_state {
-                    ConnectionState::Connected => iced::Color::from_rgb(0.25, 0.75, 0.35),
-                    _ => iced::Color::from_rgb(0.75, 0.55, 0.25),
+                    ConnectionState::Connected => colors.status_connected,
+                    ConnectionState::Connecting | ConnectionState::Reconnecting { .. } => colors.status_connecting,
+                    ConnectionState::Disconnected => colors.status_disconnected,
                 }),
             ],
             Space::new().height(4),
@@ -749,7 +755,7 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
         column![
             text("Quick Actions")
                 .size(14)
-                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                .color(colors.text_secondary),
             Space::new().height(12),
             row![
                 styled_button("Launch Cursor", true).on_press(Message::CursorAction(
@@ -768,7 +774,7 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
         text("Dashboard").size(26),
         text("Welcome back to Continuum Studio")
             .size(14)
-            .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+            .color(colors.text_secondary),
         Space::new().height(24),
         row![status_card, Space::new().width(16), actions_card,],
     ]
