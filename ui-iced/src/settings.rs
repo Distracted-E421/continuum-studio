@@ -34,6 +34,10 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub auto_connect: bool,
     
+    /// Auto-start services (Core, dialog) if not running
+    #[serde(default = "default_true")]
+    pub auto_start_services: bool,
+    
     /// Window size (width, height)
     #[serde(default = "default_window_size")]
     pub window_size: (u32, u32),
@@ -93,6 +97,7 @@ impl Default for Settings {
             default_cursor_version: None,
             notify_new_versions: true,
             auto_connect: true,
+            auto_start_services: true,
             window_size: default_window_size(),
             updates: UpdateSettings::default(),
         }

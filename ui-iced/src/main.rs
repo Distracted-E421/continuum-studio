@@ -13,6 +13,7 @@ use continuum_studio_iced::core::{
     Workspace, DEFAULT_SOCKET_PATH,
 };
 use continuum_studio_iced::log_capture::{init_logger, LogBuffer, LogEntry};
+use continuum_studio_iced::services::{ServiceConfig, ServiceInfo, ServiceManager, ServiceStatus};
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
 use continuum_studio_iced::theme::{AppColors, CosmicThemePreset};
 use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo};
@@ -124,6 +125,47 @@ impl ContinuumStudio {
         // Check if we should check for updates on startup
         let check_updates = settings.updates.should_check();
 
+        // Initialize service manager and get initial service status
+        let service_manager = ServiceManager::new(ServiceConfig::default());
+        let services = service_manager.get_services();
+
+        // Check if Core is not running - we'll auto-start it if enabled
+        let core_running = service_manager.is_core_running();
+        let should_auto_start = settings.auto_start_services && !core_running;
+
+        if should_auto_start {
+            log::info!("Core not running - will attempt auto-start");
+        } else if !settings.auto_start_services {
+            log::info!("Auto-start services disabled in settings");
+        }
+
+        // Build startup tasks
+        let mut tasks = Vec::new();
+
+        if check_updates {
+            tasks.push(Task::perform(check_for_updates_task(), Message::UpdateCheckResult));
+        }
+
+        // Auto-start Core if not running
+        if should_auto_start {
+            tasks.push(Task::perform(
+                async {
+                    log::info!("Auto-starting Elixir Core...");
+                    continuum_studio_iced::services::start_core_auto().await
+                },
+                |result| Message::ServiceAction(ServiceMessage::ServiceStartResult(
+                    "Elixir Core".to_string(),
+                    result,
+                )),
+            ));
+        }
+
+        let startup_task = if tasks.is_empty() {
+            Task::none()
+        } else {
+            Task::batch(tasks)
+        };
+
         (
             Self {
                 settings,
@@ -139,12 +181,10 @@ impl ContinuumStudio {
                 log_buffer,
                 log_filter: log::Level::Info,
                 colors: AppColors::dark(), // Use dark theme colors by default
+                services,
+                service_manager,
             },
-            if check_updates {
-                Task::perform(check_for_updates_task(), Message::UpdateCheckResult)
-            } else {
-                Task::none()
-            },
+            startup_task,
         )
     }
 }
@@ -177,6 +217,10 @@ struct ContinuumStudio {
     log_filter: log::Level,
     /// Theme colors for consistent styling
     colors: AppColors,
+    /// Service information
+    services: Vec<ServiceInfo>,
+    /// Service manager
+    service_manager: ServiceManager,
 }
 
 /// Available views in the application
@@ -186,6 +230,7 @@ enum View {
     CursorVersions,
     Workspaces,
     Sessions,
+    Services,
     Settings,
     Logs,
 }
@@ -209,6 +254,8 @@ enum Message {
     WorkspaceAction(WorkspaceMessage),
     /// Log viewer actions
     LogAction(LogMessage),
+    /// Service management actions
+    ServiceAction(ServiceMessage),
     /// Versions updated from Core
     VersionsUpdated(Vec<CursorVersion>),
     /// Core response received
@@ -224,6 +271,7 @@ enum Message {
 enum SettingsMessage {
     SaveSettings,
     ToggleAutoConnect,
+    ToggleAutoStartServices,
     ToggleNotifications,
     SetUpdateChannel(UpdateChannel),
     ToggleAutoCheckUpdates,
@@ -254,6 +302,21 @@ enum LogMessage {
     SetFilter(log::Level),
     CopyLogs,
     ClearLogs,
+}
+
+/// Service management messages
+#[derive(Debug, Clone)]
+enum ServiceMessage {
+    /// Refresh service status
+    RefreshServices,
+    /// Start a specific service
+    StartService(String),
+    /// Start all services
+    StartAllServices,
+    /// Copy command to clipboard
+    CopyCommand(String),
+    /// Service start result
+    ServiceStartResult(String, Result<(), String>),
 }
 
 fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
@@ -326,6 +389,10 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             }
             SettingsMessage::ToggleAutoConnect => {
                 state.settings.auto_connect = !state.settings.auto_connect;
+                state.settings_dirty = true;
+            }
+            SettingsMessage::ToggleAutoStartServices => {
+                state.settings.auto_start_services = !state.settings.auto_start_services;
                 state.settings_dirty = true;
             }
             SettingsMessage::ToggleNotifications => {
@@ -469,6 +536,52 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 state.log_buffer.clear();
             }
         },
+        Message::ServiceAction(service_msg) => match service_msg {
+            ServiceMessage::RefreshServices => {
+                state.services = state.service_manager.get_services();
+            }
+            ServiceMessage::StartService(name) => {
+                log::info!("Starting service: {}", name);
+                let name_clone = name.clone();
+                if name.contains("Core") {
+                    return Task::perform(
+                        async move {
+                            continuum_studio_iced::services::start_core_auto().await
+                        },
+                        move |result| Message::ServiceAction(ServiceMessage::ServiceStartResult(name_clone, result)),
+                    );
+                } else if name.contains("Dialog") {
+                    return Task::perform(
+                        async move {
+                            continuum_studio_iced::services::start_dialog_auto().await
+                        },
+                        move |result| Message::ServiceAction(ServiceMessage::ServiceStartResult(name_clone, result)),
+                    );
+                }
+            }
+            ServiceMessage::StartAllServices => {
+                log::info!("Starting all services");
+                return Task::perform(
+                    async move {
+                        let config = ServiceConfig::default();
+                        let manager = ServiceManager::new(config);
+                        let _ = manager.start_all().await;
+                    },
+                    |_| Message::ServiceAction(ServiceMessage::RefreshServices),
+                );
+            }
+            ServiceMessage::CopyCommand(cmd) => {
+                return iced::clipboard::write(cmd);
+            }
+            ServiceMessage::ServiceStartResult(name, result) => {
+                match result {
+                    Ok(()) => log::info!("Service {} started successfully", name),
+                    Err(e) => log::error!("Failed to start {}: {}", name, e),
+                }
+                // Refresh service status
+                state.services = state.service_manager.get_services();
+            }
+        },
         Message::VersionsUpdated(versions) => {
             state.versions = versions;
         }
@@ -559,6 +672,7 @@ fn view(state: &ContinuumStudio) -> Element<Message> {
         View::CursorVersions => view_cursor_versions(state),
         View::Workspaces => view_workspaces(state),
         View::Sessions => view_sessions(state),
+        View::Services => view_services(state),
         View::Settings => view_settings(state),
         View::Logs => view_logs(state),
     };
@@ -624,6 +738,7 @@ fn sidebar(state: &ContinuumStudio) -> Element<Message> {
         nav_button("📦  Versions", View::CursorVersions, current),
         nav_button("📁  Workspaces", View::Workspaces, current),
         nav_button("💬  Sessions", View::Sessions, current),
+        nav_button("🔧  Services", View::Services, current),
         Space::new().height(Length::Fill),
         nav_button("📋  Logs", View::Logs, current),
         nav_button("⚙️  Settings", View::Settings, current),
@@ -1340,6 +1455,243 @@ fn view_sessions(_state: &ContinuumStudio) -> Element<Message> {
         .into()
 }
 
+/// Services view - manage backend services
+fn view_services(state: &ContinuumStudio) -> Element<Message> {
+    // Header card
+    let header_card = container(
+        row![
+            column![
+                text("Services").size(20),
+                text("Manage backend services for Continuum Studio")
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            ]
+            .spacing(4),
+            Space::new().width(Length::Fill),
+            styled_button("Refresh", false)
+                .on_press(Message::ServiceAction(ServiceMessage::RefreshServices)),
+            Space::new().width(8),
+            styled_button("Start All", true)
+                .on_press(Message::ServiceAction(ServiceMessage::StartAllServices)),
+        ]
+        .align_y(Alignment::Center),
+    )
+    .padding(20)
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.15, 0.15, 0.15,
+        ))),
+        border: iced::Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.22, 0.22, 0.22),
+        },
+        ..container::Style::default()
+    });
+
+    // Service cards
+    let service_cards: Vec<Element<Message>> = state
+        .services
+        .iter()
+        .map(|service| {
+            let status_color = match service.status {
+                ServiceStatus::Running => iced::Color::from_rgb(0.3, 0.8, 0.3),
+                ServiceStatus::Stopped => iced::Color::from_rgb(0.8, 0.3, 0.3),
+                ServiceStatus::Starting => iced::Color::from_rgb(0.8, 0.7, 0.2),
+                ServiceStatus::Failed => iced::Color::from_rgb(0.9, 0.2, 0.2),
+                ServiceStatus::Unknown => iced::Color::from_rgb(0.5, 0.5, 0.5),
+            };
+
+            let status_indicator = container(text(""))
+                .width(8)
+                .height(8)
+                .style(move |_theme| container::Style {
+                    background: Some(iced::Background::Color(status_color)),
+                    border: iced::Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    },
+                    ..container::Style::default()
+                });
+
+            let can_start = matches!(service.status, ServiceStatus::Stopped | ServiceStatus::Failed);
+
+            container(
+                column![
+                    // Title row with status
+                    row![
+                        status_indicator,
+                        Space::new().width(12),
+                        text(&service.name).size(16),
+                        Space::new().width(12),
+                        text(format!("{}", service.status))
+                            .size(12)
+                            .color(status_color),
+                        Space::new().width(Length::Fill),
+                        if can_start {
+                            container(
+                                styled_button("Start", true)
+                                    .on_press(Message::ServiceAction(ServiceMessage::StartService(
+                                        service.name.clone(),
+                                    )))
+                            )
+                        } else {
+                            container(
+                                styled_button("Running", false)
+                            )
+                        },
+                    ]
+                    .align_y(Alignment::Center),
+                    Space::new().height(8),
+                    // Description
+                    text(&service.description)
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    Space::new().height(12),
+                    // Command box
+                    container(
+                        row![
+                            column![
+                                text("Start command:")
+                                    .size(10)
+                                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                                Space::new().height(4),
+                                text(&service.start_command)
+                                    .size(11)
+                                    .font(iced::Font::MONOSPACE)
+                                    .color(iced::Color::from_rgb(0.7, 0.7, 0.7)),
+                            ],
+                            Space::new().width(Length::Fill),
+                            small_button("Copy", false)
+                                .on_press(Message::ServiceAction(ServiceMessage::CopyCommand(
+                                    service.start_command.clone(),
+                                ))),
+                        ]
+                        .align_y(Alignment::Center)
+                        .padding([8, 12]),
+                    )
+                    .width(Length::Fill)
+                    .style(|_theme| container::Style {
+                        background: Some(iced::Background::Color(iced::Color::from_rgb(
+                            0.08, 0.08, 0.08,
+                        ))),
+                        border: iced::Border {
+                            radius: 6.0.into(),
+                            width: 1.0,
+                            color: iced::Color::from_rgb(0.15, 0.15, 0.15),
+                        },
+                        ..container::Style::default()
+                    }),
+                ]
+                .padding([16, 20]),
+            )
+            .width(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.13, 0.13, 0.13,
+                ))),
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.2, 0.2, 0.2),
+                },
+                ..container::Style::default()
+            })
+            .into()
+        })
+        .collect();
+
+    // Quick commands section
+    let quick_commands = container(
+        column![
+            text("Quick Commands").size(14),
+            Space::new().height(12),
+            // Core interactive
+            command_row(
+                "Start Core (Interactive)",
+                "cd /home/e421/continuum-studio/core/studio_core && iex -S mix",
+            ),
+            Space::new().height(8),
+            // Dialog daemon
+            command_row(
+                "Start Dialog Daemon", 
+                "synapsix-dialog-daemon --web-port 8080 &",
+            ),
+            Space::new().height(8),
+            // Check dialog
+            command_row(
+                "Check Dialog Status",
+                "synapsix-dialog-cli ping",
+            ),
+        ]
+        .padding([16, 20]),
+    )
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.12, 0.12, 0.12,
+        ))),
+        border: iced::Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.18, 0.18, 0.18),
+        },
+        ..container::Style::default()
+    });
+
+    let services_list = column(service_cards).spacing(12);
+
+    scrollable(
+        column![
+            header_card,
+            Space::new().height(16),
+            services_list,
+            Space::new().height(16),
+            quick_commands,
+        ]
+    )
+    .into()
+}
+
+/// Helper for command rows in quick commands section
+fn command_row<'a>(label: &'a str, command: &'a str) -> Element<'a, Message> {
+    container(
+        row![
+            column![
+                text(label)
+                    .size(11)
+                    .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                Space::new().height(2),
+                text(command)
+                    .size(10)
+                    .font(iced::Font::MONOSPACE)
+                    .color(iced::Color::from_rgb(0.7, 0.7, 0.7)),
+            ],
+            Space::new().width(Length::Fill),
+            small_button("Copy", false)
+                .on_press(Message::ServiceAction(ServiceMessage::CopyCommand(
+                    command.to_string(),
+                ))),
+        ]
+        .align_y(Alignment::Center)
+        .padding([6, 10]),
+    )
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.08, 0.08, 0.08,
+        ))),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.15, 0.15, 0.15),
+        },
+        ..container::Style::default()
+    })
+    .into()
+}
+
 /// Logs view for in-app debugging
 fn view_logs(state: &ContinuumStudio) -> Element<Message> {
     let entries = state.log_buffer.entries_filtered(state.log_filter);
@@ -1572,6 +1924,13 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
                 toggle_button(
                     state.settings.auto_connect,
                     SettingsMessage::ToggleAutoConnect
+                )
+            ),
+            settings_row(
+                "Auto-start services",
+                toggle_button(
+                    state.settings.auto_start_services,
+                    SettingsMessage::ToggleAutoStartServices
                 )
             ),
             settings_row(
