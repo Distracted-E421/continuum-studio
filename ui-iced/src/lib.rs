@@ -5,6 +5,7 @@
 
 pub mod core;
 pub mod log_capture;
+pub mod monitoring;
 pub mod services;
 pub mod sessions;
 pub mod settings;
@@ -14,6 +15,7 @@ pub mod widgets;
 
 // Re-export common types
 pub use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, Session, InstalledVersion, VersionStats, Workspace, GitStats, WorkspaceVersion};
+pub use monitoring::{SessionMetrics, SessionMonitor, SessionHistory, HealthStatus, DashboardData};
 pub use services::{ServiceConfig, ServiceManager, ServiceInfo, ServiceStatus};
 pub use sessions::{CursorSession, SessionTracker, SharedCursorSettings};
 pub use settings::{Settings, ThemePreference, CosmicPreset};

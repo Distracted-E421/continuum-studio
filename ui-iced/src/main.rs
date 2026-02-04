@@ -14,6 +14,7 @@ use continuum_studio_iced::core::{
 };
 use continuum_studio_iced::log_capture::{init_logger, LogBuffer, LogEntry};
 use continuum_studio_iced::services::{ServiceConfig, ServiceInfo, ServiceManager, ServiceStatus};
+use continuum_studio_iced::monitoring::{SessionMonitor, SessionMetrics, HealthStatus, DashboardData};
 use continuum_studio_iced::sessions::{CursorSession, SessionTracker};
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
 use continuum_studio_iced::theme::{AppColors, CosmicThemePreset};
@@ -186,6 +187,9 @@ impl ContinuumStudio {
                 service_manager,
                 session_tracker: SessionTracker::new(),
                 cursor_sessions: Vec::new(),
+                session_monitor: SessionMonitor::new(),
+                session_metrics: Vec::new(),
+                dashboard_data: None,
             },
             startup_task,
         )
@@ -228,6 +232,12 @@ struct ContinuumStudio {
     session_tracker: SessionTracker,
     /// Detected Cursor sessions
     cursor_sessions: Vec<CursorSession>,
+    /// Session monitor for real-time metrics
+    session_monitor: SessionMonitor,
+    /// Latest session metrics
+    session_metrics: Vec<SessionMetrics>,
+    /// Dashboard aggregate data
+    dashboard_data: Option<DashboardData>,
 }
 
 /// Available views in the application
@@ -335,6 +345,10 @@ enum SessionMessage {
     RefreshSessions,
     /// Sessions found
     SessionsFound(Vec<CursorSession>),
+    /// Collect metrics for all sessions
+    CollectMetrics,
+    /// Metrics collected
+    MetricsCollected(Vec<SessionMetrics>),
 }
 
 fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
@@ -604,11 +618,27 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             SessionMessage::RefreshSessions => {
                 log::info!("Scanning for Cursor sessions...");
                 let sessions = state.session_tracker.scan_processes();
-                state.cursor_sessions = sessions;
+                state.cursor_sessions = sessions.clone();
                 log::info!("Found {} Cursor sessions", state.cursor_sessions.len());
+                
+                // Also collect metrics immediately
+                let pids: Vec<u32> = sessions.iter().map(|s| s.pid).collect();
+                let metrics = state.session_monitor.collect_all_metrics(&pids);
+                state.session_metrics = metrics.clone();
+                state.dashboard_data = Some(DashboardData::from_metrics(&metrics));
             }
             SessionMessage::SessionsFound(sessions) => {
                 state.cursor_sessions = sessions;
+            }
+            SessionMessage::CollectMetrics => {
+                let pids: Vec<u32> = state.cursor_sessions.iter().map(|s| s.pid).collect();
+                let metrics = state.session_monitor.collect_all_metrics(&pids);
+                state.session_metrics = metrics.clone();
+                state.dashboard_data = Some(DashboardData::from_metrics(&metrics));
+            }
+            SessionMessage::MetricsCollected(metrics) => {
+                state.session_metrics = metrics.clone();
+                state.dashboard_data = Some(DashboardData::from_metrics(&metrics));
             }
         },
         Message::VersionsUpdated(versions) => {
@@ -1238,6 +1268,61 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
     .into()
 }
 
+/// Build a metrics row for a session (helper function to avoid type inference issues)
+fn build_metrics_row(metrics: Option<&SessionMetrics>) -> Element<'static, Message> {
+    if let Some(m) = metrics {
+        let cpu_color = if m.cpu_percent > 50.0 {
+            iced::Color::from_rgb(0.9, 0.7, 0.2)
+        } else {
+            iced::Color::from_rgb(0.4, 0.6, 1.0)
+        };
+        let state_text = match m.state {
+            'R' => "Running",
+            'S' => "Sleeping",
+            'D' => "Disk Wait",
+            'Z' => "Zombie",
+            'T' => "Stopped",
+            _ => "Unknown",
+        };
+        let state_color = if m.state == 'R' {
+            iced::Color::from_rgb(0.3, 0.8, 0.4)
+        } else {
+            iced::Color::from_rgb(0.5, 0.5, 0.5)
+        };
+
+        row![
+            column![
+                text("CPU").size(9).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                text(format!("{:.1}%", m.cpu_percent)).size(14).color(cpu_color),
+            ].width(Length::FillPortion(1)),
+            column![
+                text("Memory").size(9).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                text(m.memory_human.clone()).size(14).color(iced::Color::from_rgb(0.6, 0.4, 0.9)),
+            ].width(Length::FillPortion(1)),
+            column![
+                text("Threads").size(9).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                text(format!("{}", m.thread_count)).size(14).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            ].width(Length::FillPortion(1)),
+            column![
+                text("FDs").size(9).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                text(format!("{}", m.fd_count)).size(14).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            ].width(Length::FillPortion(1)),
+            column![
+                text("State").size(9).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                text(state_text).size(12).color(state_color),
+            ].width(Length::FillPortion(1)),
+        ]
+        .into()
+    } else {
+        row![
+            text("No metrics yet - click 'Refresh Metrics'")
+                .size(11)
+                .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+        ]
+        .into()
+    }
+}
+
 /// Check if a version string is in the supported range (2.1.x and newer)
 fn is_supported_version(version: &str) -> bool {
     // Parse version like "2.4.27" or "2.1.0"
@@ -1597,19 +1682,22 @@ fn workspace_row(workspace: &Workspace) -> Element<Message> {
     .into()
 }
 
-/// Sessions view with detected running Cursor instances
+/// Sessions view with detected running Cursor instances and real-time monitoring
 fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
-    // Header card with refresh button
+    // Header card with stats and controls
     let header_card = container(
         row![
             column![
-                text("Sessions").size(20),
+                text("Session Monitor").size(20),
                 text(format!("{} running Cursor instances", state.cursor_sessions.len()))
                     .size(12)
                     .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
             ]
             .spacing(4),
             Space::new().width(Length::Fill),
+            styled_button("Refresh Metrics", false)
+                .on_press(Message::SessionAction(SessionMessage::CollectMetrics)),
+            Space::new().width(8),
             styled_button("Scan Processes", false)
                 .on_press(Message::SessionAction(SessionMessage::RefreshSessions)),
         ]
@@ -1629,11 +1717,127 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
         ..container::Style::default()
     });
 
+    // Dashboard overview cards (if we have data)
+    let dashboard_row: Element<Message> = if let Some(ref dash) = state.dashboard_data {
+        row![
+            // Health status card
+            container(
+                column![
+                    text("Health").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    Space::new().height(8),
+                    row![
+                        container(text(format!("{}", dash.healthy_count)).size(24).color(iced::Color::from_rgb(0.3, 0.8, 0.4)))
+                            .padding([4, 8]),
+                        text("healthy").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    ].align_y(Alignment::End),
+                    text(
+                        if dash.warning_count > 0 && dash.critical_count > 0 {
+                            format!("{} warn, {} crit", dash.warning_count, dash.critical_count)
+                        } else if dash.warning_count > 0 {
+                            format!("{} warning", dash.warning_count)
+                        } else if dash.critical_count > 0 {
+                            format!("{} critical", dash.critical_count)
+                        } else {
+                            String::new()
+                        }
+                    )
+                    .size(10)
+                    .color(if dash.critical_count > 0 {
+                        iced::Color::from_rgb(0.9, 0.3, 0.3)
+                    } else if dash.warning_count > 0 {
+                        iced::Color::from_rgb(0.9, 0.7, 0.2)
+                    } else {
+                        iced::Color::from_rgb(0.5, 0.5, 0.5)
+                    }),
+                ],
+            )
+            .padding(16)
+            .width(Length::FillPortion(1))
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.14, 0.12))),
+                border: iced::Border { radius: 8.0.into(), width: 1.0, color: iced::Color::from_rgb(0.2, 0.25, 0.2) },
+                ..container::Style::default()
+            }),
+            Space::new().width(12),
+            // CPU card
+            container(
+                column![
+                    text("CPU").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    Space::new().height(8),
+                    row![
+                        text(format!("{:.1}%", dash.total_cpu)).size(24).color(
+                            if dash.total_cpu > 80.0 { iced::Color::from_rgb(0.9, 0.3, 0.3) }
+                            else if dash.total_cpu > 40.0 { iced::Color::from_rgb(0.9, 0.7, 0.2) }
+                            else { iced::Color::from_rgb(0.4, 0.6, 1.0) }
+                        ),
+                    ],
+                    text("total usage").size(10).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                ],
+            )
+            .padding(16)
+            .width(Length::FillPortion(1))
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.12, 0.14))),
+                border: iced::Border { radius: 8.0.into(), width: 1.0, color: iced::Color::from_rgb(0.2, 0.2, 0.25) },
+                ..container::Style::default()
+            }),
+            Space::new().width(12),
+            // Memory card
+            container(
+                column![
+                    text("Memory").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    Space::new().height(8),
+                    row![
+                        text(format!("{:.0} MB", dash.total_memory_mb)).size(24).color(
+                            if dash.total_memory_mb > 8000.0 { iced::Color::from_rgb(0.9, 0.3, 0.3) }
+                            else if dash.total_memory_mb > 4000.0 { iced::Color::from_rgb(0.9, 0.7, 0.2) }
+                            else { iced::Color::from_rgb(0.6, 0.4, 0.9) }
+                        ),
+                    ],
+                    text("total allocated").size(10).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                ],
+            )
+            .padding(16)
+            .width(Length::FillPortion(1))
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(0.13, 0.12, 0.14))),
+                border: iced::Border { radius: 8.0.into(), width: 1.0, color: iced::Color::from_rgb(0.22, 0.2, 0.25) },
+                ..container::Style::default()
+            }),
+            Space::new().width(12),
+            // Threads/FDs card
+            container(
+                column![
+                    text("Resources").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    Space::new().height(8),
+                    row![
+                        text(format!("{}", dash.total_threads)).size(20).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                        text(" threads").size(10).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                    ].align_y(Alignment::End),
+                    row![
+                        text(format!("{}", dash.total_fds)).size(14).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                        text(" file descriptors").size(10).color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                    ].align_y(Alignment::End),
+                ],
+            )
+            .padding(16)
+            .width(Length::FillPortion(1))
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.12, 0.12))),
+                border: iced::Border { radius: 8.0.into(), width: 1.0, color: iced::Color::from_rgb(0.18, 0.18, 0.18) },
+                ..container::Style::default()
+            }),
+        ]
+        .into()
+    } else {
+        Space::new().height(0).into()
+    };
+
     let content: Element<Message> = if state.cursor_sessions.is_empty() {
         // Empty state
         container(
             column![
-                text("💬").size(48),
+                text("📊").size(48),
                 Space::new().height(16),
                 text("No active sessions detected").size(16),
                 Space::new().height(8),
@@ -1658,35 +1862,45 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
         })
         .into()
     } else {
-        // Session cards
+        // Session cards with metrics
         let session_cards: Vec<Element<Message>> = state
             .cursor_sessions
             .iter()
             .map(|session| {
-                let version_text = session.version.as_deref().unwrap_or("Unknown version");
+                let version_text = session.version.as_deref().unwrap_or("Unknown");
                 let workspace_text = session.workspace.as_deref().unwrap_or("No workspace");
-                let data_dir_text = session.data_dir.as_deref().unwrap_or("Default data dir");
+
+                // Find metrics for this session
+                let metrics = state.session_metrics.iter().find(|m| m.pid == session.pid);
+
+                // Determine health status and colors
+                let (health_text, health_color) = if let Some(m) = metrics {
+                    let (r, g, b) = m.health.color();
+                    (m.health.as_str(), iced::Color::from_rgb(r, g, b))
+                } else {
+                    ("Unknown", iced::Color::from_rgb(0.5, 0.5, 0.5))
+                };
 
                 container(
                     column![
-                        // Header row with PID and version
+                        // Header row with PID, version, and health badge
                         row![
                             text(format!("PID {}", session.pid))
-                                .size(14)
-                                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                                .size(12)
+                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
                             Space::new().width(12),
                             text(format!("Cursor {}", version_text))
-                                .size(16),
+                                .size(14),
                             Space::new().width(Length::Fill),
                             container(
-                                text("Running")
-                                    .size(11)
-                                    .color(iced::Color::from_rgb(0.3, 0.8, 0.3))
+                                text(health_text)
+                                    .size(10)
+                                    .color(health_color)
                             )
                             .padding([4, 8])
-                            .style(|_theme| container::Style {
+                            .style(move |_theme| container::Style {
                                 background: Some(iced::Background::Color(
-                                    iced::Color::from_rgba(0.3, 0.8, 0.3, 0.15)
+                                    iced::Color::from_rgba(health_color.r, health_color.g, health_color.b, 0.15)
                                 )),
                                 border: iced::Border {
                                     radius: 4.0.into(),
@@ -1697,28 +1911,14 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
                         ]
                         .align_y(Alignment::Center),
                         Space::new().height(8),
-                        // Workspace row
-                        row![
-                            text("Workspace:")
-                                .size(11)
-                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
-                            Space::new().width(8),
-                            text(workspace_text)
-                                .size(11)
-                                .font(iced::Font::MONOSPACE),
-                        ],
-                        Space::new().height(4),
-                        // Data dir row
-                        row![
-                            text("Data Dir:")
-                                .size(11)
-                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
-                            Space::new().width(8),
-                            text(data_dir_text)
-                                .size(11)
-                                .font(iced::Font::MONOSPACE)
-                                .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
-                        ],
+                        // Workspace
+                        text(workspace_text)
+                            .size(11)
+                            .font(iced::Font::MONOSPACE)
+                            .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                        Space::new().height(12),
+                        // Metrics display
+                        build_metrics_row(metrics),
                     ]
                     .padding([16, 20]),
                 )
@@ -1744,6 +1944,8 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
     scrollable(
         column![
             header_card,
+            Space::new().height(12),
+            dashboard_row,
             Space::new().height(16),
             content,
         ]
