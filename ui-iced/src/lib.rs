@@ -20,4 +20,4 @@ pub use services::{ServiceConfig, ServiceManager, ServiceInfo, ServiceStatus};
 pub use sessions::{CursorSession, SessionTracker, SharedCursorSettings};
 pub use settings::{Settings, ThemePreference, CosmicPreset};
 pub use theme::{AppColors, SemanticColors, CosmicPalette, CosmicThemePreset};
-pub use updater::{UpdateChannel, UpdateSettings, UpdateInfo, UpdateChecker};
+pub use updater::{UpdateChannel, UpdateSettings, UpdateInfo, UpdateChecker, ForgeType, InstallationType, SelfUpdater};

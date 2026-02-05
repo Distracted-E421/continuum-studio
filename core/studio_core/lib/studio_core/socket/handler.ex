@@ -29,6 +29,7 @@ defmodule StudioCore.Socket.Handler do
   @known_commands ~w(
     ping harness_start harness_stop state_set state_get agent_message
     versions_list versions_download versions_run versions_refresh
+    versions_uninstall versions_batch_uninstall versions_disk_usage versions_disk_usage_all
     workspaces_list workspaces_refresh
     auth_version_status auth_list_statuses auth_all_statuses
     auth_extract auth_apply auth_list_profiles
@@ -301,6 +302,50 @@ defmodule StudioCore.Socket.Handler do
         send_event(state.socket, {:versions_stats, stats})
       {:error, reason} ->
         send_error(state.socket, "Failed to get stats: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  # Version cleanup commands
+
+  defp handle_command(:versions_uninstall, %{version: version} = params, state) do
+    opts = if params[:remove_data], do: [remove_data: true], else: []
+    case StudioCore.VersionRegistry.uninstall(version, opts) do
+      {:ok, :uninstalled} ->
+        send_event(state.socket, {:version_uninstalled, %{version: version, remove_data: !!params[:remove_data]}})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to uninstall #{version}: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:versions_batch_uninstall, %{versions: versions} = params, state) do
+    opts = if params[:remove_data], do: [remove_data: true], else: []
+    case StudioCore.VersionRegistry.batch_uninstall(versions, opts) do
+      {:ok, results} ->
+        send_event(state.socket, {:versions_batch_uninstalled, %{results: results}})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to batch uninstall: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:versions_disk_usage, %{version: version}, state) do
+    case StudioCore.VersionRegistry.disk_usage_detailed(version) do
+      {:ok, usage} ->
+        send_event(state.socket, {:version_disk_usage, usage})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to get disk usage: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:versions_disk_usage_all, _params, state) do
+    case StudioCore.VersionRegistry.disk_usage_all() do
+      {:ok, usage} ->
+        send_event(state.socket, {:versions_disk_usage_all, usage})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to get disk usage: #{inspect(reason)}")
     end
     {:noreply, state}
   end
@@ -631,6 +676,11 @@ defmodule StudioCore.Socket.Handler do
     %{version: version, error: inspect(reason)}
   end
   defp event_data({:version_running, info}) when is_map(info), do: info
+  # Version cleanup events
+  defp event_data({:version_uninstalled, data}) when is_map(data), do: data
+  defp event_data({:versions_batch_uninstalled, data}) when is_map(data), do: data
+  defp event_data({:version_disk_usage, data}) when is_map(data), do: data
+  defp event_data({:versions_disk_usage_all, data}) when is_map(data), do: data
   # Workspace events
   defp event_data({:workspaces_list, workspaces}) when is_list(workspaces), do: workspaces
   defp event_data({:workspace_registered, workspace}) when is_map(workspace), do: workspace

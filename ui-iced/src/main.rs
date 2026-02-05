@@ -19,7 +19,7 @@ use continuum_studio_iced::monitoring::{SessionMonitor, SessionMetrics, HealthSt
 use continuum_studio_iced::sessions::{CursorSession, SessionTracker};
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
 use continuum_studio_iced::theme::{AppColors, CosmicThemePreset};
-use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo};
+use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo, ForgeType, InstallationType, SelfUpdater};
 
 /// Async task to check for updates
 async fn check_for_updates_task() -> Result<Option<UpdateInfo>, String> {
@@ -253,8 +253,10 @@ enum View {
     Dashboard,
     CursorVersions,
     Workspaces,
+    Auth,
     Sessions,
     Services,
+    Storage,
     Settings,
     Logs,
 }
@@ -282,6 +284,8 @@ enum Message {
     ServiceAction(ServiceMessage),
     /// Session management actions
     SessionAction(SessionMessage),
+    /// Auth management actions
+    AuthAction(AuthMessage),
     /// Versions updated from Core
     VersionsUpdated(Vec<CursorVersion>),
     /// Core response received
@@ -302,6 +306,7 @@ enum SettingsMessage {
     SetUpdateChannel(UpdateChannel),
     ToggleAutoCheckUpdates,
     CheckForUpdates,
+    ToggleSynapsixDialogRouting,
 }
 
 /// Cursor-related messages
@@ -311,6 +316,10 @@ enum CursorMessage {
     LaunchVersion(String),
     InstallVersion(String),
     UninstallVersion(String),
+    /// Extract auth profile from a version
+    ExtractAuth(String),
+    /// Apply auth from the most recent profile to a target version
+    ApplyAuthFromLatest(String),
 }
 
 /// Workspace-related messages
@@ -356,6 +365,21 @@ enum SessionMessage {
     CollectMetrics,
     /// Metrics collected
     MetricsCollected(Vec<SessionMetrics>),
+}
+
+/// Auth management messages
+#[derive(Debug, Clone)]
+enum AuthMessage {
+    /// Refresh auth statuses for all installed versions
+    RefreshStatuses,
+    /// Extract auth profile from a specific version
+    ExtractFromVersion(String),
+    /// Apply a profile to a target version
+    ApplyProfile { profile_id: String, target_version: String },
+    /// Delete a stored profile
+    DeleteProfile(String),
+    /// Refresh profiles list
+    RefreshProfiles,
 }
 
 fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
@@ -451,6 +475,19 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 state.checking_updates = true;
                 return Task::perform(check_for_updates_task(), Message::UpdateCheckResult);
             }
+            SettingsMessage::ToggleSynapsixDialogRouting => {
+                state.settings.synapsix_dialog_routing = !state.settings.synapsix_dialog_routing;
+                state.settings_dirty = true;
+                // Apply the routing change immediately
+                match state.settings.apply_dialog_routing() {
+                    Ok(results) => {
+                        for r in &results {
+                            log::info!("Dialog routing: {}", r);
+                        }
+                    }
+                    Err(e) => log::error!("Failed to apply dialog routing: {}", e),
+                }
+            }
         },
         Message::UpdateCheckResult(result) => {
             state.checking_updates = false;
@@ -507,6 +544,47 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             }
             CursorMessage::UninstallVersion(version) => {
                 log::info!("Uninstalling Cursor version: {}", version);
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::UninstallVersion { version }).await;
+                        },
+                        |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                    );
+                }
+            }
+            CursorMessage::ExtractAuth(version) => {
+                log::info!("Extracting auth from Cursor version: {}", version);
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::ExtractAuth { version }).await;
+                        },
+                        |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                    );
+                }
+            }
+            CursorMessage::ApplyAuthFromLatest(target_version) => {
+                log::info!("Applying auth to Cursor version: {}", target_version);
+                // Get the most recent profile's source version to use as source
+                if let Some(profile) = state.auth_profiles.first() {
+                    if let Some(source) = &profile.extracted_from {
+                        let source = source.clone();
+                        if let Some(tx) = &state.core_tx {
+                            let tx = tx.clone();
+                            return Task::perform(
+                                async move {
+                                    let _ = tx.send(CoreRequest::ApplyAuth { source, target: target_version }).await;
+                                },
+                                |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                            );
+                        }
+                    }
+                } else {
+                    log::warn!("No auth profiles available to apply");
+                }
             }
         },
         Message::WorkspaceAction(ws_msg) => match ws_msg {
@@ -646,6 +724,73 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             SessionMessage::MetricsCollected(metrics) => {
                 state.session_metrics = metrics.clone();
                 state.dashboard_data = Some(DashboardData::from_metrics(&metrics));
+            }
+        },
+        Message::AuthAction(auth_msg) => match auth_msg {
+            AuthMessage::RefreshStatuses => {
+                log::info!("Refreshing auth statuses...");
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::GetAuthStatuses).await;
+                            let _ = tx.send(CoreRequest::ListProfiles).await;
+                        },
+                        |_| Message::NavigateTo(View::Auth), // Navigate to Auth tab, no loop
+                    );
+                }
+            }
+            AuthMessage::ExtractFromVersion(version) => {
+                log::info!("Extracting auth from version: {}", version);
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::ExtractAuth { version }).await;
+                            // Also refresh profiles list after extraction
+                            let _ = tx.send(CoreRequest::ListProfiles).await;
+                        },
+                        |_| Message::NavigateTo(View::Auth),
+                    );
+                }
+            }
+            AuthMessage::ApplyProfile { profile_id: _, target_version } => {
+                log::info!("Applying auth profile to version: {}", target_version);
+                // Use the most recent profile's source version
+                if let Some(profile) = state.auth_profiles.first() {
+                    if let Some(source) = &profile.extracted_from {
+                        let source = source.clone();
+                        if let Some(tx) = &state.core_tx {
+                            let tx = tx.clone();
+                            return Task::perform(
+                                async move {
+                                    let _ = tx.send(CoreRequest::ApplyAuth { source, target: target_version }).await;
+                                    // Refresh statuses after apply
+                                    let _ = tx.send(CoreRequest::GetAuthStatuses).await;
+                                },
+                                |_| Message::NavigateTo(View::Auth),
+                            );
+                        }
+                    }
+                } else {
+                    log::warn!("No profiles available to apply");
+                }
+            }
+            AuthMessage::DeleteProfile(_profile_id) => {
+                log::info!("Delete profile not yet implemented");
+                // TODO: Add delete profile to Core API
+            }
+            AuthMessage::RefreshProfiles => {
+                log::info!("Refreshing profiles list...");
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::ListProfiles).await;
+                        },
+                        |_| Message::NavigateTo(View::Auth),
+                    );
+                }
             }
         },
         Message::VersionsUpdated(versions) => {
@@ -807,8 +952,10 @@ fn view(state: &ContinuumStudio) -> Element<Message> {
         View::Dashboard => view_dashboard(state),
         View::CursorVersions => view_cursor_versions(state),
         View::Workspaces => view_workspaces(state),
+        View::Auth => view_auth(state),
         View::Sessions => view_sessions(state),
         View::Services => view_services(state),
+        View::Storage => view_storage(state),
         View::Settings => view_settings(state),
         View::Logs => view_logs(state),
     };
@@ -873,8 +1020,10 @@ fn sidebar(state: &ContinuumStudio) -> Element<Message> {
         nav_button("🏠  Dashboard", View::Dashboard, current),
         nav_button("📦  Versions", View::CursorVersions, current),
         nav_button("📁  Workspaces", View::Workspaces, current),
+        nav_button("🔑  Auth", View::Auth, current),
         nav_button("💬  Sessions", View::Sessions, current),
         nav_button("🔧  Services", View::Services, current),
+        nav_button("💾  Storage", View::Storage, current),
         Space::new().height(Length::Fill),
         nav_button("📋  Logs", View::Logs, current),
         nav_button("⚙️  Settings", View::Settings, current),
@@ -1226,9 +1375,10 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
         version_elements.push(Space::new().height(4).into());
 
         // Version rows for this era
+        let has_profiles = !state.auth_profiles.is_empty();
         for v in era_versions {
             let auth_status = state.auth_statuses.get(&v.version);
-            version_elements.push(version_row_from_data(v, auth_status));
+            version_elements.push(version_row_from_data(v, auth_status, has_profiles));
         }
 
         version_elements.push(Space::new().height(16).into());
@@ -1435,9 +1585,11 @@ fn get_version_era(version: &str) -> String {
 }
 
 /// Create a version row from CursorVersion data with polished styling
-fn version_row_from_data<'a>(version: &'a CursorVersion, auth_status: Option<&'a AuthStatus>) -> Element<'a, Message> {
+fn version_row_from_data<'a>(version: &'a CursorVersion, auth_status: Option<&'a AuthStatus>, has_profiles: bool) -> Element<'a, Message> {
     let v = version.version.clone();
     let v2 = version.version.clone();
+    let v3 = version.version.clone();
+    let v4 = version.version.clone();
 
     let (status_text, status_color) = match version.status {
         VersionStatus::Running => ("Running", iced::Color::from_rgb(0.25, 0.75, 0.35)),
@@ -1446,37 +1598,57 @@ fn version_row_from_data<'a>(version: &'a CursorVersion, auth_status: Option<&'a
         VersionStatus::Downloading => ("Downloading...", iced::Color::from_rgb(0.75, 0.65, 0.25)),
     };
 
-    // Build auth display for installed versions
+    // Build auth display with action buttons for installed versions
     let auth_display: Element<Message> = if version.installed {
         match auth_status {
             Some(status) => {
-                let (auth_icon, auth_text, auth_color) = match status.status {
+                match status.status {
                     AuthState::Authenticated => {
                         let email = status.email.as_deref().unwrap_or("Logged in");
-                        let email_short = if email.len() > 15 {
-                            format!("{}...", &email[..12])
+                        let email_short = if email.len() > 12 {
+                            format!("{}...", &email[..9])
                         } else {
                             email.to_string()
                         };
-                        ("🔑", email_short, iced::Color::from_rgb(0.3, 0.7, 0.4))
+                        // Authenticated: show email and Extract button
+                        row![
+                            text("🔑").size(11),
+                            text(email_short).size(10).color(iced::Color::from_rgb(0.3, 0.7, 0.4)),
+                            tiny_button("📤")
+                                .on_press(Message::CursorAction(CursorMessage::ExtractAuth(v3))),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center)
+                        .into()
                     }
                     AuthState::NotLoggedIn => {
-                        ("—", "Not logged in".to_string(), iced::Color::from_rgb(0.5, 0.5, 0.5))
+                        // Not logged in: show Apply button if profiles available
+                        if has_profiles {
+                            row![
+                                text("—").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                                tiny_button("📥")
+                                    .on_press(Message::CursorAction(CursorMessage::ApplyAuthFromLatest(v4))),
+                            ]
+                            .spacing(4)
+                            .align_y(Alignment::Center)
+                            .into()
+                        } else {
+                            text("Not logged in").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)).into()
+                        }
                     }
                     AuthState::Stale => {
-                        ("⚠", "Stale".to_string(), iced::Color::from_rgb(0.8, 0.6, 0.2))
+                        row![
+                            text("⚠").size(11),
+                            text("Stale").size(11).color(iced::Color::from_rgb(0.8, 0.6, 0.2)),
+                        ]
+                        .spacing(4)
+                        .align_y(Alignment::Center)
+                        .into()
                     }
                     AuthState::Unknown => {
-                        ("?", "Unknown".to_string(), iced::Color::from_rgb(0.5, 0.5, 0.5))
+                        text("?").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5)).into()
                     }
-                };
-                row![
-                    text(auth_icon).size(11),
-                    text(auth_text).size(11).color(auth_color),
-                ]
-                .spacing(4)
-                .align_y(Alignment::Center)
-                .into()
+                }
             }
             None => {
                 // Auth status not loaded yet
@@ -1587,6 +1759,31 @@ fn small_button(label: &'static str, is_primary: bool) -> button::Button<'static
                 text_color: fg,
                 border: iced::Border {
                     radius: 6.0.into(),
+                    width: 0.0,
+                    color: iced::Color::TRANSPARENT,
+                },
+                shadow: iced::Shadow::default(),
+                snap: false,
+            }
+        })
+}
+
+/// Tiny icon button for auth actions in version rows
+fn tiny_button(icon: &'static str) -> button::Button<'static, Message> {
+    button(text(icon).size(10))
+        .padding([2, 4])
+        .style(move |_theme, status| {
+            let bg = match status {
+                button::Status::Active => iced::Color::from_rgba(0.3, 0.3, 0.3, 0.5),
+                button::Status::Hovered => iced::Color::from_rgba(0.4, 0.5, 0.7, 0.7),
+                button::Status::Pressed => iced::Color::from_rgba(0.25, 0.35, 0.55, 0.8),
+                button::Status::Disabled => iced::Color::from_rgba(0.2, 0.2, 0.2, 0.3),
+            };
+            button::Style {
+                background: Some(iced::Background::Color(bg)),
+                text_color: iced::Color::WHITE,
+                border: iced::Border {
+                    radius: 4.0.into(),
                     width: 0.0,
                     color: iced::Color::TRANSPARENT,
                 },
@@ -1796,6 +1993,259 @@ fn workspace_row(workspace: &Workspace) -> Element<Message> {
         },
         ..container::Style::default()
     })
+    .into()
+}
+
+/// Auth Management view - profiles and version auth status
+fn view_auth(state: &ContinuumStudio) -> Element<Message> {
+    // Header with title and refresh button
+    let header = row![
+        text("🔑 Auth Management").size(24),
+        Space::new().width(Length::Fill),
+        button(text("↻ Refresh").size(12))
+            .padding([6, 12])
+            .on_press(Message::AuthAction(AuthMessage::RefreshStatuses))
+            .style(|_theme, status| {
+                let bg = match status {
+                    button::Status::Active => iced::Color::from_rgb(0.2, 0.4, 0.6),
+                    button::Status::Hovered => iced::Color::from_rgb(0.3, 0.5, 0.7),
+                    button::Status::Pressed => iced::Color::from_rgb(0.15, 0.35, 0.55),
+                    button::Status::Disabled => iced::Color::from_rgb(0.3, 0.3, 0.3),
+                };
+                button::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    text_color: iced::Color::WHITE,
+                    border: iced::Border { radius: 6.0.into(), width: 0.0, color: iced::Color::TRANSPARENT },
+                    shadow: iced::Shadow::default(),
+                    snap: false,
+                }
+            }),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+
+    // Stored Profiles section
+    let profiles_header = text("📦 Stored Profiles").size(16);
+    
+    let profiles_list: Element<Message> = if state.auth_profiles.is_empty() {
+        container(
+            text("No profiles stored. Extract a profile from an authenticated version.")
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+        )
+        .padding(12)
+        .into()
+    } else {
+        let profile_rows: Vec<Element<Message>> = state.auth_profiles.iter().map(|profile| {
+            let email = profile.email.as_deref().unwrap_or("Unknown");
+            let provider = profile.provider.as_deref().unwrap_or("Unknown");
+            let source = profile.extracted_from.as_deref().unwrap_or("Unknown");
+            let membership = if profile.membership.is_empty() { "free" } else { &profile.membership };
+            
+            container(
+                row![
+                    column![
+                        text(email).size(13),
+                        text(format!("{} • {} • from v{}", provider, membership, source))
+                            .size(10)
+                            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    ]
+                    .spacing(2),
+                    Space::new().width(Length::Fill),
+                    text("✓").size(14).color(iced::Color::from_rgb(0.3, 0.7, 0.4)),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+            )
+            .padding(10)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.15))),
+                border: iced::Border { radius: 6.0.into(), width: 1.0, color: iced::Color::from_rgb(0.25, 0.25, 0.25) },
+                ..container::Style::default()
+            })
+            .into()
+        }).collect();
+        
+        column(profile_rows).spacing(6).into()
+    };
+
+    let profiles_section = container(
+        column![
+            profiles_header,
+            Space::new().height(8),
+            profiles_list,
+        ]
+        .spacing(4)
+    )
+    .padding(16)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.12, 0.12))),
+        border: iced::Border { radius: 8.0.into(), width: 1.0, color: iced::Color::from_rgb(0.2, 0.2, 0.2) },
+        ..container::Style::default()
+    });
+
+    // Version Auth Status section
+    let versions_header = text("📋 Version Auth Status").size(16);
+    
+    // Get installed versions with their auth status
+    let installed_versions: Vec<&CursorVersion> = state.versions.iter()
+        .filter(|v| v.installed)
+        .collect();
+
+    let version_rows: Vec<Element<Message>> = installed_versions.iter().map(|version| {
+        let auth_status = state.auth_statuses.get(&version.version);
+        let version_str = version.version.clone();
+        let version_str2 = version.version.clone();
+        
+        let (status_icon, status_text, status_color, can_extract, can_apply) = match auth_status {
+            Some(status) => match status.status {
+                AuthState::Authenticated => {
+                    let email = status.email.as_deref().unwrap_or("Logged in");
+                    ("🔑", email.to_string(), iced::Color::from_rgb(0.3, 0.7, 0.4), true, false)
+                }
+                AuthState::NotLoggedIn => {
+                    ("—", "Not logged in".to_string(), iced::Color::from_rgb(0.5, 0.5, 0.5), false, true)
+                }
+                AuthState::Stale => {
+                    ("⚠️", "Auth may be stale".to_string(), iced::Color::from_rgb(0.8, 0.6, 0.2), true, true)
+                }
+                AuthState::Unknown => {
+                    ("?", "Unknown".to_string(), iced::Color::from_rgb(0.4, 0.4, 0.4), false, false)
+                }
+            }
+            None => ("?", "Not scanned".to_string(), iced::Color::from_rgb(0.4, 0.4, 0.4), false, false)
+        };
+
+        // Action buttons
+        let extract_btn: Element<Message> = if can_extract {
+            button(text("📤 Extract").size(11))
+                .padding([4, 8])
+                .on_press(Message::AuthAction(AuthMessage::ExtractFromVersion(version_str)))
+                .style(|_theme, status| {
+                    let bg = match status {
+                        button::Status::Active => iced::Color::from_rgb(0.2, 0.3, 0.5),
+                        button::Status::Hovered => iced::Color::from_rgb(0.3, 0.4, 0.6),
+                        button::Status::Pressed => iced::Color::from_rgb(0.15, 0.25, 0.45),
+                        button::Status::Disabled => iced::Color::from_rgb(0.2, 0.2, 0.2),
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: iced::Color::WHITE,
+                        border: iced::Border { radius: 4.0.into(), width: 0.0, color: iced::Color::TRANSPARENT },
+                        shadow: iced::Shadow::default(),
+                        snap: false,
+                    }
+                })
+                .into()
+        } else {
+            Space::new().width(0).into()
+        };
+
+        let has_profiles = !state.auth_profiles.is_empty();
+        let apply_btn: Element<Message> = if can_apply && has_profiles {
+            button(text("📥 Apply").size(11))
+                .padding([4, 8])
+                .on_press(Message::AuthAction(AuthMessage::ApplyProfile { 
+                    profile_id: String::new(), // Will use most recent
+                    target_version: version_str2 
+                }))
+                .style(|_theme, status| {
+                    let bg = match status {
+                        button::Status::Active => iced::Color::from_rgb(0.3, 0.5, 0.3),
+                        button::Status::Hovered => iced::Color::from_rgb(0.4, 0.6, 0.4),
+                        button::Status::Pressed => iced::Color::from_rgb(0.25, 0.45, 0.25),
+                        button::Status::Disabled => iced::Color::from_rgb(0.2, 0.2, 0.2),
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: iced::Color::WHITE,
+                        border: iced::Border { radius: 4.0.into(), width: 0.0, color: iced::Color::TRANSPARENT },
+                        shadow: iced::Shadow::default(),
+                        snap: false,
+                    }
+                })
+                .into()
+        } else {
+            Space::new().width(0).into()
+        };
+
+        container(
+            row![
+                text(format!("v{}", version.version)).size(13),
+                Space::new().width(16),
+                text(status_icon).size(12),
+                text(status_text).size(11).color(status_color),
+                Space::new().width(Length::Fill),
+                extract_btn,
+                Space::new().width(4),
+                apply_btn,
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+        )
+        .padding(10)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.15))),
+            border: iced::Border { radius: 6.0.into(), width: 1.0, color: iced::Color::from_rgb(0.25, 0.25, 0.25) },
+            ..container::Style::default()
+        })
+        .into()
+    }).collect();
+
+    let versions_list: Element<Message> = if version_rows.is_empty() {
+        container(
+            text("No installed versions found.")
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+        )
+        .padding(12)
+        .into()
+    } else {
+        scrollable(column(version_rows).spacing(6))
+            .height(Length::Fill)
+            .into()
+    };
+
+    let versions_section = container(
+        column![
+            versions_header,
+            Space::new().height(8),
+            versions_list,
+        ]
+        .spacing(4)
+        .height(Length::Fill)
+    )
+    .padding(16)
+    .height(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.12, 0.12))),
+        border: iced::Border { radius: 8.0.into(), width: 1.0, color: iced::Color::from_rgb(0.2, 0.2, 0.2) },
+        ..container::Style::default()
+    });
+
+    // Help text
+    let help_text = container(
+        text("Extract profiles from authenticated versions, then apply them to newly installed versions.")
+            .size(11)
+            .color(iced::Color::from_rgb(0.4, 0.4, 0.4))
+    )
+    .padding([8, 0]);
+
+    container(
+        column![
+            header,
+            Space::new().height(16),
+            help_text,
+            Space::new().height(8),
+            profiles_section,
+            Space::new().height(16),
+            versions_section,
+        ]
+        .spacing(0)
+        .height(Length::Fill)
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
     .into()
 }
 
@@ -2307,6 +2757,124 @@ fn command_row<'a>(label: &'a str, command: &'a str) -> Element<'a, Message> {
     .into()
 }
 
+/// Storage management view - shows disk usage and cleanup options for Cursor versions
+fn view_storage(state: &ContinuumStudio) -> Element<Message> {
+    let install_type = InstallationType::detect();
+
+    // Header
+    let header = column![
+        text("Storage Management").size(28),
+        Space::new().height(4),
+        text("Manage disk usage for Cursor versions and Continuum Studio updates").size(14),
+        Space::new().height(4),
+        text(format!("Installation: {}", install_type.description())).size(12),
+    ];
+
+    // Installed versions with disk info
+    let installed_versions: Vec<&CursorVersion> = state.versions.iter()
+        .filter(|v| v.status == VersionStatus::Installed || v.status == VersionStatus::Running)
+        .collect();
+
+    let total_count = installed_versions.len();
+
+    let version_rows: Vec<Element<Message>> = if installed_versions.is_empty() {
+        vec![
+            container(
+                text("No installed Cursor versions found. Install versions from the Versions tab.")
+                    .size(14)
+            )
+            .padding(20)
+            .into()
+        ]
+    } else {
+        installed_versions.iter().map(|v| {
+            let version_label = text(format!("Cursor {}", v.version)).size(14);
+
+            // Data dir path for info
+            let home = dirs::home_dir().unwrap_or_default();
+            let data_dir = home.join(format!(".cursor-{}", v.version));
+            let has_data = data_dir.exists();
+
+            let status_text = if v.status == VersionStatus::Running {
+                text("Running").size(11)
+            } else if has_data {
+                text("Has data dir").size(11)
+            } else {
+                text("AppImage only").size(11)
+            };
+
+            let uninstall_btn = button(text("Remove AppImage").size(11))
+                .on_press(Message::CursorAction(CursorMessage::UninstallVersion(v.version.clone())))
+                .padding([4, 8]);
+
+            let row_content: Element<Message> = row![
+                version_label,
+                Space::new().width(Length::Fill),
+                status_text,
+                Space::new().width(10),
+                uninstall_btn,
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into();
+
+            container(row_content)
+                .padding([8, 12])
+                .width(Length::Fill)
+                .into()
+        }).collect()
+    };
+
+    // Summary section
+    let summary = column![
+        text(format!("Installed Versions: {}", total_count)).size(14),
+        Space::new().height(4),
+        text("Tip: Use the Versions tab to download/manage individual versions.").size(12),
+        text("Data directories (~/.cursor-VERSION/) contain extensions, settings, and auth.").size(12),
+    ];
+
+    // Update info
+    let update_section = {
+        let builds_dir = continuum_studio_iced::updater::local_builds_dir();
+        let nightly_exists = builds_dir.join("nightly").join("continuum-studio").exists();
+        let stable_exists = builds_dir.join("stable").join("continuum-studio").exists();
+
+        column![
+            Space::new().height(16),
+            text("Continuum Studio Builds").size(20),
+            Space::new().height(8),
+            text(format!("Nightly build: {}", if nightly_exists { "Available" } else { "Not built" })).size(14),
+            text(format!("Stable build: {}", if stable_exists { "Available" } else { "Not built" })).size(14),
+            text(format!("Builds directory: {}", builds_dir.display())).size(12),
+        ]
+    };
+
+    let content = column![
+        header,
+        Space::new().height(16),
+        text("Installed Cursor Versions").size(20),
+        Space::new().height(8),
+    ];
+
+    // Build the scrollable list
+    let mut full_content = content;
+    for row in version_rows {
+        full_content = full_content.push(row);
+    }
+    full_content = full_content
+        .push(Space::new().height(16))
+        .push(summary)
+        .push(update_section);
+
+    scrollable(
+        container(full_content)
+            .width(Length::Fill)
+            .padding(10)
+    )
+    .height(Length::Fill)
+    .into()
+}
+
 /// Logs view for in-app debugging
 fn view_logs(state: &ContinuumStudio) -> Element<Message> {
     let entries = state.log_buffer.entries_filtered(state.log_filter);
@@ -2629,6 +3197,35 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
         .spacing(8),
     );
 
+    // Dialog routing card
+    let dialog_status_text = if state.settings.synapsix_dialog_routing {
+        "Active - agents will use synapsix-dialog-cli"
+    } else {
+        "Disabled - agents use Cursor's built-in AskQuestion"
+    };
+
+    let dialog_card = settings_card(
+        "Dialog Routing",
+        column![
+            settings_row(
+                "Route via Synapsix",
+                toggle_button(
+                    state.settings.synapsix_dialog_routing,
+                    SettingsMessage::ToggleSynapsixDialogRouting,
+                ),
+            ),
+            Space::new().height(4),
+            text(dialog_status_text)
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            Space::new().height(4),
+            text(format!("Managed workspaces: {}", state.settings.managed_workspaces.len()))
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        ]
+        .spacing(4),
+    );
+
     // Save button
     let save_section: Element<Message> = if state.settings_dirty {
         styled_button("Save Settings", true)
@@ -2656,6 +3253,8 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
         notifications_card,
         Space::new().height(12),
         updates_card,
+        Space::new().height(12),
+        dialog_card,
         Space::new().height(24),
         save_section,
         Space::new().height(16),

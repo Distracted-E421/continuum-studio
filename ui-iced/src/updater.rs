@@ -1,18 +1,21 @@
 //! Auto-update system for Continuum Studio
 //!
-//! Supports multiple update channels:
-//! - stable: Production releases
-//! - beta: Pre-release testing
-//! - nightly: Latest development builds
+//! Supports multiple update channels and git forges:
+//! - Channels: stable, beta, nightly
+//! - Forges: GitHub, Forgejo/Codeberg/Gitea, Local builds
 //!
 //! Update mechanism:
-//! - Checks GitHub releases for new versions
-//! - Notifies user of available updates
-//! - Can trigger rebuild via nix flake update
+//! - Checks releases from configured forge or local builds
+//! - Smart detection: Nix store vs direct binary
+//! - Can trigger rebuild via nix flake update or direct binary replacement
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+// ---------------------------------------------------------------------------
+// Update channel
+// ---------------------------------------------------------------------------
 
 /// Update channel selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -44,6 +47,45 @@ impl UpdateChannel {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Forge type
+// ---------------------------------------------------------------------------
+
+/// Git forge / release source type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ForgeType {
+    /// GitHub API (api.github.com)
+    #[default]
+    GitHub,
+    /// Forgejo / Gitea / Codeberg API (compatible v1 API)
+    Forgejo,
+    /// Local builds from ~/.continuum/builds/
+    Local,
+}
+
+impl ForgeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ForgeType::GitHub => "github",
+            ForgeType::Forgejo => "forgejo",
+            ForgeType::Local => "local",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            ForgeType::GitHub => "GitHub (api.github.com)",
+            ForgeType::Forgejo => "Forgejo / Codeberg / Gitea (v1 API)",
+            ForgeType::Local => "Local builds (~/.continuum/builds/)",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Update settings
+// ---------------------------------------------------------------------------
 
 /// Update settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +121,19 @@ pub struct UpdateSettings {
     /// Update notes for available version
     #[serde(default)]
     pub update_notes: Option<String>,
+
+    /// Git forge type for release checking
+    #[serde(default)]
+    pub forge_type: ForgeType,
+
+    /// Forge base URL (e.g., "https://codeberg.org" for Forgejo)
+    /// Not used for GitHub (hardcoded) or Local
+    #[serde(default)]
+    pub forge_url: Option<String>,
+
+    /// Repository path on the forge (e.g., "e421/continuum-studio")
+    #[serde(default = "default_repo_path")]
+    pub repo_path: String,
 }
 
 fn default_true() -> bool {
@@ -87,6 +142,10 @@ fn default_true() -> bool {
 
 fn default_check_interval() -> u32 {
     24 // 24 hours
+}
+
+fn default_repo_path() -> String {
+    "Distracted-E421/continuum-studio".to_string()
 }
 
 impl Default for UpdateSettings {
@@ -100,6 +159,9 @@ impl Default for UpdateSettings {
             current_version: env!("CARGO_PKG_VERSION").to_string(),
             available_version: None,
             update_notes: None,
+            forge_type: ForgeType::Local, // Default to local builds
+            forge_url: None,
+            repo_path: default_repo_path(),
         }
     }
 }
@@ -129,7 +191,11 @@ impl UpdateSettings {
     }
 }
 
-/// Update information from remote
+// ---------------------------------------------------------------------------
+// Release info (forge-agnostic)
+// ---------------------------------------------------------------------------
+
+/// Update information from any source
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
     /// Version string
@@ -138,38 +204,157 @@ pub struct UpdateInfo {
     pub channel: UpdateChannel,
     /// Release notes
     pub notes: String,
-    /// Download URL (for reference, Nix handles actual download)
+    /// Download URL or local path
     pub download_url: Option<String>,
     /// Release date
     pub release_date: String,
     /// Whether this is a prerelease
     pub prerelease: bool,
+    /// Commit hash (for local builds)
+    pub commit: Option<String>,
+    /// Source forge type
+    pub source: ForgeType,
 }
+
+// ---------------------------------------------------------------------------
+// Installation path detection
+// ---------------------------------------------------------------------------
+
+/// Detected installation type
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallationType {
+    /// Running from /nix/store/ -- should update via nix build
+    NixStore,
+    /// Running from ~/.continuum/bin/ -- direct binary replacement
+    ContinuumBin,
+    /// Running from cargo target/release -- development mode
+    CargoDev,
+    /// Unknown location
+    Unknown(PathBuf),
+}
+
+impl InstallationType {
+    /// Detect how the current binary was installed
+    pub fn detect() -> Self {
+        let exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(_) => return InstallationType::Unknown(PathBuf::new()),
+        };
+
+        let exe_str = exe.to_string_lossy();
+
+        if exe_str.contains("/nix/store/") {
+            InstallationType::NixStore
+        } else if exe_str.contains("/.continuum/") {
+            InstallationType::ContinuumBin
+        } else if exe_str.contains("/target/release/") || exe_str.contains("/target/debug/") {
+            InstallationType::CargoDev
+        } else {
+            InstallationType::Unknown(exe)
+        }
+    }
+
+    /// Human-readable description
+    pub fn description(&self) -> &str {
+        match self {
+            InstallationType::NixStore => "Nix store (use nix build to update)",
+            InstallationType::ContinuumBin => "Continuum managed (direct binary update)",
+            InstallationType::CargoDev => "Development build (cargo build)",
+            InstallationType::Unknown(_) => "Unknown installation",
+        }
+    }
+
+    /// Whether direct binary replacement is supported
+    pub fn supports_direct_update(&self) -> bool {
+        matches!(self, InstallationType::ContinuumBin | InstallationType::CargoDev)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Forge release response types
+// ---------------------------------------------------------------------------
 
 /// GitHub release response (subset of fields we need)
 #[derive(Debug, Clone, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
+    #[allow(dead_code)]
     name: String,
     body: Option<String>,
     prerelease: bool,
     published_at: String,
     html_url: String,
+    assets: Option<Vec<GitHubAsset>>,
 }
 
-/// Update checker service
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
+    #[allow(dead_code)]
+    size: u64,
+}
+
+/// Forgejo/Gitea release response
+#[derive(Debug, Clone, Deserialize)]
+struct ForgejoRelease {
+    tag_name: String,
+    #[allow(dead_code)]
+    name: String,
+    body: Option<String>,
+    prerelease: bool,
+    published_at: Option<String>,
+    created_at: String,
+    html_url: Option<String>,
+    assets: Option<Vec<ForgejoAsset>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ForgejoAsset {
+    name: String,
+    browser_download_url: String,
+    #[allow(dead_code)]
+    size: u64,
+}
+
+/// Local build metadata (from build-watcher.nu)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LocalBuildMetadata {
+    version: String,
+    channel: String,
+    commit: String,
+    branch: String,
+    build_date: String,
+    #[allow(dead_code)]
+    binary_size: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Update checker (forge-agnostic)
+// ---------------------------------------------------------------------------
+
+/// Update checker service -- supports multiple forges
 pub struct UpdateChecker {
-    /// GitHub repository (owner/repo format)
-    repo: String,
-    /// User agent for API requests
+    settings: UpdateSettings,
     user_agent: String,
 }
 
 impl UpdateChecker {
-    /// Create a new update checker for the continuum-studio repo
+    /// Create a new update checker from settings
     pub fn new() -> Self {
         Self {
-            repo: "Distracted-E421/continuum-studio".to_string(),
+            settings: UpdateSettings::default(),
+            user_agent: format!(
+                "continuum-studio/{} (update-checker)",
+                env!("CARGO_PKG_VERSION")
+            ),
+        }
+    }
+
+    /// Create with specific settings
+    pub fn with_settings(settings: &UpdateSettings) -> Self {
+        Self {
+            settings: settings.clone(),
             user_agent: format!(
                 "continuum-studio/{} (update-checker)",
                 env!("CARGO_PKG_VERSION")
@@ -182,28 +367,25 @@ impl UpdateChecker {
         &self,
         settings: &UpdateSettings,
     ) -> Result<Option<UpdateInfo>, String> {
-        let url = format!(
-            "https://api.github.com/repos/{}/releases",
-            self.repo
-        );
-
         log::info!(
-            "Checking for updates on {} channel",
-            settings.channel.as_str()
+            "Checking for updates on {} channel via {} provider",
+            settings.channel.as_str(),
+            settings.forge_type.as_str(),
         );
 
-        // Make HTTP request
-        let response = self.fetch_releases(&url).await?;
-
-        // Find the best release for our channel
-        let update = self.find_best_release(&response, settings)?;
+        let update = match settings.forge_type {
+            ForgeType::GitHub => self.check_github(settings).await?,
+            ForgeType::Forgejo => self.check_forgejo(settings).await?,
+            ForgeType::Local => self.check_local(settings).await?,
+        };
 
         if let Some(ref info) = update {
-            if self.is_newer_version(&info.version, &settings.current_version) {
+            if is_newer_version(&info.version, &settings.current_version) {
                 log::info!(
-                    "Update available: {} -> {}",
+                    "Update available: {} -> {} (from {})",
                     settings.current_version,
-                    info.version
+                    info.version,
+                    settings.forge_type.as_str(),
                 );
                 return Ok(Some(info.clone()));
             }
@@ -213,100 +395,118 @@ impl UpdateChecker {
         Ok(None)
     }
 
-    /// Fetch releases from GitHub API
-    async fn fetch_releases(&self, url: &str) -> Result<Vec<GitHubRelease>, String> {
-        // Use tokio's spawn_blocking for the blocking HTTP request
+    // -----------------------------------------------------------------------
+    // GitHub provider
+    // -----------------------------------------------------------------------
+
+    async fn check_github(&self, settings: &UpdateSettings) -> Result<Option<UpdateInfo>, String> {
+        let url = format!(
+            "https://api.github.com/repos/{}/releases",
+            settings.repo_path
+        );
+
+        let releases = self.fetch_json::<Vec<GitHubRelease>>(&url, Some("application/vnd.github.v3+json")).await?;
+        Ok(find_best_github_release(&releases, settings))
+    }
+
+    // -----------------------------------------------------------------------
+    // Forgejo / Codeberg / Gitea provider
+    // -----------------------------------------------------------------------
+
+    async fn check_forgejo(&self, settings: &UpdateSettings) -> Result<Option<UpdateInfo>, String> {
+        let base_url = settings
+            .forge_url
+            .as_deref()
+            .unwrap_or("https://codeberg.org");
+
+        let url = format!(
+            "{}/api/v1/repos/{}/releases",
+            base_url.trim_end_matches('/'),
+            settings.repo_path
+        );
+
+        let releases = self.fetch_json::<Vec<ForgejoRelease>>(&url, None).await?;
+        Ok(find_best_forgejo_release(&releases, settings, base_url))
+    }
+
+    // -----------------------------------------------------------------------
+    // Local build provider
+    // -----------------------------------------------------------------------
+
+    async fn check_local(&self, settings: &UpdateSettings) -> Result<Option<UpdateInfo>, String> {
+        let channel_dir = local_builds_dir().join(settings.channel.as_str());
+        let metadata_path = channel_dir.join("metadata.json");
+
+        if !metadata_path.exists() {
+            log::info!("No local build metadata found at {:?}", metadata_path);
+            return Ok(None);
+        }
+
+        let content = tokio::fs::read_to_string(&metadata_path)
+            .await
+            .map_err(|e| format!("Failed to read local build metadata: {}", e))?;
+
+        let metadata: LocalBuildMetadata = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse local build metadata: {}", e))?;
+
+        let binary_path = channel_dir.join("continuum-studio");
+        if !binary_path.exists() {
+            log::warn!("Local build metadata exists but binary missing at {:?}", binary_path);
+            return Ok(None);
+        }
+
+        Ok(Some(UpdateInfo {
+            version: metadata.version,
+            channel: match metadata.channel.as_str() {
+                "stable" => UpdateChannel::Stable,
+                "beta" => UpdateChannel::Beta,
+                _ => UpdateChannel::Nightly,
+            },
+            notes: format!("Local build from branch {} @ {}", metadata.branch, &metadata.commit[..8.min(metadata.commit.len())]),
+            download_url: Some(binary_path.to_string_lossy().to_string()),
+            release_date: metadata.build_date,
+            prerelease: metadata.channel != "stable",
+            commit: Some(metadata.commit),
+            source: ForgeType::Local,
+        }))
+    }
+
+    // -----------------------------------------------------------------------
+    // HTTP helpers
+    // -----------------------------------------------------------------------
+
+    async fn fetch_json<T: serde::de::DeserializeOwned + Send + 'static>(
+        &self,
+        url: &str,
+        accept: Option<&str>,
+    ) -> Result<T, String> {
         let url = url.to_string();
         let user_agent = self.user_agent.clone();
+        let accept = accept.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let client = ureq::AgentBuilder::new()
                 .timeout(Duration::from_secs(30))
                 .build();
 
-            let response = client
+            let mut req = client
                 .get(&url)
-                .set("User-Agent", &user_agent)
-                .set("Accept", "application/vnd.github.v3+json")
+                .set("User-Agent", &user_agent);
+
+            if let Some(ref accept_header) = accept {
+                req = req.set("Accept", accept_header);
+            }
+
+            let response = req
                 .call()
                 .map_err(|e| format!("HTTP request failed: {}", e))?;
 
-            let releases: Vec<GitHubRelease> = response
-                .into_json()
-                .map_err(|e| format!("Failed to parse releases: {}", e))?;
-
-            Ok(releases)
+            response
+                .into_json::<T>()
+                .map_err(|e| format!("Failed to parse response: {}", e))
         })
         .await
         .map_err(|e| format!("Task failed: {}", e))?
-    }
-
-    /// Find the best release matching our channel
-    fn find_best_release(
-        &self,
-        releases: &[GitHubRelease],
-        settings: &UpdateSettings,
-    ) -> Result<Option<UpdateInfo>, String> {
-        for release in releases {
-            let is_match = match settings.channel {
-                UpdateChannel::Stable => !release.prerelease && !release.tag_name.contains("-"),
-                UpdateChannel::Beta => !release.tag_name.contains("nightly"),
-                UpdateChannel::Nightly => true, // Accept all
-            };
-
-            if is_match {
-                let version = release
-                    .tag_name
-                    .trim_start_matches('v')
-                    .to_string();
-
-                return Ok(Some(UpdateInfo {
-                    version,
-                    channel: if release.prerelease {
-                        if release.tag_name.contains("nightly") {
-                            UpdateChannel::Nightly
-                        } else {
-                            UpdateChannel::Beta
-                        }
-                    } else {
-                        UpdateChannel::Stable
-                    },
-                    notes: release.body.clone().unwrap_or_default(),
-                    download_url: Some(release.html_url.clone()),
-                    release_date: release.published_at.clone(),
-                    prerelease: release.prerelease,
-                }));
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Compare version strings (simple semver comparison)
-    fn is_newer_version(&self, new: &str, current: &str) -> bool {
-        // Parse version strings into components
-        let parse_version = |s: &str| -> Vec<u32> {
-            s.split(|c: char| c == '.' || c == '-')
-                .filter_map(|part| part.parse().ok())
-                .collect()
-        };
-
-        let new_parts = parse_version(new);
-        let current_parts = parse_version(current);
-
-        // Compare component by component
-        for i in 0..new_parts.len().max(current_parts.len()) {
-            let new_part = new_parts.get(i).copied().unwrap_or(0);
-            let current_part = current_parts.get(i).copied().unwrap_or(0);
-
-            if new_part > current_part {
-                return true;
-            } else if new_part < current_part {
-                return false;
-            }
-        }
-
-        false
     }
 }
 
@@ -315,6 +515,293 @@ impl Default for UpdateChecker {
         Self::new()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Release matching helpers
+// ---------------------------------------------------------------------------
+
+fn find_best_github_release(
+    releases: &[GitHubRelease],
+    settings: &UpdateSettings,
+) -> Option<UpdateInfo> {
+    for release in releases {
+        if channel_matches_release(settings.channel, release.prerelease, &release.tag_name) {
+            let version = release.tag_name.trim_start_matches('v').to_string();
+            let download_url = release.assets.as_ref()
+                .and_then(|assets| {
+                    assets.iter().find(|a| {
+                        a.name.contains("linux") && a.name.contains("x86_64")
+                    })
+                    .map(|a| a.browser_download_url.clone())
+                })
+                .or_else(|| Some(release.html_url.clone()));
+
+            return Some(UpdateInfo {
+                version,
+                channel: classify_channel(release.prerelease, &release.tag_name),
+                notes: release.body.clone().unwrap_or_default(),
+                download_url,
+                release_date: release.published_at.clone(),
+                prerelease: release.prerelease,
+                commit: None,
+                source: ForgeType::GitHub,
+            });
+        }
+    }
+    None
+}
+
+fn find_best_forgejo_release(
+    releases: &[ForgejoRelease],
+    settings: &UpdateSettings,
+    _base_url: &str,
+) -> Option<UpdateInfo> {
+    for release in releases {
+        if channel_matches_release(settings.channel, release.prerelease, &release.tag_name) {
+            let version = release.tag_name.trim_start_matches('v').to_string();
+            let download_url = release.assets.as_ref()
+                .and_then(|assets| {
+                    assets.iter().find(|a| {
+                        a.name.contains("linux") && a.name.contains("x86_64")
+                    })
+                    .map(|a| a.browser_download_url.clone())
+                })
+                .or_else(|| release.html_url.clone());
+
+            let date = release.published_at.clone()
+                .unwrap_or_else(|| release.created_at.clone());
+
+            return Some(UpdateInfo {
+                version,
+                channel: classify_channel(release.prerelease, &release.tag_name),
+                notes: release.body.clone().unwrap_or_default(),
+                download_url,
+                release_date: date,
+                prerelease: release.prerelease,
+                commit: None,
+                source: ForgeType::Forgejo,
+            });
+        }
+    }
+    None
+}
+
+fn channel_matches_release(channel: UpdateChannel, prerelease: bool, tag: &str) -> bool {
+    match channel {
+        UpdateChannel::Stable => !prerelease && !tag.contains('-'),
+        UpdateChannel::Beta => !tag.contains("nightly"),
+        UpdateChannel::Nightly => true,
+    }
+}
+
+fn classify_channel(prerelease: bool, tag: &str) -> UpdateChannel {
+    if prerelease {
+        if tag.contains("nightly") {
+            UpdateChannel::Nightly
+        } else {
+            UpdateChannel::Beta
+        }
+    } else {
+        UpdateChannel::Stable
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Version comparison
+// ---------------------------------------------------------------------------
+
+/// Compare version strings (simple semver comparison)
+pub fn is_newer_version(new: &str, current: &str) -> bool {
+    let parse_version = |s: &str| -> Vec<u32> {
+        s.split(|c: char| c == '.' || c == '-')
+            .filter_map(|part| part.parse().ok())
+            .collect()
+    };
+
+    let new_parts = parse_version(new);
+    let current_parts = parse_version(current);
+
+    for i in 0..new_parts.len().max(current_parts.len()) {
+        let new_part = new_parts.get(i).copied().unwrap_or(0);
+        let current_part = current_parts.get(i).copied().unwrap_or(0);
+
+        if new_part > current_part {
+            return true;
+        } else if new_part < current_part {
+            return false;
+        }
+    }
+
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Path helpers
+// ---------------------------------------------------------------------------
+
+/// Get the local builds directory
+pub fn local_builds_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".continuum")
+        .join("builds")
+}
+
+/// Get the continuum bin directory
+pub fn continuum_bin_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".continuum")
+        .join("bin")
+}
+
+// ---------------------------------------------------------------------------
+// Self-update execution
+// ---------------------------------------------------------------------------
+
+/// Execute a self-update based on detected installation type
+pub struct SelfUpdater;
+
+impl SelfUpdater {
+    /// Apply an update from the given UpdateInfo
+    pub async fn apply_update(info: &UpdateInfo) -> Result<String, String> {
+        let install_type = InstallationType::detect();
+        log::info!("Installation type: {:?}", install_type);
+
+        match install_type {
+            InstallationType::NixStore => {
+                Self::update_via_nix().await
+            }
+            InstallationType::ContinuumBin | InstallationType::CargoDev => {
+                match info.source {
+                    ForgeType::Local => {
+                        // Copy from local builds
+                        let source = info.download_url.as_deref()
+                            .ok_or("No source path in local build info")?;
+                        Self::update_direct(Path::new(source)).await
+                    }
+                    ForgeType::GitHub | ForgeType::Forgejo => {
+                        // Download from remote
+                        let url = info.download_url.as_deref()
+                            .ok_or("No download URL in release info")?;
+                        Self::update_from_url(url).await
+                    }
+                }
+            }
+            InstallationType::Unknown(_) => {
+                Err("Cannot determine update method for unknown installation type. \
+                     Try running from ~/.continuum/bin/ or via nix build.".to_string())
+            }
+        }
+    }
+
+    /// Update via Nix flake
+    async fn update_via_nix() -> Result<String, String> {
+        let flake_path = NixUpdater::default_flake_path();
+        let updater = NixUpdater::new(flake_path);
+
+        if !updater.flake_exists() {
+            return Err("Nix flake not found. Cannot update via nix build. \
+                       Consider switching to 'local' forge type for direct binary updates.".to_string());
+        }
+
+        updater.execute_update().await
+    }
+
+    /// Update by copying a local binary
+    async fn update_direct(source: &Path) -> Result<String, String> {
+        if !source.exists() {
+            return Err(format!("Source binary not found: {:?}", source));
+        }
+
+        let dest = continuum_bin_dir().join("continuum-studio");
+
+        // Create parent dir
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create bin directory: {}", e))?;
+        }
+
+        // Copy binary
+        tokio::fs::copy(source, &dest)
+            .await
+            .map_err(|e| format!("Failed to copy binary: {}", e))?;
+
+        // Make executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o755);
+            tokio::fs::set_permissions(&dest, perms)
+                .await
+                .map_err(|e| format!("Failed to set permissions: {}", e))?;
+        }
+
+        log::info!("Binary updated at {:?}", dest);
+        Ok(format!("Updated binary at {}. Restart to apply.", dest.display()))
+    }
+
+    /// Update by downloading from a URL
+    async fn update_from_url(url: &str) -> Result<String, String> {
+        let dest = continuum_bin_dir().join("continuum-studio");
+        let temp = continuum_bin_dir().join("continuum-studio.download");
+
+        // Create parent dir
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create bin directory: {}", e))?;
+        }
+
+        // Download to temp file
+        let url = url.to_string();
+        let temp_clone = temp.clone();
+        tokio::task::spawn_blocking(move || {
+            let client = ureq::AgentBuilder::new()
+                .timeout(Duration::from_secs(300))
+                .build();
+
+            let response = client
+                .get(&url)
+                .call()
+                .map_err(|e| format!("Download failed: {}", e))?;
+
+            let mut reader = response.into_reader();
+            let mut file = std::fs::File::create(&temp_clone)
+                .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+            std::io::copy(&mut reader, &mut file)
+                .map_err(|e| format!("Failed to write download: {}", e))?;
+
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| format!("Download task failed: {}", e))??;
+
+        // Atomically replace
+        tokio::fs::rename(&temp, &dest)
+            .await
+            .map_err(|e| format!("Failed to replace binary: {}", e))?;
+
+        // Make executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o755);
+            tokio::fs::set_permissions(&dest, perms)
+                .await
+                .map_err(|e| format!("Failed to set permissions: {}", e))?;
+        }
+
+        log::info!("Downloaded and installed update at {:?}", dest);
+        Ok(format!("Updated binary at {}. Restart to apply.", dest.display()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Nix updater (preserved from original)
+// ---------------------------------------------------------------------------
 
 /// Commands for updating via Nix
 pub struct NixUpdater {
@@ -398,6 +885,10 @@ impl Default for NixUpdater {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Desktop file helper
+// ---------------------------------------------------------------------------
+
 /// Update the desktop file to point to the new result
 pub fn update_desktop_file(result_path: &PathBuf) -> Result<(), String> {
     let desktop_path = dirs::data_dir()
@@ -437,19 +928,21 @@ pub fn update_desktop_file(result_path: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_version_comparison() {
-        let checker = UpdateChecker::new();
-
-        assert!(checker.is_newer_version("0.2.0", "0.1.0"));
-        assert!(checker.is_newer_version("1.0.0", "0.9.9"));
-        assert!(checker.is_newer_version("0.1.1", "0.1.0"));
-        assert!(!checker.is_newer_version("0.1.0", "0.1.0"));
-        assert!(!checker.is_newer_version("0.1.0", "0.2.0"));
+        assert!(is_newer_version("0.2.0", "0.1.0"));
+        assert!(is_newer_version("1.0.0", "0.9.9"));
+        assert!(is_newer_version("0.1.1", "0.1.0"));
+        assert!(!is_newer_version("0.1.0", "0.1.0"));
+        assert!(!is_newer_version("0.1.0", "0.2.0"));
     }
 
     #[test]
@@ -458,6 +951,7 @@ mod tests {
         assert_eq!(settings.channel, UpdateChannel::Stable);
         assert!(settings.auto_check);
         assert_eq!(settings.check_interval_hours, 24);
+        assert_eq!(settings.forge_type, ForgeType::Local);
     }
 
     #[test]
@@ -465,5 +959,44 @@ mod tests {
         assert_eq!(UpdateChannel::Stable.as_str(), "stable");
         assert_eq!(UpdateChannel::Beta.as_str(), "beta");
         assert_eq!(UpdateChannel::Nightly.as_str(), "nightly");
+    }
+
+    #[test]
+    fn test_forge_type() {
+        assert_eq!(ForgeType::GitHub.as_str(), "github");
+        assert_eq!(ForgeType::Forgejo.as_str(), "forgejo");
+        assert_eq!(ForgeType::Local.as_str(), "local");
+    }
+
+    #[test]
+    fn test_channel_matching_logic() {
+        // Stable should only match non-prerelease, no dashes
+        assert!(channel_matches_release(UpdateChannel::Stable, false, "v0.1.0"));
+        assert!(!channel_matches_release(UpdateChannel::Stable, true, "v0.1.0-beta.1"));
+        assert!(!channel_matches_release(UpdateChannel::Stable, false, "v0.1.0-rc1"));
+
+        // Beta should match everything except nightly
+        assert!(channel_matches_release(UpdateChannel::Beta, false, "v0.1.0"));
+        assert!(channel_matches_release(UpdateChannel::Beta, true, "v0.1.0-beta.1"));
+        assert!(!channel_matches_release(UpdateChannel::Beta, true, "v0.1.0-nightly.20260205"));
+
+        // Nightly matches all
+        assert!(channel_matches_release(UpdateChannel::Nightly, false, "v0.1.0"));
+        assert!(channel_matches_release(UpdateChannel::Nightly, true, "v0.1.0-nightly.20260205"));
+    }
+
+    #[test]
+    fn test_installation_type_description() {
+        assert_eq!(InstallationType::NixStore.description(), "Nix store (use nix build to update)");
+        assert_eq!(InstallationType::ContinuumBin.description(), "Continuum managed (direct binary update)");
+        assert!(InstallationType::ContinuumBin.supports_direct_update());
+        assert!(!InstallationType::NixStore.supports_direct_update());
+    }
+
+    #[test]
+    fn test_local_builds_dir() {
+        let dir = local_builds_dir();
+        assert!(dir.to_string_lossy().contains(".continuum"));
+        assert!(dir.to_string_lossy().contains("builds"));
     }
 }

@@ -123,9 +123,47 @@ defmodule StudioCore.VersionRegistry do
 
   @doc """
   Uninstall a version.
+
+  Options:
+    - `:remove_data` - Also remove the data directory (~/.cursor-VERSION)
+    - `:keep_auth` - When removing data, extract auth profile first
   """
   def uninstall(version, opts \\ []) do
     GenServer.call(__MODULE__, {:uninstall, version, opts})
+  end
+
+  @doc """
+  Batch uninstall multiple versions.
+
+  Options are applied to all versions.
+  """
+  def batch_uninstall(versions, opts \\ []) when is_list(versions) do
+    GenServer.call(__MODULE__, {:batch_uninstall, versions, opts}, :infinity)
+  end
+
+  @doc """
+  Get detailed disk usage for a specific version.
+
+  Returns breakdown of AppImage size, data dir size, and extensions size.
+  """
+  def disk_usage_detailed(version) when is_binary(version) do
+    GenServer.call(__MODULE__, {:disk_usage_detailed, version})
+  end
+
+  @doc """
+  Get detailed disk usage for all installed versions.
+  """
+  def disk_usage_all do
+    GenServer.call(__MODULE__, :disk_usage_all, :infinity)
+  end
+
+  @doc """
+  Get the last-used time for a version.
+
+  Reads the mtime of the data directory or state.vscdb.
+  """
+  def last_used(version) when is_binary(version) do
+    GenServer.call(__MODULE__, {:last_used, version})
   end
 
   @doc """
@@ -224,6 +262,35 @@ defmodule StudioCore.VersionRegistry do
   def handle_call({:uninstall, version, opts}, _from, state) do
     result = do_uninstall(version, opts)
     {:reply, result, state}
+  end
+
+  def handle_call({:batch_uninstall, versions, opts}, _from, state) do
+    results = Enum.map(versions, fn version ->
+      {version, do_uninstall(version, opts)}
+    end)
+    {:reply, {:ok, results}, state}
+  end
+
+  def handle_call({:disk_usage_detailed, version}, _from, _state) do
+    result = do_disk_usage_detailed(version)
+    {:reply, {:ok, result}, _state}
+  end
+
+  def handle_call(:disk_usage_all, _from, state) do
+    results =
+      state.versions
+      |> Enum.filter(fn v -> version_installed?(v["version"]) end)
+      |> Enum.map(fn v -> do_disk_usage_detailed(v["version"]) end)
+      |> Enum.sort_by(fn r -> -(r.total_size) end)
+
+    total = Enum.reduce(results, 0, fn r, acc -> acc + r.total_size end)
+
+    {:reply, {:ok, %{versions: results, total_size: total, total_size_human: format_bytes(total)}}, state}
+  end
+
+  def handle_call({:last_used, version}, _from, _state) do
+    result = do_last_used(version)
+    {:reply, {:ok, result}, _state}
   end
 
   def handle_call({:download_url, version}, _from, state) do
@@ -534,15 +601,117 @@ defmodule StudioCore.VersionRegistry do
     end
   end
 
-  defp do_uninstall(version, _opts) do
+  defp do_uninstall(version, opts) do
     path = appimage_path(version)
+    remove_data = Keyword.get(opts, :remove_data, false)
 
     if File.exists?(path) do
+      # Remove AppImage
       File.rm!(path)
-      Logger.info("Uninstalled Cursor #{version}")
+      Logger.info("Uninstalled Cursor #{version} AppImage")
+
+      # Optionally remove data directory
+      if remove_data do
+        data_dir = data_dir_path(version)
+        if File.exists?(data_dir) do
+          Logger.info("Removing data directory: #{data_dir}")
+          File.rm_rf!(data_dir)
+        end
+      end
+
       {:ok, :uninstalled}
     else
       {:error, :not_installed}
     end
   end
+
+  # Get the data directory path for a version
+  defp data_dir_path(version) do
+    Path.expand("~/.cursor-#{version}")
+  end
+
+  # Get detailed disk usage for a single version
+  defp do_disk_usage_detailed(version) do
+    appimage = appimage_path(version)
+    data_dir = data_dir_path(version)
+    extensions_dir = Path.join(data_dir, "extensions")
+
+    appimage_size = get_file_size(appimage)
+    data_size = get_dir_size(data_dir)
+    extensions_size = get_dir_size(extensions_dir)
+
+    # data_size includes extensions, so subtract to avoid double-counting
+    data_only_size = max(data_size - extensions_size, 0)
+    total = appimage_size + data_size
+
+    last_used = do_last_used(version)
+
+    %{
+      version: version,
+      appimage_size: appimage_size,
+      appimage_size_human: format_bytes(appimage_size),
+      data_size: data_only_size,
+      data_size_human: format_bytes(data_only_size),
+      extensions_size: extensions_size,
+      extensions_size_human: format_bytes(extensions_size),
+      total_size: total,
+      total_size_human: format_bytes(total),
+      has_data_dir: File.exists?(data_dir),
+      has_extensions: File.exists?(extensions_dir),
+      last_used: last_used,
+      appimage_path: appimage,
+      data_dir_path: data_dir
+    }
+  end
+
+  # Get last-used timestamp for a version
+  defp do_last_used(version) do
+    data_dir = data_dir_path(version)
+    state_db = Path.join([data_dir, "User", "globalStorage", "state.vscdb"])
+
+    # Try state.vscdb first (most accurate), then data dir mtime
+    cond do
+      File.exists?(state_db) ->
+        case File.stat(state_db) do
+          {:ok, %{mtime: mtime}} ->
+            # Convert Erlang datetime to ISO 8601
+            NaiveDateTime.from_erl!(mtime)
+            |> NaiveDateTime.to_iso8601()
+          _ -> nil
+        end
+
+      File.exists?(data_dir) ->
+        case File.stat(data_dir) do
+          {:ok, %{mtime: mtime}} ->
+            NaiveDateTime.from_erl!(mtime)
+            |> NaiveDateTime.to_iso8601()
+          _ -> nil
+        end
+
+      true -> nil
+    end
+  end
+
+  # Get total size of a directory recursively
+  defp get_dir_size(path) do
+    if File.exists?(path) and File.dir?(path) do
+      try do
+        {output, 0} = System.cmd("du", ["-sb", path], stderr_to_stdout: true)
+        output
+        |> String.split("\t")
+        |> List.first()
+        |> String.trim()
+        |> String.to_integer()
+      rescue
+        _ -> 0
+      catch
+        _ -> 0
+      end
+    else
+      0
+    end
+  end
+
+  defp max(a, b) when a > b, do: a
+  defp max(_a, b), do: b
 end
