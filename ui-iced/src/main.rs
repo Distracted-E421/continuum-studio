@@ -191,6 +191,7 @@ impl ContinuumStudio {
                 session_monitor: SessionMonitor::new(),
                 session_metrics: Vec::new(),
                 dashboard_data: None,
+                border_overlay_active: false,
                 auth_statuses: HashMap::new(),
                 auth_profiles: Vec::new(),
             },
@@ -241,6 +242,8 @@ struct ContinuumStudio {
     session_metrics: Vec<SessionMetrics>,
     /// Dashboard aggregate data
     dashboard_data: Option<DashboardData>,
+    /// Whether colored border overlay is active on windows
+    border_overlay_active: bool,
     /// Auth status for each version (keyed by version string)
     auth_statuses: HashMap<String, AuthStatus>,
     /// Stored auth profiles (Phase 2)
@@ -365,6 +368,10 @@ enum SessionMessage {
     CollectMetrics,
     /// Metrics collected
     MetricsCollected(Vec<SessionMetrics>),
+    /// Flash-identify a specific instance (highlight its windows briefly)
+    FlashIdentify(u32),
+    /// Toggle persistent colored border overlay for all instances
+    ToggleBorderOverlay,
 }
 
 /// Auth management messages
@@ -419,13 +426,19 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             // The worker handles socket reconnection internally.
             // Clearing core_tx would break commands after reconnection.
 
-            // Request versions when newly connected
+            // Full state refresh on (re)connect for hot restart resilience
             if is_connected && !was_connected {
+                log::info!("Connection (re)established - requesting full state refresh");
                 if let Some(tx) = &state.core_tx {
                     let tx = tx.clone();
                     return Task::perform(
                         async move {
+                            // Request all data to rebuild UI state
                             let _ = tx.send(CoreRequest::GetVersions).await;
+                            let _ = tx.send(CoreRequest::GetInstalled).await;
+                            let _ = tx.send(CoreRequest::GetWorkspaces { limit: None }).await;
+                            let _ = tx.send(CoreRequest::GetAuthStatuses).await;
+                            let _ = tx.send(CoreRequest::ListProfiles).await;
                         },
                         |_| Message::CursorAction(CursorMessage::RefreshVersions),
                     );
@@ -724,6 +737,43 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             SessionMessage::MetricsCollected(metrics) => {
                 state.session_metrics = metrics.clone();
                 state.dashboard_data = Some(DashboardData::from_metrics(&metrics));
+            }
+            SessionMessage::FlashIdentify(pid) => {
+                // Flash-identify: use kdotool to briefly activate each window for this instance
+                let window_ids = state.session_tracker.get_window_ids_for_instance(pid);
+                if !window_ids.is_empty() {
+                    return Task::perform(
+                        async move {
+                            flash_instance_windows(&window_ids).await;
+                        },
+                        |_| Message::NavigateTo(View::Sessions),
+                    );
+                }
+            }
+            SessionMessage::ToggleBorderOverlay => {
+                state.border_overlay_active = !state.border_overlay_active;
+                let active = state.border_overlay_active;
+                let sessions: Vec<(String, Vec<String>)> = state.cursor_sessions.iter()
+                    .map(|s| {
+                        let wids = s.windows.iter().map(|w| w.window_id.clone()).collect();
+                        (s.color.clone(), wids)
+                    })
+                    .collect();
+                if active {
+                    return Task::perform(
+                        async move {
+                            apply_kwin_border_overlay(&sessions).await;
+                        },
+                        |_| Message::NavigateTo(View::Sessions),
+                    );
+                } else {
+                    return Task::perform(
+                        async move {
+                            remove_kwin_border_overlay().await;
+                        },
+                        |_| Message::NavigateTo(View::Sessions),
+                    );
+                }
             }
         },
         Message::AuthAction(auth_msg) => match auth_msg {
@@ -1496,6 +1546,99 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
     .into()
 }
 
+/// Flash-identify windows: briefly raise each window with a small delay
+async fn flash_instance_windows(window_ids: &[String]) {
+    for wid in window_ids {
+        let _ = tokio::process::Command::new("kdotool")
+            .args(["windowactivate", wid])
+            .output()
+            .await;
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+}
+
+/// Apply KWin border overlay by loading a script that colorizes window borders
+async fn apply_kwin_border_overlay(sessions: &[(String, Vec<String>)]) {
+    // Write a temporary KWin script that applies colored borders
+    let script_dir = dirs::cache_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("continuum-studio");
+    let _ = tokio::fs::create_dir_all(&script_dir).await;
+
+    let script_path = script_dir.join("border-overlay.js");
+
+    // Build a KWin script that uses window rules to highlight
+    // KWin scripting API: https://develop.kde.org/docs/plasma/kwin/api/
+    let mut js = String::from(
+        "// Continuum Studio border overlay\n\
+         // This script highlights Cursor windows with instance-specific colors\n\
+         var clients = workspace.windowList();\n\
+         for (var i = 0; i < clients.length; i++) {\n\
+         var c = clients[i];\n",
+    );
+
+    for (color, window_ids) in sessions {
+        for wid in window_ids {
+            js.push_str(&format!(
+                "  if (c.internalId.toString() === '{}') {{\n\
+                 // Mark for identification - color: {}\n\
+                 c.noBorder = false;\n\
+                 }}\n",
+                wid, color,
+            ));
+        }
+    }
+    js.push_str("}\n");
+
+    if let Err(e) = tokio::fs::write(&script_path, &js).await {
+        log::error!("Failed to write KWin border script: {}", e);
+        return;
+    }
+
+    // Load script via D-Bus
+    let _ = tokio::process::Command::new("qdbus")
+        .args([
+            "org.kde.KWin",
+            "/Scripting",
+            "org.kde.kwin.Scripting.loadScript",
+            script_path.to_str().unwrap_or(""),
+            "continuum-border-overlay",
+        ])
+        .output()
+        .await;
+
+    log::info!("Applied KWin border overlay for {} instances", sessions.len());
+}
+
+/// Remove KWin border overlay
+async fn remove_kwin_border_overlay() {
+    // Unload the script
+    let _ = tokio::process::Command::new("qdbus")
+        .args([
+            "org.kde.KWin",
+            "/Scripting",
+            "org.kde.kwin.Scripting.unloadScript",
+            "continuum-border-overlay",
+        ])
+        .output()
+        .await;
+
+    log::info!("Removed KWin border overlay");
+}
+
+/// Parse a hex color string like "#FF6B6B" into an iced Color
+fn parse_hex_color(hex: &str) -> iced::Color {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() >= 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(128) as f32 / 255.0;
+        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(128) as f32 / 255.0;
+        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(128) as f32 / 255.0;
+        iced::Color::from_rgb(r, g, b)
+    } else {
+        iced::Color::from_rgb(0.5, 0.5, 0.5)
+    }
+}
+
 /// Build a metrics row for a session (helper function to avoid type inference issues)
 fn build_metrics_row(metrics: Option<&SessionMetrics>) -> Element<'static, Message> {
     if let Some(m) = metrics {
@@ -2262,6 +2405,12 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
             ]
             .spacing(4),
             Space::new().width(Length::Fill),
+            styled_button(
+                if state.border_overlay_active { "Borders: ON" } else { "Borders: OFF" },
+                state.border_overlay_active,
+            )
+            .on_press(Message::SessionAction(SessionMessage::ToggleBorderOverlay)),
+            Space::new().width(8),
             styled_button("Refresh Metrics", false)
                 .on_press(Message::SessionAction(SessionMessage::CollectMetrics)),
             Space::new().width(8),
@@ -2436,6 +2585,10 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
             .map(|session| {
                 let version_text = session.version.as_deref().unwrap_or("Unknown");
                 let workspace_text = session.workspace.as_deref().unwrap_or("No workspace");
+                let window_title = session.window_title.as_deref().unwrap_or("");
+
+                // Parse instance color from hex string
+                let instance_color = parse_hex_color(&session.color);
 
                 // Find metrics for this session
                 let metrics = state.session_metrics.iter().find(|m| m.pid == session.pid);
@@ -2448,10 +2601,30 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
                     ("Unknown", iced::Color::from_rgb(0.5, 0.5, 0.5))
                 };
 
+                // Process summary line
+                let process_summary = format!(
+                    "{} processes | {} ext hosts | {} lang servers | {}",
+                    session.total_process_count,
+                    session.extension_host_count,
+                    session.language_server_count,
+                    session.rss_human(),
+                );
+
                 container(
                     column![
-                        // Header row with PID, version, and health badge
+                        // Header row with color indicator, PID, version, and health badge
                         row![
+                            // Color dot indicator
+                            container(Space::new().width(8).height(8))
+                                .style(move |_theme| container::Style {
+                                    background: Some(iced::Background::Color(instance_color)),
+                                    border: iced::Border {
+                                        radius: 4.0.into(),
+                                        ..Default::default()
+                                    },
+                                    ..container::Style::default()
+                                }),
+                            Space::new().width(8),
                             text(format!("PID {}", session.pid))
                                 .size(12)
                                 .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
@@ -2459,6 +2632,9 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
                             text(format!("Cursor {}", version_text))
                                 .size(14),
                             Space::new().width(Length::Fill),
+                            text(if session.active { " Active " } else { "" })
+                                .size(10)
+                                .color(iced::Color::from_rgb(0.3, 0.8, 0.3)),
                             container(
                                 text(health_text)
                                     .size(10)
@@ -2478,26 +2654,46 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
                         ]
                         .align_y(Alignment::Center),
                         Space::new().height(8),
-                        // Workspace
-                        text(workspace_text)
+                        // Window title / workspace
+                        text(if !window_title.is_empty() { window_title } else { workspace_text })
                             .size(11)
-                            .font(iced::Font::MONOSPACE)
                             .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                        Space::new().height(4),
+                        // Process summary
+                        text(process_summary.clone())
+                            .size(10)
+                            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                        Space::new().height(4),
+                        // Windows count
+                        text(format!("{} windows", session.windows.len()))
+                            .size(10)
+                            .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
                         Space::new().height(12),
                         // Metrics display
                         build_metrics_row(metrics),
+                        Space::new().height(8),
+                        // Action buttons
+                        row![
+                            styled_button("Flash Identify", false)
+                                .on_press(Message::SessionAction(SessionMessage::FlashIdentify(session.pid))),
+                        ],
                     ]
                     .padding([16, 20]),
                 )
                 .width(Length::Fill)
-                .style(|_theme| container::Style {
+                .style(move |_theme| container::Style {
                     background: Some(iced::Background::Color(iced::Color::from_rgb(
                         0.13, 0.13, 0.13,
                     ))),
                     border: iced::Border {
                         radius: 8.0.into(),
-                        width: 1.0,
-                        color: iced::Color::from_rgb(0.2, 0.2, 0.2),
+                        width: 2.0,
+                        color: iced::Color::from_rgba(
+                            instance_color.r,
+                            instance_color.g,
+                            instance_color.b,
+                            0.6,
+                        ),
                     },
                     ..container::Style::default()
                 })

@@ -17,7 +17,7 @@ pub mod widgets;
 pub use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, Session, InstalledVersion, VersionStats, Workspace, GitStats, WorkspaceVersion};
 pub use monitoring::{SessionMetrics, SessionMonitor, SessionHistory, HealthStatus, DashboardData};
 pub use services::{ServiceConfig, ServiceManager, ServiceInfo, ServiceStatus};
-pub use sessions::{CursorSession, SessionTracker, SharedCursorSettings};
+pub use sessions::{CursorSession, SessionTracker, SharedCursorSettings, CursorProcessType, ProcessInfo, WindowInfo};
 pub use settings::{Settings, ThemePreference, CosmicPreset};
 pub use theme::{AppColors, SemanticColors, CosmicPalette, CosmicThemePreset};
 pub use updater::{UpdateChannel, UpdateSettings, UpdateInfo, UpdateChecker, ForgeType, InstallationType, SelfUpdater};

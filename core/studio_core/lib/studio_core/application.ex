@@ -7,6 +7,12 @@ defmodule StudioCore.Application do
   - Harness registrations from Synapsix
   - State management via ETS
   - Event broadcasting to connected clients
+
+  ## Hot Restart Resilience
+
+  On shutdown, critical in-memory state is snapshotted to disk.
+  On startup, the snapshot is restored so running Cursor instances
+  and connected UIs can seamlessly reconnect without losing context.
   """
   use Application
   require Logger
@@ -39,10 +45,61 @@ defmodule StudioCore.Application do
     ]
 
     opts = [strategy: :one_for_one, name: StudioCore.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    case Supervisor.start_link(children, opts) do
+      {:ok, pid} ->
+        # Restore state from snapshot after all GenServers are up
+        restore_from_snapshot()
+        {:ok, pid}
+
+      error ->
+        error
+    end
   end
+
+  @impl true
+  def prep_stop(_state) do
+    # Save state snapshot before shutdown for hot restart resilience
+    Logger.info("Preparing for shutdown - saving state snapshot...")
+    StudioCore.StateSnapshot.save()
+
+    # Notify connected clients about graceful shutdown
+    StudioCore.EventBus.broadcast({:system, :shutting_down})
+
+    # Give clients a moment to process the shutdown notification
+    Process.sleep(100)
+
+    :ok
+  end
+
+  @impl true
+  def stop(_state) do
+    Logger.info("Continuum Studio Core stopped")
+    :ok
+  end
+
+  # -- Private --
 
   defp socket_path do
     System.get_env("STUDIO_SOCKET_PATH", "/tmp/continuum-studio.sock")
+  end
+
+  defp restore_from_snapshot do
+    case StudioCore.StateSnapshot.restore() do
+      {:ok, snapshot} ->
+        StudioCore.StateSnapshot.apply_snapshot(snapshot)
+
+        # Clear the snapshot after successful restore
+        # (will be re-saved on next shutdown)
+        StudioCore.StateSnapshot.clear()
+
+        Logger.info("Hot restart recovery complete")
+
+      {:error, :not_found} ->
+        Logger.debug("Clean start (no snapshot to restore)")
+
+      {:error, reason} ->
+        Logger.warning("Failed to restore snapshot: #{inspect(reason)}")
+    end
   end
 end
