@@ -79,6 +79,10 @@ pub enum CoreRequest {
     ToggleWorkspacePinned { id: String },
     /// Refresh workspace git stats
     RefreshWorkspaceGit { id: String },
+    /// Get auth status for a specific version
+    GetAuthStatus { version: String },
+    /// Get auth statuses for all installed versions
+    GetAuthStatuses,
     /// Ping for health check
     Ping,
 }
@@ -120,6 +124,10 @@ impl CoreRequest {
             CoreRequest::RefreshWorkspaceGit { id } => {
                 ("workspaces_refresh_git", serde_json::json!({"id": id}))
             }
+            CoreRequest::GetAuthStatus { version } => {
+                ("auth_version_status", serde_json::json!({"version": version}))
+            }
+            CoreRequest::GetAuthStatuses => ("auth_list_statuses", serde_json::json!({})),
             CoreRequest::Ping => ("ping", serde_json::json!({})),
         };
         
@@ -160,6 +168,10 @@ pub enum CoreResponse {
     WorkspacePinned { id: String, pinned: bool },
     /// Workspace git stats updated
     WorkspaceGitStats { id: String, git_stats: Option<GitStats> },
+    /// Auth status for a single version
+    AuthStatus(AuthStatus),
+    /// Auth statuses for all installed versions
+    AuthStatuses(Vec<AuthStatus>),
     /// Pong response
     Pong,
     /// Error occurred
@@ -273,6 +285,16 @@ impl CoreResponse {
                 let git_stats: Option<GitStats> = data.get("git_stats")
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
                 Ok(CoreResponse::WorkspaceGitStats { id, git_stats })
+            }
+            "auth_status" => {
+                let status: AuthStatus = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse auth status: {}", e))?;
+                Ok(CoreResponse::AuthStatus(status))
+            }
+            "auth_statuses" => {
+                let statuses: Vec<AuthStatus> = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse auth statuses: {}", e))?;
+                Ok(CoreResponse::AuthStatuses(statuses))
             }
             "pong" => Ok(CoreResponse::Pong),
             "error" => {
@@ -427,6 +449,60 @@ pub struct WorkspaceVersion {
     pub last_opened: Option<String>,
     #[serde(default)]
     pub open_count: u32,
+}
+
+/// Authentication status for a Cursor version
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
+pub struct AuthStatus {
+    /// Version string (e.g., "2.4.27")
+    pub version: String,
+    /// User email if logged in
+    #[serde(default)]
+    pub email: Option<String>,
+    /// Auth provider (Github, Google, Email)
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Subscription type (free, pro, business)
+    #[serde(default)]
+    pub membership: String,
+    /// Subscription status (active, canceled, etc.)
+    #[serde(default)]
+    pub subscription_status: Option<String>,
+    /// Whether an access token exists
+    #[serde(default)]
+    pub has_token: bool,
+    /// Overall auth status
+    #[serde(default)]
+    pub status: AuthState,
+    /// Privacy mode setting
+    #[serde(default)]
+    pub privacy_mode: Option<String>,
+}
+
+/// Auth state enum
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthState {
+    /// Authenticated with valid token
+    Authenticated,
+    /// Not logged in
+    #[default]
+    NotLoggedIn,
+    /// Token may be stale/expired
+    Stale,
+    /// Unknown status
+    Unknown,
+}
+
+impl std::fmt::Display for AuthState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthState::Authenticated => write!(f, "Authenticated"),
+            AuthState::NotLoggedIn => write!(f, "Not Logged In"),
+            AuthState::Stale => write!(f, "Stale"),
+            AuthState::Unknown => write!(f, "Unknown"),
+        }
+    }
 }
 
 /// Core client for IPC communication

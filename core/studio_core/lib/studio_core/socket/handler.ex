@@ -360,6 +360,39 @@ defmodule StudioCore.Socket.Handler do
     {:noreply, state}
   end
 
+  # Auth management commands
+
+  defp handle_command(:auth_version_status, %{version: version}, state) do
+    case StudioCore.AuthManager.version_auth_status(version) do
+      {:ok, status} ->
+        send_event(state.socket, {:auth_status, status})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to get auth status: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:auth_list_statuses, _params, state) do
+    case StudioCore.AuthManager.list_installed_auth_statuses() do
+      {:ok, statuses} ->
+        send_event(state.socket, {:auth_statuses, statuses})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to list auth statuses: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:auth_all_statuses, _params, state) do
+    # List auth for ALL discovered versions (not just installed)
+    case StudioCore.AuthManager.list_version_auth_statuses() do
+      {:ok, statuses} ->
+        send_event(state.socket, {:auth_statuses, statuses})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to list auth statuses: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
   defp handle_command(unknown, params, state) do
     Logger.warning("Unknown command: #{inspect(unknown)} with #{inspect(params)}")
     send_error(state.socket, "Unknown command: #{unknown}")
@@ -548,6 +581,9 @@ defmodule StudioCore.Socket.Handler do
   defp event_data({:workspace_pinned, data}) when is_map(data), do: data
   defp event_data({:workspace_git_stats, data}) when is_map(data), do: data
   defp event_data({:workspace_deleted, data}) when is_map(data), do: data
+  # Auth events
+  defp event_data({:auth_status, status}) when is_map(status), do: status
+  defp event_data({:auth_statuses, statuses}) when is_list(statuses), do: statuses
   defp event_data({_, data}) when is_map(data), do: data
   defp event_data(_), do: %{}
 end

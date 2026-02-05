@@ -28,6 +28,9 @@ defmodule StudioCore.Application do
       # Version registry - Cursor version management
       StudioCore.VersionRegistry,
 
+      # Auth manager - Cursor authentication management
+      StudioCore.AuthManager,
+
       # Workspace tracker - tracks projects across versions
       StudioCore.WorkspaceTracker,
 

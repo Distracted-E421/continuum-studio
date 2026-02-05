@@ -9,9 +9,10 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use continuum_studio_iced::core::{
-    spawn_core_connection, ConnectionState, CoreRequest, CoreResponse, CursorVersion, VersionStatus,
-    Workspace, DEFAULT_SOCKET_PATH,
+    spawn_core_connection, AuthState, AuthStatus, ConnectionState, CoreRequest, CoreResponse, 
+    CursorVersion, VersionStatus, Workspace, DEFAULT_SOCKET_PATH,
 };
+use std::collections::HashMap;
 use continuum_studio_iced::log_capture::{init_logger, LogBuffer, LogEntry};
 use continuum_studio_iced::services::{ServiceConfig, ServiceInfo, ServiceManager, ServiceStatus};
 use continuum_studio_iced::monitoring::{SessionMonitor, SessionMetrics, HealthStatus, DashboardData};
@@ -190,6 +191,7 @@ impl ContinuumStudio {
                 session_monitor: SessionMonitor::new(),
                 session_metrics: Vec::new(),
                 dashboard_data: None,
+                auth_statuses: HashMap::new(),
             },
             startup_task,
         )
@@ -238,6 +240,8 @@ struct ContinuumStudio {
     session_metrics: Vec<SessionMetrics>,
     /// Dashboard aggregate data
     dashboard_data: Option<DashboardData>,
+    /// Auth status for each version (keyed by version string)
+    auth_statuses: HashMap<String, AuthStatus>,
 }
 
 /// Available views in the application
@@ -650,6 +654,16 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 CoreResponse::Versions(versions) => {
                     log::info!("Got {} versions from Core!", versions.len());
                     state.versions = versions;
+                    // Also request auth statuses for installed versions
+                    if let Some(tx) = &state.core_tx {
+                        let tx = tx.clone();
+                        return Task::perform(
+                            async move {
+                                let _ = tx.send(CoreRequest::GetAuthStatuses).await;
+                            },
+                            |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                        );
+                    }
                 }
                 CoreResponse::InstalledVersions(installed) => {
                     // Update status of versions that are installed
@@ -731,6 +745,16 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                     log::info!("Updated git stats for workspace {}", id);
                     if let Some(ws) = state.workspaces.iter_mut().find(|w| w.id == id) {
                         ws.git_stats = git_stats;
+                    }
+                }
+                CoreResponse::AuthStatus(auth_status) => {
+                    log::info!("Auth status for {}: {:?}", auth_status.version, auth_status.status);
+                    state.auth_statuses.insert(auth_status.version.clone(), auth_status);
+                }
+                CoreResponse::AuthStatuses(statuses) => {
+                    log::info!("Received auth statuses for {} versions", statuses.len());
+                    for status in statuses {
+                        state.auth_statuses.insert(status.version.clone(), status);
                     }
                 }
             }
@@ -1165,7 +1189,8 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
 
         // Version rows for this era
         for v in era_versions {
-            version_elements.push(version_row_from_data(v));
+            let auth_status = state.auth_statuses.get(&v.version);
+            version_elements.push(version_row_from_data(v, auth_status));
         }
 
         version_elements.push(Space::new().height(16).into());
@@ -1372,7 +1397,7 @@ fn get_version_era(version: &str) -> String {
 }
 
 /// Create a version row from CursorVersion data with polished styling
-fn version_row_from_data(version: &CursorVersion) -> Element<Message> {
+fn version_row_from_data<'a>(version: &'a CursorVersion, auth_status: Option<&'a AuthStatus>) -> Element<'a, Message> {
     let v = version.version.clone();
     let v2 = version.version.clone();
 
@@ -1381,6 +1406,48 @@ fn version_row_from_data(version: &CursorVersion) -> Element<Message> {
         VersionStatus::Installed => ("Installed", iced::Color::from_rgb(0.4, 0.6, 1.0)),
         VersionStatus::Available => ("Available", iced::Color::from_rgb(0.5, 0.5, 0.5)),
         VersionStatus::Downloading => ("Downloading...", iced::Color::from_rgb(0.75, 0.65, 0.25)),
+    };
+
+    // Build auth display for installed versions
+    let auth_display: Element<Message> = if version.installed {
+        match auth_status {
+            Some(status) => {
+                let (auth_icon, auth_text, auth_color) = match status.status {
+                    AuthState::Authenticated => {
+                        let email = status.email.as_deref().unwrap_or("Logged in");
+                        let email_short = if email.len() > 15 {
+                            format!("{}...", &email[..12])
+                        } else {
+                            email.to_string()
+                        };
+                        ("🔑", email_short, iced::Color::from_rgb(0.3, 0.7, 0.4))
+                    }
+                    AuthState::NotLoggedIn => {
+                        ("—", "Not logged in".to_string(), iced::Color::from_rgb(0.5, 0.5, 0.5))
+                    }
+                    AuthState::Stale => {
+                        ("⚠", "Stale".to_string(), iced::Color::from_rgb(0.8, 0.6, 0.2))
+                    }
+                    AuthState::Unknown => {
+                        ("?", "Unknown".to_string(), iced::Color::from_rgb(0.5, 0.5, 0.5))
+                    }
+                };
+                row![
+                    text(auth_icon).size(11),
+                    text(auth_text).size(11).color(auth_color),
+                ]
+                .spacing(4)
+                .align_y(Alignment::Center)
+                .into()
+            }
+            None => {
+                // Auth status not loaded yet
+                text("...").size(11).color(iced::Color::from_rgb(0.4, 0.4, 0.4)).into()
+            }
+        }
+    } else {
+        // Not installed, no auth display
+        text("-").size(11).color(iced::Color::from_rgb(0.3, 0.3, 0.3)).into()
     };
 
     let action_button: Element<Message> = match version.status {
@@ -1408,16 +1475,13 @@ fn version_row_from_data(version: &CursorVersion) -> Element<Message> {
 
     container(
         row![
-            text(&version.version).size(13).width(120),
-            text(status_text).size(12).color(status_color).width(100),
+            text(&version.version).size(13).width(100),
+            text(status_text).size(12).color(status_color).width(90),
+            container(auth_display).width(130),
             text(version.date.as_deref().unwrap_or("-"))
                 .size(12)
                 .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
-                .width(100),
-            text(version.era.as_deref().unwrap_or("-"))
-                .size(12)
-                .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
-                .width(80),
+                .width(90),
             Space::new().width(Length::Fill),
             container(action_button).width(100),
         ]
