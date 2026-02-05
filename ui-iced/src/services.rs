@@ -107,9 +107,39 @@ impl ServiceManager {
         )
     }
 
-    /// Check if Core is running by checking socket
+    /// Check if Core is running by verifying socket connectivity
+    /// 
+    /// Just checking if the socket file exists is insufficient - a stale socket
+    /// from a crashed process will incorrectly report as "running".
+    /// Instead, we try a quick connection to verify the Core is responsive.
     pub fn is_core_running(&self) -> bool {
-        self.config.core_socket.exists()
+        use std::os::unix::net::UnixStream;
+        use std::time::Duration;
+        
+        // First, check if socket file exists
+        if !self.config.core_socket.exists() {
+            return false;
+        }
+        
+        // Try to connect with a short timeout to verify Core is actually listening
+        match UnixStream::connect(&self.config.core_socket) {
+            Ok(stream) => {
+                // Try to set read timeout to verify the socket is responsive
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+                // Connection succeeded - Core is running
+                drop(stream);
+                true
+            }
+            Err(_) => {
+                // Connection failed - socket is stale, clean it up
+                let _ = std::fs::remove_file(&self.config.core_socket);
+                log::warn!(
+                    "Removed stale Core socket at {:?}",
+                    self.config.core_socket
+                );
+                false
+            }
+        }
     }
 
     /// Get command to start synapsix-dialog-daemon
@@ -168,14 +198,37 @@ impl ServiceManager {
 
     /// Start the Elixir Core service
     pub async fn start_core(&self) -> Result<(), String> {
+        // First verify if Core is actually running (not just socket exists)
         if self.is_core_running() {
-            return Ok(()); // Already running
+            log::info!("Core already running and responsive");
+            return Ok(());
         }
 
-        // Remove stale socket if it exists
+        // Remove stale socket if it exists (is_core_running already cleans up,
+        // but belt-and-suspenders)
         if self.config.core_socket.exists() {
+            log::info!("Removing stale Core socket before startup");
             let _ = std::fs::remove_file(&self.config.core_socket);
         }
+
+        // Check if mix is available
+        let mix_check = std::process::Command::new("which")
+            .arg("mix")
+            .output();
+        
+        if mix_check.is_err() || !mix_check.unwrap().status.success() {
+            return Err("Elixir 'mix' command not found. Please ensure Elixir is installed.".to_string());
+        }
+
+        // Verify the Core project exists
+        if !self.config.core_path.exists() {
+            return Err(format!(
+                "Core project not found at {:?}. Please check the path.",
+                self.config.core_path
+            ));
+        }
+
+        log::info!("Starting Elixir Core from {:?}", self.config.core_path);
 
         // Start Core in background
         let result = AsyncCommand::new("sh")
@@ -185,14 +238,33 @@ impl ServiceManager {
 
         match result {
             Ok(_) => {
-                // Wait a bit for the socket to appear
-                for _ in 0..50 {
+                // Wait for the socket to appear AND verify connectivity
+                for i in 0..80 {
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    if self.config.core_socket.exists() {
+                    
+                    if self.is_core_running() {
+                        log::info!("Core started successfully after {}ms", (i + 1) * 100);
                         return Ok(());
                     }
+                    
+                    // Log progress every second
+                    if (i + 1) % 10 == 0 {
+                        log::debug!("Waiting for Core startup... {}s", (i + 1) / 10);
+                    }
                 }
-                Err("Core started but socket not created within 5 seconds".to_string())
+                
+                // Check if there are error logs
+                let log_path = "/tmp/studio-core.log";
+                let log_contents = std::fs::read_to_string(log_path).unwrap_or_default();
+                if log_contents.contains("error") || log_contents.contains("Error") {
+                    return Err(format!(
+                        "Core failed to start within 8 seconds. Check logs at {}:\n{}",
+                        log_path,
+                        log_contents.lines().rev().take(10).collect::<Vec<_>>().join("\n")
+                    ));
+                }
+                
+                Err("Core started but not responding within 8 seconds. Check /tmp/studio-core.log".to_string())
             }
             Err(e) => Err(format!("Failed to start Core: {}", e)),
         }

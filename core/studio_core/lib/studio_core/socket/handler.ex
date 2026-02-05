@@ -266,9 +266,13 @@ defmodule StudioCore.Socket.Handler do
     opts = if params[:folder], do: [folder: params[:folder]], else: []
     case StudioCore.VersionRegistry.run(version, opts) do
       {:ok, info} ->
+        # Send both version_running (for status update) and launch_result (for feedback)
         send_event(state.socket, {:version_running, info})
+        send_event(state.socket, {:launch_result, %{success: true, message: "Cursor #{version} launched successfully"}})
+      {:error, :not_installed} ->
+        send_event(state.socket, {:launch_result, %{success: false, message: "Version #{version} is not installed. Please download it first."}})
       {:error, reason} ->
-        send_error(state.socket, "Failed to run version: #{inspect(reason)}")
+        send_event(state.socket, {:launch_result, %{success: false, message: "Failed to run version: #{inspect(reason)}"}})
     end
     {:noreply, state}
   end
@@ -528,6 +532,13 @@ defmodule StudioCore.Socket.Handler do
   defp event_data({:versions_installed, versions}) when is_list(versions), do: versions
   defp event_data({:versions_stats, stats}) when is_map(stats), do: stats
   defp event_data({:version_download_started, version}), do: %{version: version}
+  defp event_data({:launch_result, data}) when is_map(data), do: data
+  defp event_data({:version_downloaded, version, path_or_status}) do
+    %{version: version, path: to_string(path_or_status)}
+  end
+  defp event_data({:version_download_failed, version, reason}) do
+    %{version: version, error: inspect(reason)}
+  end
   defp event_data({:version_running, info}) when is_map(info), do: info
   # Workspace events
   defp event_data({:workspaces_list, workspaces}) when is_list(workspaces), do: workspaces

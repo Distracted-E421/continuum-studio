@@ -383,10 +383,10 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
 
             log::info!("Core connection state: {:?}", new_state);
 
-            // Clear tx when disconnected to allow reconnection
-            if matches!(new_state, ConnectionState::Disconnected) {
-                state.core_tx = None;
-            }
+            // NOTE: Don't clear core_tx on disconnect!
+            // The mpsc channel between the app and the worker is still valid.
+            // The worker handles socket reconnection internally.
+            // Clearing core_tx would break commands after reconnection.
 
             // Request versions when newly connected
             if is_connected && !was_connected {
@@ -678,6 +678,21 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                     // Update status to Downloading
                     if let Some(v) = state.versions.iter_mut().find(|v| v.version == version) {
                         v.status = VersionStatus::Downloading;
+                    }
+                }
+                CoreResponse::DownloadCompleted { version, path } => {
+                    log::info!("Download completed for version {} at {}", version, path);
+                    // Update status to Installed
+                    if let Some(v) = state.versions.iter_mut().find(|v| v.version == version) {
+                        v.status = VersionStatus::Installed;
+                        v.installed = true;
+                    }
+                }
+                CoreResponse::DownloadFailed { version, error } => {
+                    log::error!("Download failed for version {}: {}", version, error);
+                    // Reset status back to Available
+                    if let Some(v) = state.versions.iter_mut().find(|v| v.version == version) {
+                        v.status = VersionStatus::Available;
                     }
                 }
                 CoreResponse::Stats(stats) => {

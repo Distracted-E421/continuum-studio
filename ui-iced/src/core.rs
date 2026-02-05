@@ -144,6 +144,10 @@ pub enum CoreResponse {
     VersionRunning { version: String, data_dir: String },
     /// Download started
     DownloadStarted { version: String },
+    /// Download completed successfully
+    DownloadCompleted { version: String, path: String },
+    /// Download failed
+    DownloadFailed { version: String, error: String },
     /// Version statistics
     Stats(VersionStats),
     /// Sessions list
@@ -206,6 +210,38 @@ impl CoreResponse {
                     .unwrap_or("")
                     .to_string();
                 Ok(CoreResponse::DownloadStarted { version })
+            }
+            "version_downloaded" => {
+                let version = data.get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let path = data.get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Ok(CoreResponse::DownloadCompleted { version, path })
+            }
+            "version_download_failed" => {
+                let version = data.get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let error = data.get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string();
+                Ok(CoreResponse::DownloadFailed { version, error })
+            }
+            "launch_result" => {
+                let success = data.get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let message = data.get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Ok(CoreResponse::LaunchResult { success, message })
             }
             "versions_stats" => {
                 let stats: VersionStats = serde_json::from_value(data)
