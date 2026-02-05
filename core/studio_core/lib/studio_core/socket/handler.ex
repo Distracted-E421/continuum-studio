@@ -25,6 +25,15 @@ defmodule StudioCore.Socket.Handler do
   use GenServer
   require Logger
 
+  # All known commands - ensures atoms exist at compile time
+  @known_commands ~w(
+    ping harness_start harness_stop state_set state_get agent_message
+    versions_list versions_download versions_run versions_refresh
+    workspaces_list workspaces_refresh
+    auth_version_status auth_list_statuses auth_all_statuses
+    auth_extract auth_apply auth_list_profiles
+  )a
+
   defmodule State do
     @moduledoc false
     defstruct [:socket, :subscribed, buffer: ""]
@@ -99,15 +108,24 @@ defmodule StudioCore.Socket.Handler do
   defp decode_message(data) do
     case Jason.decode(data) do
       {:ok, %{"command" => cmd, "params" => params}} ->
-        command = String.to_existing_atom(cmd)
-        params_atoms = atomize_keys(params)
-        {:ok, {:command, command, params_atoms}}
+        # Only convert to atom if it's a known command (security)
+        cmd_atom = String.to_atom(cmd)
+        if cmd_atom in @known_commands do
+          params_atoms = atomize_keys(params)
+          {:ok, {:command, cmd_atom, params_atoms}}
+        else
+          {:error, {:unknown_command, cmd}}
+        end
 
       {:ok, %{"event" => event, "data" => event_data}} ->
-        # Event from Synapsix
-        event_atom = String.to_existing_atom(event)
-        data_atoms = atomize_keys(event_data)
-        {:ok, {:event, event_atom, data_atoms}}
+        # Event from Synapsix - use to_existing_atom for safety
+        try do
+          event_atom = String.to_existing_atom(event)
+          data_atoms = atomize_keys(event_data)
+          {:ok, {:event, event_atom, data_atoms}}
+        rescue
+          ArgumentError -> {:error, {:unknown_event, event}}
+        end
 
       {:ok, _} ->
         {:error, :invalid_json_format}
@@ -393,6 +411,46 @@ defmodule StudioCore.Socket.Handler do
     {:noreply, state}
   end
 
+  defp handle_command(:auth_extract, %{version: version}, state) do
+    case StudioCore.AuthManager.extract_from_version(version) do
+      {:ok, profile} ->
+        # Save the profile for later application
+        _save_result = StudioCore.AuthManager.save_profile(profile)
+        # Return profile metadata (tokens redacted for security)
+        safe_profile = Map.drop(profile, [:access_token, :refresh_token])
+        send_event(state.socket, {:auth_extracted, Map.put(safe_profile, :has_tokens, true)})
+      {:error, reason} ->
+        send_event(state.socket, {:auth_extract_failed, %{version: version, error: inspect(reason)}})
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:auth_apply, %{source: source, target: target}, state) do
+    case StudioCore.AuthManager.apply_auth(source, target) do
+      {:ok, result} ->
+        send_event(state.socket, {:auth_applied, result})
+        # Also broadcast updated auth status for target
+        case StudioCore.AuthManager.version_auth_status(target) do
+          {:ok, status} ->
+            send_event(state.socket, {:auth_status, status})
+          _ -> :ok
+        end
+      {:error, reason} ->
+        send_event(state.socket, {:auth_apply_failed, %{source: source, target: target, error: inspect(reason)}})
+    end
+    {:noreply, state}
+  end
+
+  defp handle_command(:auth_list_profiles, _params, state) do
+    case StudioCore.AuthManager.list_profiles() do
+      {:ok, profiles} ->
+        send_event(state.socket, {:auth_profiles, profiles})
+      {:error, reason} ->
+        send_error(state.socket, "Failed to list profiles: #{inspect(reason)}")
+    end
+    {:noreply, state}
+  end
+
   defp handle_command(unknown, params, state) do
     Logger.warning("Unknown command: #{inspect(unknown)} with #{inspect(params)}")
     send_error(state.socket, "Unknown command: #{unknown}")
@@ -584,6 +642,11 @@ defmodule StudioCore.Socket.Handler do
   # Auth events
   defp event_data({:auth_status, status}) when is_map(status), do: status
   defp event_data({:auth_statuses, statuses}) when is_list(statuses), do: statuses
+  defp event_data({:auth_extracted, profile}) when is_map(profile), do: profile
+  defp event_data({:auth_extract_failed, data}) when is_map(data), do: data
+  defp event_data({:auth_applied, result}) when is_map(result), do: result
+  defp event_data({:auth_apply_failed, data}) when is_map(data), do: data
+  defp event_data({:auth_profiles, profiles}) when is_list(profiles), do: profiles
   defp event_data({_, data}) when is_map(data), do: data
   defp event_data(_), do: %{}
 end

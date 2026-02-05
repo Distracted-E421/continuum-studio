@@ -83,6 +83,12 @@ pub enum CoreRequest {
     GetAuthStatus { version: String },
     /// Get auth statuses for all installed versions
     GetAuthStatuses,
+    /// Extract auth profile from a version (Phase 2)
+    ExtractAuth { version: String },
+    /// Apply auth from source version to target version (Phase 2)
+    ApplyAuth { source: String, target: String },
+    /// List stored auth profiles (Phase 2)
+    ListProfiles,
     /// Ping for health check
     Ping,
 }
@@ -128,6 +134,13 @@ impl CoreRequest {
                 ("auth_version_status", serde_json::json!({"version": version}))
             }
             CoreRequest::GetAuthStatuses => ("auth_list_statuses", serde_json::json!({})),
+            CoreRequest::ExtractAuth { version } => {
+                ("auth_extract", serde_json::json!({"version": version}))
+            }
+            CoreRequest::ApplyAuth { source, target } => {
+                ("auth_apply", serde_json::json!({"source": source, "target": target}))
+            }
+            CoreRequest::ListProfiles => ("auth_list_profiles", serde_json::json!({})),
             CoreRequest::Ping => ("ping", serde_json::json!({})),
         };
         
@@ -172,6 +185,16 @@ pub enum CoreResponse {
     AuthStatus(AuthStatus),
     /// Auth statuses for all installed versions
     AuthStatuses(Vec<AuthStatus>),
+    /// Auth profile extracted successfully (Phase 2)
+    AuthExtracted(AuthProfile),
+    /// Auth extraction failed (Phase 2)
+    AuthExtractFailed { version: String, error: String },
+    /// Auth applied successfully (Phase 2)
+    AuthApplied { source: String, target: String, email: String },
+    /// Auth application failed (Phase 2)
+    AuthApplyFailed { source: String, target: String, error: String },
+    /// List of stored auth profiles (Phase 2)
+    AuthProfiles(Vec<AuthProfile>),
     /// Pong response
     Pong,
     /// Error occurred
@@ -295,6 +318,57 @@ impl CoreResponse {
                 let statuses: Vec<AuthStatus> = serde_json::from_value(data)
                     .map_err(|e| format!("Failed to parse auth statuses: {}", e))?;
                 Ok(CoreResponse::AuthStatuses(statuses))
+            }
+            "auth_extracted" => {
+                let profile: AuthProfile = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse auth profile: {}", e))?;
+                Ok(CoreResponse::AuthExtracted(profile))
+            }
+            "auth_extract_failed" => {
+                let version = data.get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let error = data.get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string();
+                Ok(CoreResponse::AuthExtractFailed { version, error })
+            }
+            "auth_applied" => {
+                let source = data.get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let target = data.get("target")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let email = data.get("email")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Ok(CoreResponse::AuthApplied { source, target, email })
+            }
+            "auth_apply_failed" => {
+                let source = data.get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let target = data.get("target")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let error = data.get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string();
+                Ok(CoreResponse::AuthApplyFailed { source, target, error })
+            }
+            "auth_profiles" => {
+                let profiles: Vec<AuthProfile> = serde_json::from_value(data)
+                    .map_err(|e| format!("Failed to parse auth profiles: {}", e))?;
+                Ok(CoreResponse::AuthProfiles(profiles))
             }
             "pong" => Ok(CoreResponse::Pong),
             "error" => {
@@ -503,6 +577,38 @@ impl std::fmt::Display for AuthState {
             AuthState::Unknown => write!(f, "Unknown"),
         }
     }
+}
+
+/// Auth profile for extraction/application (Phase 2)
+/// Note: Actual tokens are NOT included in the data sent to UI for security
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct AuthProfile {
+    /// Unique identifier for the profile
+    pub id: String,
+    /// User-friendly name for the profile
+    #[serde(default)]
+    pub name: Option<String>,
+    /// User email
+    #[serde(default)]
+    pub email: Option<String>,
+    /// Auth provider (Github, Google, Email)
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Subscription type (free, pro, business)
+    #[serde(default)]
+    pub membership: String,
+    /// Subscription status (active, canceled, etc.)
+    #[serde(default)]
+    pub subscription_status: Option<String>,
+    /// Version this profile was extracted from
+    #[serde(default)]
+    pub extracted_from: Option<String>,
+    /// When the profile was extracted
+    #[serde(default)]
+    pub extracted_at: Option<String>,
+    /// Whether tokens are available (tokens are stored server-side only)
+    #[serde(default)]
+    pub has_tokens: bool,
 }
 
 /// Core client for IPC communication

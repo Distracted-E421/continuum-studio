@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use continuum_studio_iced::core::{
-    spawn_core_connection, AuthState, AuthStatus, ConnectionState, CoreRequest, CoreResponse, 
-    CursorVersion, VersionStatus, Workspace, DEFAULT_SOCKET_PATH,
+    spawn_core_connection, AuthProfile, AuthState, AuthStatus, ConnectionState, CoreRequest, 
+    CoreResponse, CursorVersion, VersionStatus, Workspace, DEFAULT_SOCKET_PATH,
 };
 use std::collections::HashMap;
 use continuum_studio_iced::log_capture::{init_logger, LogBuffer, LogEntry};
@@ -192,6 +192,7 @@ impl ContinuumStudio {
                 session_metrics: Vec::new(),
                 dashboard_data: None,
                 auth_statuses: HashMap::new(),
+                auth_profiles: Vec::new(),
             },
             startup_task,
         )
@@ -242,6 +243,8 @@ struct ContinuumStudio {
     dashboard_data: Option<DashboardData>,
     /// Auth status for each version (keyed by version string)
     auth_statuses: HashMap<String, AuthStatus>,
+    /// Stored auth profiles (Phase 2)
+    auth_profiles: Vec<AuthProfile>,
 }
 
 /// Available views in the application
@@ -756,6 +759,41 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                     for status in statuses {
                         state.auth_statuses.insert(status.version.clone(), status);
                     }
+                }
+                // Phase 2: Auth profile extraction/application
+                CoreResponse::AuthExtracted(profile) => {
+                    log::info!("Auth extracted from {:?}: {} ({})", 
+                        profile.extracted_from, 
+                        profile.email.as_deref().unwrap_or("no email"),
+                        profile.membership);
+                    // Store profile for later use
+                    state.auth_profiles.push(profile);
+                }
+                CoreResponse::AuthExtractFailed { version, error } => {
+                    log::error!("Failed to extract auth from {}: {}", version, error);
+                    // Could show error notification to user
+                }
+                CoreResponse::AuthApplied { source, target, email } => {
+                    log::info!("Auth applied from {} to {} ({})", source, target, email);
+                    // Refresh auth status for target version
+                    if let Some(tx) = &state.core_tx {
+                        let tx = tx.clone();
+                        let target = target.clone();
+                        return Task::perform(
+                            async move {
+                                let _ = tx.send(CoreRequest::GetAuthStatus { version: target }).await;
+                            },
+                            |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                        );
+                    }
+                }
+                CoreResponse::AuthApplyFailed { source, target, error } => {
+                    log::error!("Failed to apply auth from {} to {}: {}", source, target, error);
+                    // Could show error notification to user
+                }
+                CoreResponse::AuthProfiles(profiles) => {
+                    log::info!("Received {} auth profiles", profiles.len());
+                    state.auth_profiles = profiles;
                 }
             }
         }
