@@ -330,90 +330,104 @@ struct LocalBuildMetadata {
 }
 
 // ---------------------------------------------------------------------------
-// Update checker (forge-agnostic)
+// Release provider trait (forge-agnostic abstraction)
 // ---------------------------------------------------------------------------
 
-/// Update checker service -- supports multiple forges
-pub struct UpdateChecker {
-    settings: UpdateSettings,
+/// Forge-agnostic release provider interface.
+///
+/// Each implementation knows how to fetch releases and download assets from
+/// a specific source: GitHub, Forgejo/Codeberg/Gitea, or local builds.
+pub trait ReleaseProvider: Send + Sync {
+    /// Fetch the best matching release for the given channel.
+    ///
+    /// Returns `None` if no matching release is found.
+    fn fetch_latest(
+        &self,
+        settings: &UpdateSettings,
+    ) -> impl std::future::Future<Output = Result<Option<UpdateInfo>, String>> + Send;
+
+    /// Download a release asset to the target path.
+    fn download_asset(
+        &self,
+        release: &UpdateInfo,
+        target: &Path,
+    ) -> impl std::future::Future<Output = Result<(), String>> + Send;
+
+    /// Human-readable provider name (for logging).
+    fn provider_name(&self) -> &str;
+}
+
+// ---------------------------------------------------------------------------
+// GitHub provider
+// ---------------------------------------------------------------------------
+
+/// Fetches releases from GitHub (api.github.com).
+pub struct GitHubProvider {
     user_agent: String,
 }
 
-impl UpdateChecker {
-    /// Create a new update checker from settings
+impl GitHubProvider {
     pub fn new() -> Self {
         Self {
-            settings: UpdateSettings::default(),
             user_agent: format!(
                 "continuum-studio/{} (update-checker)",
                 env!("CARGO_PKG_VERSION")
             ),
         }
     }
+}
 
-    /// Create with specific settings
-    pub fn with_settings(settings: &UpdateSettings) -> Self {
-        Self {
-            settings: settings.clone(),
-            user_agent: format!(
-                "continuum-studio/{} (update-checker)",
-                env!("CARGO_PKG_VERSION")
-            ),
-        }
-    }
-
-    /// Check for updates asynchronously
-    pub async fn check_for_updates(
-        &self,
-        settings: &UpdateSettings,
-    ) -> Result<Option<UpdateInfo>, String> {
-        log::info!(
-            "Checking for updates on {} channel via {} provider",
-            settings.channel.as_str(),
-            settings.forge_type.as_str(),
-        );
-
-        let update = match settings.forge_type {
-            ForgeType::GitHub => self.check_github(settings).await?,
-            ForgeType::Forgejo => self.check_forgejo(settings).await?,
-            ForgeType::Local => self.check_local(settings).await?,
-        };
-
-        if let Some(ref info) = update {
-            if is_newer_version(&info.version, &settings.current_version) {
-                log::info!(
-                    "Update available: {} -> {} (from {})",
-                    settings.current_version,
-                    info.version,
-                    settings.forge_type.as_str(),
-                );
-                return Ok(Some(info.clone()));
-            }
-        }
-
-        log::info!("No updates available (current: {})", settings.current_version);
-        Ok(None)
-    }
-
-    // -----------------------------------------------------------------------
-    // GitHub provider
-    // -----------------------------------------------------------------------
-
-    async fn check_github(&self, settings: &UpdateSettings) -> Result<Option<UpdateInfo>, String> {
+impl ReleaseProvider for GitHubProvider {
+    async fn fetch_latest(&self, settings: &UpdateSettings) -> Result<Option<UpdateInfo>, String> {
         let url = format!(
             "https://api.github.com/repos/{}/releases",
             settings.repo_path
         );
 
-        let releases = self.fetch_json::<Vec<GitHubRelease>>(&url, Some("application/vnd.github.v3+json")).await?;
+        let releases = fetch_json_http::<Vec<GitHubRelease>>(
+            &url,
+            &self.user_agent,
+            Some("application/vnd.github.v3+json"),
+        )
+        .await?;
         Ok(find_best_github_release(&releases, settings))
     }
 
-    // -----------------------------------------------------------------------
-    // Forgejo / Codeberg / Gitea provider
-    // -----------------------------------------------------------------------
+    async fn download_asset(&self, release: &UpdateInfo, target: &Path) -> Result<(), String> {
+        let url = release
+            .download_url
+            .as_deref()
+            .ok_or("No download URL in GitHub release")?;
+        download_to_path(url, target, &self.user_agent).await
+    }
 
-    async fn check_forgejo(&self, settings: &UpdateSettings) -> Result<Option<UpdateInfo>, String> {
+    fn provider_name(&self) -> &str {
+        "GitHub"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Forgejo / Codeberg / Gitea provider
+// ---------------------------------------------------------------------------
+
+/// Fetches releases from Forgejo-compatible forges (Codeberg, Gitea, self-hosted).
+pub struct ForgejoProvider {
+    user_agent: String,
+}
+
+impl ForgejoProvider {
+    pub fn new() -> Self {
+        Self {
+            user_agent: format!(
+                "continuum-studio/{} (update-checker)",
+                env!("CARGO_PKG_VERSION")
+            ),
+        }
+    }
+}
+
+impl ReleaseProvider for ForgejoProvider {
+    async fn fetch_latest(&self, settings: &UpdateSettings) -> Result<Option<UpdateInfo>, String> {
         let base_url = settings
             .forge_url
             .as_deref()
@@ -425,15 +439,39 @@ impl UpdateChecker {
             settings.repo_path
         );
 
-        let releases = self.fetch_json::<Vec<ForgejoRelease>>(&url, None).await?;
+        let releases =
+            fetch_json_http::<Vec<ForgejoRelease>>(&url, &self.user_agent, None).await?;
         Ok(find_best_forgejo_release(&releases, settings, base_url))
     }
 
-    // -----------------------------------------------------------------------
-    // Local build provider
-    // -----------------------------------------------------------------------
+    async fn download_asset(&self, release: &UpdateInfo, target: &Path) -> Result<(), String> {
+        let url = release
+            .download_url
+            .as_deref()
+            .ok_or("No download URL in Forgejo release")?;
+        download_to_path(url, target, &self.user_agent).await
+    }
 
-    async fn check_local(&self, settings: &UpdateSettings) -> Result<Option<UpdateInfo>, String> {
+    fn provider_name(&self) -> &str {
+        "Forgejo"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local build provider
+// ---------------------------------------------------------------------------
+
+/// Reads builds produced by the build-watcher from ~/.continuum/builds/.
+pub struct LocalBuildProvider;
+
+impl LocalBuildProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl ReleaseProvider for LocalBuildProvider {
+    async fn fetch_latest(&self, settings: &UpdateSettings) -> Result<Option<UpdateInfo>, String> {
         let channel_dir = local_builds_dir().join(settings.channel.as_str());
         let metadata_path = channel_dir.join("metadata.json");
 
@@ -451,7 +489,10 @@ impl UpdateChecker {
 
         let binary_path = channel_dir.join("continuum-studio");
         if !binary_path.exists() {
-            log::warn!("Local build metadata exists but binary missing at {:?}", binary_path);
+            log::warn!(
+                "Local build metadata exists but binary missing at {:?}",
+                binary_path
+            );
             return Ok(None);
         }
 
@@ -462,7 +503,11 @@ impl UpdateChecker {
                 "beta" => UpdateChannel::Beta,
                 _ => UpdateChannel::Nightly,
             },
-            notes: format!("Local build from branch {} @ {}", metadata.branch, &metadata.commit[..8.min(metadata.commit.len())]),
+            notes: format!(
+                "Local build from branch {} @ {}",
+                metadata.branch,
+                &metadata.commit[..8.min(metadata.commit.len())]
+            ),
             download_url: Some(binary_path.to_string_lossy().to_string()),
             release_date: metadata.build_date,
             prerelease: metadata.channel != "stable",
@@ -471,42 +516,179 @@ impl UpdateChecker {
         }))
     }
 
-    // -----------------------------------------------------------------------
-    // HTTP helpers
-    // -----------------------------------------------------------------------
+    async fn download_asset(&self, release: &UpdateInfo, target: &Path) -> Result<(), String> {
+        // Local builds are just copied from the builds directory
+        let source = release
+            .download_url
+            .as_deref()
+            .ok_or("No source path in local build info")?;
+        let source = Path::new(source);
+        if !source.exists() {
+            return Err(format!("Source binary not found: {:?}", source));
+        }
+        tokio::fs::copy(source, target)
+            .await
+            .map_err(|e| format!("Failed to copy local build: {}", e))?;
 
-    async fn fetch_json<T: serde::de::DeserializeOwned + Send + 'static>(
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o755);
+            tokio::fs::set_permissions(target, perms)
+                .await
+                .map_err(|e| format!("Failed to set permissions: {}", e))?;
+        }
+
+        Ok(())
+    }
+
+    fn provider_name(&self) -> &str {
+        "Local Builds"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Provider factory
+// ---------------------------------------------------------------------------
+
+/// Create the appropriate release provider for the given forge type.
+pub fn create_provider(forge_type: ForgeType) -> Box<dyn std::any::Any + Send + Sync> {
+    match forge_type {
+        ForgeType::GitHub => Box::new(GitHubProvider::new()),
+        ForgeType::Forgejo => Box::new(ForgejoProvider::new()),
+        ForgeType::Local => Box::new(LocalBuildProvider::new()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared HTTP helpers (used by providers)
+// ---------------------------------------------------------------------------
+
+async fn fetch_json_http<T: serde::de::DeserializeOwned + Send + 'static>(
+    url: &str,
+    user_agent: &str,
+    accept: Option<&str>,
+) -> Result<T, String> {
+    let url = url.to_string();
+    let user_agent = user_agent.to_string();
+    let accept = accept.map(|s| s.to_string());
+
+    tokio::task::spawn_blocking(move || {
+        let client = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(30))
+            .build();
+
+        let mut req = client.get(&url).set("User-Agent", &user_agent);
+
+        if let Some(ref accept_header) = accept {
+            req = req.set("Accept", accept_header);
+        }
+
+        let response = req
+            .call()
+            .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+        response
+            .into_json::<T>()
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+async fn download_to_path(url: &str, target: &Path, user_agent: &str) -> Result<(), String> {
+    let url = url.to_string();
+    let target = target.to_path_buf();
+    let user_agent = user_agent.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let client = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(300))
+            .build();
+
+        let response = client
+            .get(&url)
+            .set("User-Agent", &user_agent)
+            .call()
+            .map_err(|e| format!("Download failed: {}", e))?;
+
+        let mut reader = response.into_reader();
+        let mut file =
+            std::fs::File::create(&target).map_err(|e| format!("Failed to create file: {}", e))?;
+
+        std::io::copy(&mut reader, &mut file)
+            .map_err(|e| format!("Failed to write download: {}", e))?;
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Download task failed: {}", e))?
+}
+
+// ---------------------------------------------------------------------------
+// Update checker (uses providers)
+// ---------------------------------------------------------------------------
+
+/// Update checker service -- dispatches to the appropriate ReleaseProvider
+pub struct UpdateChecker;
+
+impl UpdateChecker {
+    /// Create a new update checker
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Create with specific settings (kept for API compatibility)
+    pub fn with_settings(_settings: &UpdateSettings) -> Self {
+        Self
+    }
+
+    /// Check for updates asynchronously using the appropriate provider
+    pub async fn check_for_updates(
         &self,
-        url: &str,
-        accept: Option<&str>,
-    ) -> Result<T, String> {
-        let url = url.to_string();
-        let user_agent = self.user_agent.clone();
-        let accept = accept.map(|s| s.to_string());
+        settings: &UpdateSettings,
+    ) -> Result<Option<UpdateInfo>, String> {
+        log::info!(
+            "Checking for updates on {} channel via {} provider",
+            settings.channel.as_str(),
+            settings.forge_type.as_str(),
+        );
 
-        tokio::task::spawn_blocking(move || {
-            let client = ureq::AgentBuilder::new()
-                .timeout(Duration::from_secs(30))
-                .build();
-
-            let mut req = client
-                .get(&url)
-                .set("User-Agent", &user_agent);
-
-            if let Some(ref accept_header) = accept {
-                req = req.set("Accept", accept_header);
+        let update = match settings.forge_type {
+            ForgeType::GitHub => {
+                let provider = GitHubProvider::new();
+                log::info!("Using provider: {}", provider.provider_name());
+                provider.fetch_latest(settings).await?
             }
+            ForgeType::Forgejo => {
+                let provider = ForgejoProvider::new();
+                log::info!("Using provider: {}", provider.provider_name());
+                provider.fetch_latest(settings).await?
+            }
+            ForgeType::Local => {
+                let provider = LocalBuildProvider::new();
+                log::info!("Using provider: {}", provider.provider_name());
+                provider.fetch_latest(settings).await?
+            }
+        };
 
-            let response = req
-                .call()
-                .map_err(|e| format!("HTTP request failed: {}", e))?;
+        if let Some(ref info) = update {
+            if is_newer_version(&info.version, &settings.current_version) {
+                log::info!(
+                    "Update available: {} -> {} (from {})",
+                    settings.current_version,
+                    info.version,
+                    settings.forge_type.as_str(),
+                );
+                return Ok(Some(info.clone()));
+            }
+        }
 
-            response
-                .into_json::<T>()
-                .map_err(|e| format!("Failed to parse response: {}", e))
-        })
-        .await
-        .map_err(|e| format!("Task failed: {}", e))?
+        log::info!(
+            "No updates available (current: {})",
+            settings.current_version
+        );
+        Ok(None)
     }
 }
 

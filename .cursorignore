@@ -1,0 +1,33 @@
+# Cursor IDE Index Exclusions for continuum-studio
+
+# Elixir
+_build/
+deps/
+.elixir_ls/
+.mix/
+*.beam
+*.plt
+erl_crash.dump
+
+# Rust
+target/
+**/*.rs.bk
+
+# Android
+.gradle/
+local.properties
+.idea/
+build/
+app/build/
+**/build/
+
+# Node.js (if any)
+node_modules/
+.npm/
+
+# IDE/OS
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*~

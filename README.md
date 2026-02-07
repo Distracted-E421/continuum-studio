@@ -1,6 +1,6 @@
 # Continuum Studio
 
-**AI Orchestration Platform** for multi-agent control and verification.
+**AI Orchestration Platform** for multi-agent control, monitoring, and verification.
 
 ![Continuum Studio](continuum-studio.png)
 
@@ -8,134 +8,203 @@
 
 ## Overview
 
-Continuum Studio is a modular platform for orchestrating AI agents across multiple applications. It combines:
+Continuum Studio is a modular platform for orchestrating AI agents across multiple applications and machines. It combines:
 
-- **Desktop UI** (Rust/egui) — Unified interface for harness control
-- **Mobile App** (Kotlin/Compose) — Remote monitoring and dialogs
-- **Core Backend** (Elixir/OTP) — Fault-tolerant orchestration
-- **Synapsix Integration** — NeSy verification and harness management
+- **Desktop UI** (Rust/iced with COSMIC styling) - Dashboard for harness management and monitoring
+- **Mobile App** (Kotlin/Jetpack Compose) - Remote dialog and widget bay
+- **Studio Core** (Elixir/OTP) - Central orchestration hub
+- **Agent Bridge** (Elixir) - Multi-provider AI abstraction layer
+- **Synapsix** - Harness orchestrator, dialog daemon, terminal monitoring
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    CONTINUUM STUDIO                             │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │ Desktop UI  │  │ Mobile App  │  │    Studio Core          │  │
-│  │ (Rust/egui) │  │ (Kotlin)    │  │    (Elixir/OTP)         │  │
-│  └──────┬──────┘  └──────┬──────┘  └────────────┬────────────┘  │
-│         │                │                      │               │
-│         └────────────────┴──────────────────────┘               │
-│                          │                                      │
-│                    ETF / WebSocket                              │
-│                          │                                      │
-├──────────────────────────┼──────────────────────────────────────┤
-│                          │                                      │
-│         ┌────────────────┴────────────────┐                     │
-│         │           SYNAPSIX              │                     │
-│         │  ┌─────────┐  ┌─────────────┐   │                     │
-│         │  │ NeSy    │  │ Harnesses   │   │                     │
-│         │  │ (Z3/SMT)│  │ (Cursor,    │   │                     │
-│         │  │         │  │  Android,   │   │                     │
-│         │  │         │  │  Godot)     │   │                     │
-│         │  └─────────┘  └─────────────┘   │                     │
-│         │                                 │                     │
-│         │  ┌─────────┐  ┌─────────────┐   │                     │
-│         │  │ Dialog  │  │ Service     │   │                     │
-│         │  │ Daemon  │  │ Registry    │   │                     │
-│         │  └─────────┘  └─────────────┘   │                     │
-│         └─────────────────────────────────┘                     │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+                    CONTINUUM STUDIO
+ ┌───────────────────────────────────────────────┐
+ │                                               │
+ │  ┌─────────────┐  ┌────────────┐              │
+ │  │ Desktop UI  │  │ Mobile App │              │
+ │  │ (Rust/iced) │  │ (Kotlin)   │              │
+ │  └──────┬──────┘  └──────┬─────┘              │
+ │         │   Unix Socket   │  WebSocket         │
+ │         └────────┬────────┘                    │
+ │                  ▼                             │
+ │         ┌────────────────┐                     │
+ │         │  Studio Core   │                     │
+ │         │  (Elixir/OTP)  │                     │
+ │         └───────┬────────┘                     │
+ │                 │                              │
+ │    ┌────────────┼────────────┐                 │
+ │    ▼            ▼            ▼                 │
+ │ ┌────────┐ ┌────────┐ ┌──────────────┐        │
+ │ │ Agent  │ │Version │ │  Workspace   │        │
+ │ │ Bridge │ │Registry│ │  Tracker     │        │
+ │ └────────┘ └────────┘ └──────────────┘        │
+ │                                               │
+ └───────────────────┬───────────────────────────┘
+                     │ CoreClient IPC
+                     ▼
+ ┌───────────────────────────────────────────────┐
+ │                  SYNAPSIX                      │
+ │                                               │
+ │  ┌──────────┐ ┌──────────┐ ┌──────────────┐  │
+ │  │ Terminal  │ │ Dialog   │ │  Harnesses   │  │
+ │  │ Monitor  │ │ Daemon   │ │  (Cursor,    │  │
+ │  │          │ │          │ │   Android,   │  │
+ │  │          │ │          │ │   Godot)     │  │
+ │  └──────────┘ └──────────┘ └──────────────┘  │
+ │                                               │
+ │  ┌──────────┐ ┌──────────┐ ┌──────────────┐  │
+ │  │ NeSy     │ │ Service  │ │ Chat         │  │
+ │  │ (Z3/SMT) │ │ Registry │ │ Pipeline     │  │
+ │  └──────────┘ └──────────┘ └──────────────┘  │
+ └───────────────────────────────────────────────┘
 ```
 
 ## Components
 
-### `/ui` — Desktop UI (Rust)
+### Desktop UI (`ui-iced/`) - Current
 
-Modular egui application with:
-- **Harness Panel** — Color-coded status cards for each controlled application
-- **Orchestrator Widget** — Multi-instance Cursor management
-- **D2 Diagrams** — Interactive architecture visualization
-- **IPC** — ETF-encoded communication with Elixir backend
+**Framework**: Rust + iced 0.14 with COSMIC desktop styling
 
-```bash
-cd ui && cargo run --release
-```
-
-### `/android` — Mobile App (Kotlin)
-
-Jetpack Compose application with:
-- **Widget Bay** — Customizable dashboard grid
-- **Dialog Client** — WebSocket connection to dialog daemon
-- **Service Discovery** — DNS-SD browsing
-
-### `/core` — Studio Core (Elixir)
-
-OTP supervision tree providing:
-- **Version Registry** — 100+ Cursor versions with download/run
-- **Socket Handler** — IPC events (harness metadata, agent responses)
-- **Delegations** — Clean API to Synapsix
+Features:
+- Session management for multiple Cursor instances
+- Service discovery and monitoring dashboard
+- Chat message pipeline display
+- VS Code theme compatibility
+- Self-update system
+- Settings management
 
 ```bash
-cd core/studio_core && iex -S mix
+cd ui-iced && cargo run --release
+# Or with NixOS library paths:
+./run-gui.sh
 ```
 
-### `/archive` — Migration References
+### Desktop UI (`ui/`) - Legacy
 
-Archived code from nixos-cursor migration:
-- `cursor-docs-REBUILD-TARGET/` — Documentation indexing (rebuild planned)
+**Framework**: Rust + egui 0.29
 
-## Related Repositories
+Legacy implementation with D2 diagram viewer, tab system, and ETF IPC. Being replaced by iced UI.
 
-- **[synapsix](https://github.com/Distracted-E421/synapsix)** — NeSy orchestrator, harnesses, dialog system
-- **[nixos-cursor](https://github.com/Distracted-E421/nixos-cursor)** — NixOS packaging for Cursor IDE
-- **[homelab](https://github.com/Distracted-E421/homelab)** — Infrastructure and NixOS configurations
+### Android App (`android/`)
+
+**Framework**: Kotlin + Jetpack Compose + Material 3
+
+Features:
+- **Widget Bay** - Customizable grid dashboard for monitoring
+- **Dialog Client** - WebSocket connection to dialog daemon (port 8080)
+- **Notification Service** - Background dialog alerts
+- **Auto-reconnect** - Resilient WebSocket connection
+
+### Studio Core (`core/studio_core/`)
+
+**Framework**: Elixir/OTP
+
+Central orchestration hub:
+- **State Management** - ETS-backed with hot restart resilience
+- **Event Bus** - Pub/sub broadcasting to all connected clients
+- **Unix Socket IPC** - JSON-framed messages (`/tmp/continuum-studio.sock`)
+- **Harness Registry** - Tracks connected Synapsix harnesses
+- **Version Registry** - Cursor version management
+- **Auth Manager** - Cursor authentication handling
+- **Workspace Tracker** - Projects across Cursor versions
+
+### Agent Bridge (`core/agent_bridge/`)
+
+**Framework**: Elixir/OTP
+
+Multi-provider AI abstraction:
+- **Providers**: Claude (Anthropic), Ollama (local), Cursor (via harness)
+- **Context Manager** - Session-based context tracking
+- **Cost Tracker** - Token counting per provider
+- **Rate Limiter** - Per-provider rate limiting
+- **Middleware Pipeline** - Logger, Sanitizer, Validator, Telemetry, Content Filter
+
+### Archive (`archive/`)
+
+`cursor-docs-REBUILD-TARGET/` - Archived documentation indexing system (planned rebuild as separate service)
+
+## Key Features
+
+### Terminal Monitoring (New)
+
+Deep integration with Cursor's process monitoring via Synapsix:
+- CPU/memory tracking for all Cursor processes
+- Agent terminal output capture
+- Structured log parsing (v2.4.27+)
+- Process tree visualization in dashboard
+
+### Neurosymbolic AI (NeSy)
+
+Agent action verification via SMT solvers:
+- Constraint DSL for safety rules
+- Formal verification before execution
+- Complete audit trail with proofs
+
+### Dialog System
+
+Interactive AI agent feedback without wasting API requests:
+- Native desktop dialogs (egui)
+- Mobile dialogs (WebSocket + web UI)
+- Priority queue, decision memory, approval workflows
+- Hold mode for complex decisions
+- Rich context (code diffs, file previews, progress)
+
+### Service Discovery
+
+DNS-SD with CoreDNS integration:
+- Automatic harness registration and heartbeat
+- Multi-machine discovery via mDNS
+- HTTP API on port 4001
 
 ## Quick Start
 
 ```bash
 # 1. Start Synapsix (required for harness control)
-cd ~/synapsix && elixir --sname synapsix -S mix run --no-halt
+cd ~/synapsix && iex --sname synapsix -S mix
 
-# 2. Start Studio Core (optional, for UI integration)
+# 2. Start Studio Core (required for UI)
 cd ~/continuum-studio/core/studio_core && iex -S mix
 
 # 3. Start Desktop UI
-cd ~/continuum-studio/ui && cargo run --release
+cd ~/continuum-studio && ./run-gui.sh
 ```
 
-## Key Features
+### NixOS Integration
 
-### Neurosymbolic AI (NeSy)
+The dialog daemon and terminal monitor are managed as systemd user services via Home Manager:
 
-All agent actions can be verified via Z3 SMT solver before execution:
-- **Constraint DSL** — Define safety constraints in Elixir
-- **Formal Verification** — Prove actions satisfy constraints
-- **Audit Logging** — Full trail with proofs
-
-### Dialog System
-
-Interactive feedback without API request waste:
-- **8 Phases Complete** — Queue, memory, workflows, AFK work
-- **Multi-device** — Desktop + mobile sync
-- **Rich Context** — Code diffs, file previews, progress bars
-
-### Service Discovery
-
-DNS-SD with CoreDNS integration:
-- **Automatic registration** — Harnesses register on start
-- **Health monitoring** — Heartbeats and expiry
-- **Multi-node** — Cross-machine discovery
+```nix
+homelab.synapsix = {
+  enable = true;
+  dialog.enable = true;
+  dialog.autostart = true;
+  terminalMonitor.enable = true;
+};
+```
 
 ## Documentation
 
-- [Session Handoff Summary](docs/SESSION_HANDOFF_SUMMARY.md) — Current state and progress
-- [Migration Assessment](docs/MIGRATION_ASSESSMENT.md) — nixos-cursor migration details
-- [Architecture](docs/ARCHITECTURE.md) — System design
-- [UI Paradigm](docs/UI_PARADIGM_EXPLORATION.md) — Widget-based design rationale
+| Document | Description |
+|----------|-------------|
+| `docs/ARCHITECTURE.md` | System architecture overview |
+| `docs/UI_ARCHITECTURE.md` | UI component design |
+| `docs/AGENT_BRIDGE_ARCHITECTURE.md` | Agent Bridge design |
+| `docs/MODULE_ARCHITECTURE.md` | Module boundaries |
+| `docs/ETF_PROTOCOL.md` | IPC protocol specification |
+| `docs/WIDGET_BAY_DESIGN.md` | Widget bay design |
+| `docs/DESIGN_PROXY_SESSION_MONITORING.md` | Session monitoring design |
+| `docs/UI_PARADIGM_EXPLORATION.md` | UI paradigm rationale |
+
+## Related Repositories
+
+- **[synapsix](https://github.com/Distracted-E421/synapsix)** - Harness orchestrator, dialog daemon, terminal monitoring
+- **[nixos-cursor](https://github.com/Distracted-E421/nixos-cursor)** - NixOS packaging for Cursor IDE
+- **[homelab](https://github.com/Distracted-E421/homelab)** - NixOS infrastructure and configuration
+- **[phosphor](https://github.com/Distracted-E421/phosphor)** - Wayland-native screen capture with smart storage
 
 ## License
 
-MIT
+- Core components: AGPL-3.0
+- Infrastructure services: SSPL

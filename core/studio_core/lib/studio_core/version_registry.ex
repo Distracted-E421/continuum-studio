@@ -711,7 +711,4 @@ defmodule StudioCore.VersionRegistry do
       0
     end
   end
-
-  defp max(a, b) when a > b, do: a
-  defp max(_a, b), do: b
 end

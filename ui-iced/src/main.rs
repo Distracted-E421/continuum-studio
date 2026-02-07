@@ -18,14 +18,134 @@ use continuum_studio_iced::services::{ServiceConfig, ServiceInfo, ServiceManager
 use continuum_studio_iced::monitoring::{SessionMonitor, SessionMetrics, HealthStatus, DashboardData};
 use continuum_studio_iced::sessions::{CursorSession, SessionTracker};
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
+use continuum_studio_iced::chat_pipeline::{
+    ChatApiClient, ChatPipelineState, ChatSubView, ChatStats, Conversation, ConversationDetail,
+    SearchResult, Topic, ScanLocations, fmt_num, fmt_bytes, truncate,
+};
 use continuum_studio_iced::theme::{AppColors, CosmicThemePreset};
 use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo, ForgeType, InstallationType, SelfUpdater};
+use continuum_studio_iced::subagents::{SubagentPanelState, SubagentMessage, MonitorStats, CommandRecord};
 
 /// Async task to check for updates
 async fn check_for_updates_task() -> Result<Option<UpdateInfo>, String> {
     let settings = Settings::load();
     let checker = UpdateChecker::new();
     checker.check_for_updates(&settings.updates).await
+}
+
+/// Compute disk usage for installed versions (client-side filesystem scan)
+async fn compute_disk_usage(
+    versions: Vec<String>,
+    running_versions: Vec<String>,
+) -> Vec<VersionDiskUsage> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let versions_dir = home.join(".cursor-versions");
+
+    let mut results = Vec::new();
+    for version in versions {
+        let appimage_path = versions_dir.join(format!("Cursor-{}-x86_64.AppImage", version));
+        let data_dir = home.join(format!(".cursor-{}", version));
+        let extensions_dir = data_dir.join("extensions");
+
+        let appimage_size = tokio::fs::metadata(&appimage_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        let data_dir_size = if data_dir.exists() {
+            dir_size_recursive(&data_dir).await
+        } else {
+            0
+        };
+
+        let extensions_size = if extensions_dir.exists() {
+            dir_size_recursive(&extensions_dir).await
+        } else {
+            0
+        };
+
+        // data_dir_size includes extensions, get the data-only portion
+        let data_only = data_dir_size.saturating_sub(extensions_size);
+        let total = appimage_size + data_dir_size;
+
+        // Check last-used via state.vscdb or data dir mtime
+        let last_used = get_last_used_time(&data_dir).await;
+
+        let is_running = running_versions.contains(&version);
+
+        results.push(VersionDiskUsage {
+            version,
+            appimage_size,
+            data_dir_size: data_only,
+            extensions_size,
+            total_size: total,
+            has_data_dir: data_dir.exists(),
+            has_extensions: extensions_dir.exists(),
+            last_used,
+            is_running,
+        });
+    }
+
+    // Sort by total size descending
+    results.sort_by(|a, b| b.total_size.cmp(&a.total_size));
+    results
+}
+
+/// Recursively compute directory size using `du -sb` for efficiency
+async fn dir_size_recursive(path: &std::path::Path) -> u64 {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new("du")
+            .args(["-sb", &path.to_string_lossy()])
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() {
+                    String::from_utf8_lossy(&output.stdout)
+                        .split('\t')
+                        .next()
+                        .and_then(|s| s.trim().parse::<u64>().ok())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+    })
+    .await
+    .unwrap_or(0)
+}
+
+/// Get last-used time from state.vscdb or data dir mtime
+async fn get_last_used_time(data_dir: &std::path::Path) -> Option<String> {
+    let state_db = data_dir.join("User").join("globalStorage").join("state.vscdb");
+
+    let mtime = if state_db.exists() {
+        tokio::fs::metadata(&state_db).await.ok()
+    } else if data_dir.exists() {
+        tokio::fs::metadata(data_dir).await.ok()
+    } else {
+        None
+    };
+
+    mtime.and_then(|m| {
+        m.modified().ok().map(|t| {
+            let datetime: chrono::DateTime<chrono::Local> = t.into();
+            datetime.format("%Y-%m-%d %H:%M").to_string()
+        })
+    })
+}
+
+/// Format bytes into human-readable string
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
 }
 
 fn main() -> iced::Result {
@@ -41,10 +161,14 @@ fn main() -> iced::Result {
         .theme(|state: &ContinuumStudio| state.theme.clone())
         .window_size(iced::Size::new(1280.0, 800.0))
         .antialiasing(true)
-        .subscription(|_state| {
-            // Always maintain the Core connection subscription
-            // The worker handles connection state internally
-            core_subscription()
+        .subscription(|state| {
+            // Batch multiple subscriptions together
+            iced::Subscription::batch([
+                // Core IPC connection
+                core_subscription(),
+                // Sub-agent monitor polling (only when on Cursor view + SubAgents tab)
+                subagent_subscription(state.current_view == View::Cursor && state.cursor_tab == CursorTab::SubAgents),
+            ])
         })
         .run()
 }
@@ -84,6 +208,19 @@ fn core_worker() -> impl iced::futures::Stream<Item = Message> {
             }
         },
     )
+}
+
+/// Subscription for sub-agent monitor polling
+/// Only active when the SubAgents view is visible
+fn subagent_subscription(active: bool) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
+    
+    // Poll every 2 seconds when view is active
+    iced::time::every(std::time::Duration::from_secs(2)).map(|_| {
+        Message::SubagentAction(SubagentMessage::Refresh)
+    })
 }
 
 /// Derive iced Theme from Settings
@@ -175,8 +312,11 @@ impl ContinuumStudio {
                 theme,
                 connection_state: ConnectionState::Disconnected,
                 current_view: View::Dashboard,
+                cursor_tab: CursorTab::default(),
                 versions,
                 workspaces: vec![],
+                workspace_files: vec![],
+                workspace_files_loading: false,
                 core_tx: None,
                 settings_dirty: false,
                 available_update: None,
@@ -194,6 +334,11 @@ impl ContinuumStudio {
                 border_overlay_active: false,
                 auth_statuses: HashMap::new(),
                 auth_profiles: Vec::new(),
+                chat_pipeline: ChatPipelineState::default(),
+                subagent_state: SubagentPanelState::default(),
+                storage_disk_usage: Vec::new(),
+                storage_selected: std::collections::HashSet::new(),
+                storage_loading: false,
             },
             startup_task,
         )
@@ -210,10 +355,16 @@ struct ContinuumStudio {
     connection_state: ConnectionState,
     /// Current page/view
     current_view: View,
+    /// Current sub-tab within Cursor view
+    cursor_tab: CursorTab,
     /// Available Cursor versions
     versions: Vec<CursorVersion>,
     /// Tracked workspaces
     workspaces: Vec<Workspace>,
+    /// Discovered .code-workspace files
+    workspace_files: Vec<CodeWorkspaceFile>,
+    /// Whether workspace file scan is in progress
+    workspace_files_loading: bool,
     /// Core request sender
     core_tx: Option<mpsc::Sender<CoreRequest>>,
     /// Settings have been modified
@@ -248,20 +399,39 @@ struct ContinuumStudio {
     auth_statuses: HashMap<String, AuthStatus>,
     /// Stored auth profiles (Phase 2)
     auth_profiles: Vec<AuthProfile>,
+    /// Chat pipeline state (Synapsix integration)
+    chat_pipeline: ChatPipelineState,
+    /// Sub-agent monitoring state
+    subagent_state: SubagentPanelState,
+    /// Detailed disk usage per version (for Storage view)
+    storage_disk_usage: Vec<VersionDiskUsage>,
+    /// Versions selected for batch cleanup
+    storage_selected: std::collections::HashSet<String>,
+    /// Whether storage data is loading
+    storage_loading: bool,
 }
 
 /// Available views in the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum View {
     Dashboard,
-    CursorVersions,
-    Workspaces,
-    Auth,
-    Sessions,
+    Cursor,       // Parent view with sub-tabs
+    ChatPipeline,
     Services,
     Storage,
     Settings,
     Logs,
+}
+
+/// Sub-tabs within the Cursor view
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum CursorTab {
+    #[default]
+    Sessions,     // Running Cursor instances
+    SubAgents,    // Sub-agent monitoring  
+    Auth,         // Authentication management
+    Versions,     // Version management
+    Workspaces,   // .code-workspace management
 }
 
 /// Application messages (Elm architecture)
@@ -269,6 +439,8 @@ enum View {
 enum Message {
     /// Navigation
     NavigateTo(View),
+    /// Change Cursor sub-tab
+    CursorTabChange(CursorTab),
     /// Core connected with request sender
     CoreConnected(mpsc::Sender<CoreRequest>),
     /// Core connection state changed
@@ -295,8 +467,69 @@ enum Message {
     CoreResponse(CoreResponse),
     /// Settings action
     SettingsAction(SettingsMessage),
+    /// Storage management action
+    StorageAction(StorageMessage),
     /// Update check result
     UpdateCheckResult(Result<Option<UpdateInfo>, String>),
+    /// Chat pipeline actions
+    ChatPipelineAction(ChatPipelineMsg),
+    /// Sub-agent monitoring actions
+    SubagentAction(SubagentMessage),
+}
+
+/// Chat pipeline sub-messages
+#[derive(Debug, Clone)]
+enum ChatPipelineMsg {
+    /// Switch sub-view within chat pipeline
+    SwitchSubView(ChatSubView),
+    /// Health check result
+    HealthChecked(Result<bool, String>),
+    /// Stats loaded
+    StatsLoaded(Result<ChatStats, String>),
+    /// Conversations loaded
+    ConversationsLoaded(Result<Vec<Conversation>, String>),
+    /// Single conversation detail loaded
+    ConversationLoaded(Result<ConversationDetail, String>),
+    /// Topics loaded
+    TopicsLoaded(Result<Vec<Topic>, String>),
+    /// Search results
+    SearchCompleted(Result<Vec<SearchResult>, String>),
+    /// Scan locations loaded
+    LocationsLoaded(Result<ScanLocations, String>),
+    /// Search query text changed
+    SearchQueryChanged(String),
+    /// Trigger search
+    DoSearch,
+    /// Select a conversation to view
+    SelectConversation(String),
+    /// Go back from conversation detail
+    BackToList,
+    /// Batch ingest completed
+    BatchIngestDone(Result<String, String>),
+    /// Summarize pending completed
+    SummarizeDone(Result<String, String>),
+    /// Cluster topics completed
+    ClusterDone(Result<String, String>),
+    /// Import orphaned completed
+    ImportOrphanedDone(Result<String, String>),
+    /// Trigger batch ingest
+    DoBatchIngest,
+    /// Trigger summarize pending
+    DoSummarizePending,
+    /// Trigger cluster topics
+    DoClusterTopics,
+    /// Trigger import orphaned
+    DoImportOrphaned,
+    /// Refresh all data
+    RefreshAll,
+    /// Clear error
+    ClearError,
+    /// Clear action result
+    ClearActionResult,
+    /// Toggle a specific message expansion in conversation detail
+    ToggleMessageExpand(usize),
+    /// Expand/collapse all messages
+    ToggleShowFull,
 }
 
 /// Settings-related messages
@@ -307,9 +540,54 @@ enum SettingsMessage {
     ToggleAutoStartServices,
     ToggleNotifications,
     SetUpdateChannel(UpdateChannel),
+    SetForgeType(ForgeType),
     ToggleAutoCheckUpdates,
     CheckForUpdates,
     ToggleSynapsixDialogRouting,
+}
+
+/// Storage management messages
+#[derive(Debug, Clone)]
+enum StorageMessage {
+    /// Refresh disk usage for all installed versions
+    RefreshDiskUsage,
+    /// Disk usage data loaded (computed client-side)
+    DiskUsageLoaded(Vec<VersionDiskUsage>),
+    /// Toggle selection of a version for cleanup
+    ToggleVersionSelect(String),
+    /// Select all versions
+    SelectAll,
+    /// Deselect all versions
+    DeselectAll,
+    /// Cleanup selected versions with given mode
+    CleanupSelected(CleanupMode),
+    /// Cleanup completed
+    CleanupComplete(Result<Vec<String>, String>),
+}
+
+/// Cleanup mode for version removal
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanupMode {
+    /// Remove AppImage only
+    AppImageOnly,
+    /// Remove AppImage and data directory
+    AppImageAndData,
+    /// Remove AppImage and data, but preserve auth profile first
+    KeepAuth,
+}
+
+/// Detailed disk usage info for a single Cursor version (client-side computed)
+#[derive(Debug, Clone)]
+struct VersionDiskUsage {
+    version: String,
+    appimage_size: u64,
+    data_dir_size: u64,
+    extensions_size: u64,
+    total_size: u64,
+    has_data_dir: bool,
+    has_extensions: bool,
+    last_used: Option<String>,
+    is_running: bool,
 }
 
 /// Cursor-related messages
@@ -325,6 +603,19 @@ enum CursorMessage {
     ApplyAuthFromLatest(String),
 }
 
+/// Discovered .code-workspace file
+#[derive(Debug, Clone, Default)]
+struct CodeWorkspaceFile {
+    /// Full path to the .code-workspace file
+    path: String,
+    /// Display name (derived from filename)
+    name: String,
+    /// Folders included in this workspace
+    folders: Vec<String>,
+    /// Last modification time
+    modified: Option<String>,
+}
+
 /// Workspace-related messages
 #[derive(Debug, Clone)]
 enum WorkspaceMessage {
@@ -332,6 +623,12 @@ enum WorkspaceMessage {
     TogglePinned(String),
     RefreshGitStats(String),
     OpenInCursor(String, String), // workspace_id, version
+    /// Scan for .code-workspace files
+    ScanWorkspaceFiles,
+    /// Results from scanning
+    WorkspaceFilesScanned(Vec<CodeWorkspaceFile>),
+    /// Open a .code-workspace file in Cursor
+    OpenWorkspaceFile(String), // path to workspace file
 }
 
 /// Log viewer messages
@@ -393,6 +690,23 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
     match message {
         Message::NavigateTo(view) => {
             state.current_view = view;
+            // Auto-fetch data when navigating to Chat Pipeline
+            if view == View::ChatPipeline && state.chat_pipeline.stats.is_none() {
+                return Task::perform(
+                    async { ChatPipelineMsg::RefreshAll },
+                    Message::ChatPipelineAction,
+                );
+            }
+        }
+        Message::CursorTabChange(tab) => {
+            state.cursor_tab = tab;
+            // Trigger sub-agent refresh when switching to that tab
+            if tab == CursorTab::SubAgents {
+                return Task::perform(
+                    async { SubagentMessage::Refresh },
+                    Message::SubagentAction,
+                );
+            }
         }
         Message::CoreConnected(tx) => {
             // Only process if we don't already have a connection
@@ -480,6 +794,11 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 state.settings_dirty = true;
                 log::info!("Update channel changed to: {:?}", channel);
             }
+            SettingsMessage::SetForgeType(forge_type) => {
+                state.settings.updates.forge_type = forge_type;
+                state.settings_dirty = true;
+                log::info!("Forge type changed to: {:?}", forge_type);
+            }
             SettingsMessage::ToggleAutoCheckUpdates => {
                 state.settings.updates.auto_check = !state.settings.updates.auto_check;
                 state.settings_dirty = true;
@@ -502,6 +821,100 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 }
             }
         },
+        Message::StorageAction(storage_msg) => match storage_msg {
+            StorageMessage::RefreshDiskUsage => {
+                state.storage_loading = true;
+                let versions: Vec<String> = state.versions.iter()
+                    .filter(|v| v.status == VersionStatus::Installed || v.status == VersionStatus::Running)
+                    .map(|v| v.version.clone())
+                    .collect();
+                let running_versions: Vec<String> = state.versions.iter()
+                    .filter(|v| v.status == VersionStatus::Running)
+                    .map(|v| v.version.clone())
+                    .collect();
+                return Task::perform(
+                    async move {
+                        compute_disk_usage(versions, running_versions).await
+                    },
+                    |data| Message::StorageAction(StorageMessage::DiskUsageLoaded(data)),
+                );
+            }
+            StorageMessage::DiskUsageLoaded(data) => {
+                state.storage_disk_usage = data;
+                state.storage_loading = false;
+            }
+            StorageMessage::ToggleVersionSelect(version) => {
+                if state.storage_selected.contains(&version) {
+                    state.storage_selected.remove(&version);
+                } else {
+                    state.storage_selected.insert(version);
+                }
+            }
+            StorageMessage::SelectAll => {
+                for usage in &state.storage_disk_usage {
+                    if !usage.is_running {
+                        state.storage_selected.insert(usage.version.clone());
+                    }
+                }
+            }
+            StorageMessage::DeselectAll => {
+                state.storage_selected.clear();
+            }
+            StorageMessage::CleanupSelected(mode) => {
+                let selected: Vec<String> = state.storage_selected.iter().cloned().collect();
+                if selected.is_empty() {
+                    log::warn!("No versions selected for cleanup");
+                    return Task::none();
+                }
+                let (remove_data, keep_auth) = match mode {
+                    CleanupMode::AppImageOnly => (false, false),
+                    CleanupMode::AppImageAndData => (true, false),
+                    CleanupMode::KeepAuth => (true, true),
+                };
+                log::info!(
+                    "Cleaning up {} versions (remove_data={}, keep_auth={}): {:?}",
+                    selected.len(), remove_data, keep_auth, selected
+                );
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::BatchUninstallVersions {
+                                versions: selected.clone(),
+                                remove_data,
+                                keep_auth,
+                            }).await;
+                            Ok(selected)
+                        },
+                        |result: Result<Vec<String>, String>| {
+                            Message::StorageAction(StorageMessage::CleanupComplete(result))
+                        },
+                    );
+                }
+            }
+            StorageMessage::CleanupComplete(result) => {
+                match result {
+                    Ok(versions) => {
+                        log::info!("Successfully cleaned up {} versions", versions.len());
+                        state.storage_selected.clear();
+                        // Refresh versions and disk usage
+                        return Task::batch(vec![
+                            Task::done(Message::CursorAction(CursorMessage::RefreshVersions)),
+                            Task::done(Message::StorageAction(StorageMessage::RefreshDiskUsage)),
+                        ]);
+                    }
+                    Err(e) => {
+                        log::error!("Cleanup failed: {}", e);
+                    }
+                }
+            }
+        },
+        Message::ChatPipelineAction(msg) => {
+            return handle_chat_pipeline_message(state, msg);
+        }
+        Message::SubagentAction(msg) => {
+            return handle_subagent_message(state, msg);
+        }
         Message::UpdateCheckResult(result) => {
             state.checking_updates = false;
             state.settings.updates.mark_checked();
@@ -653,6 +1066,35 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                     }
                 }
             }
+            WorkspaceMessage::ScanWorkspaceFiles => {
+                log::info!("Scanning for .code-workspace files...");
+                state.workspace_files_loading = true;
+                return Task::perform(
+                    scan_workspace_files(),
+                    |files| Message::WorkspaceAction(WorkspaceMessage::WorkspaceFilesScanned(files)),
+                );
+            }
+            WorkspaceMessage::WorkspaceFilesScanned(files) => {
+                log::info!("Found {} .code-workspace files", files.len());
+                state.workspace_files = files;
+                state.workspace_files_loading = false;
+            }
+            WorkspaceMessage::OpenWorkspaceFile(path) => {
+                log::info!("Opening workspace file: {}", path);
+                // Launch Cursor with the workspace file
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::LaunchVersion { 
+                                version: "latest".to_string(), 
+                                folder: Some(path) 
+                            }).await;
+                        },
+                        |_| Message::WorkspaceAction(WorkspaceMessage::RefreshWorkspaces),
+                    );
+                }
+            }
         },
         Message::LogAction(log_msg) => match log_msg {
             LogMessage::SetFilter(level) => {
@@ -746,7 +1188,7 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                         async move {
                             flash_instance_windows(&window_ids).await;
                         },
-                        |_| Message::NavigateTo(View::Sessions),
+                        |_| Message::NavigateTo(View::Cursor),
                     );
                 }
             }
@@ -764,14 +1206,14 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                         async move {
                             apply_kwin_border_overlay(&sessions).await;
                         },
-                        |_| Message::NavigateTo(View::Sessions),
+                        |_| Message::NavigateTo(View::Cursor),
                     );
                 } else {
                     return Task::perform(
                         async move {
                             remove_kwin_border_overlay().await;
                         },
-                        |_| Message::NavigateTo(View::Sessions),
+                        |_| Message::NavigateTo(View::Cursor),
                     );
                 }
             }
@@ -786,7 +1228,7 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                             let _ = tx.send(CoreRequest::GetAuthStatuses).await;
                             let _ = tx.send(CoreRequest::ListProfiles).await;
                         },
-                        |_| Message::NavigateTo(View::Auth), // Navigate to Auth tab, no loop
+                        |_| Message::NavigateTo(View::Cursor), // Navigate to Auth tab, no loop
                     );
                 }
             }
@@ -800,7 +1242,7 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                             // Also refresh profiles list after extraction
                             let _ = tx.send(CoreRequest::ListProfiles).await;
                         },
-                        |_| Message::NavigateTo(View::Auth),
+                        |_| Message::NavigateTo(View::Cursor),
                     );
                 }
             }
@@ -818,7 +1260,7 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                                     // Refresh statuses after apply
                                     let _ = tx.send(CoreRequest::GetAuthStatuses).await;
                                 },
-                                |_| Message::NavigateTo(View::Auth),
+                                |_| Message::NavigateTo(View::Cursor),
                             );
                         }
                     }
@@ -838,7 +1280,7 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                         async move {
                             let _ = tx.send(CoreRequest::ListProfiles).await;
                         },
-                        |_| Message::NavigateTo(View::Auth),
+                        |_| Message::NavigateTo(View::Cursor),
                     );
                 }
             }
@@ -1000,10 +1442,8 @@ fn view(state: &ContinuumStudio) -> Element<Message> {
     let sidebar = sidebar(state);
     let content = match state.current_view {
         View::Dashboard => view_dashboard(state),
-        View::CursorVersions => view_cursor_versions(state),
-        View::Workspaces => view_workspaces(state),
-        View::Auth => view_auth(state),
-        View::Sessions => view_sessions(state),
+        View::Cursor => view_cursor(state),
+        View::ChatPipeline => view_chat_pipeline(state),
         View::Services => view_services(state),
         View::Storage => view_storage(state),
         View::Settings => view_settings(state),
@@ -1068,10 +1508,8 @@ fn sidebar(state: &ContinuumStudio) -> Element<Message> {
             .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
         Space::new().height(8),
         nav_button("🏠  Dashboard", View::Dashboard, current),
-        nav_button("📦  Versions", View::CursorVersions, current),
-        nav_button("📁  Workspaces", View::Workspaces, current),
-        nav_button("🔑  Auth", View::Auth, current),
-        nav_button("💬  Sessions", View::Sessions, current),
+        nav_button("🖥️  Cursor", View::Cursor, current),
+        nav_button("🧠  Chats", View::ChatPipeline, current),
         nav_button("🔧  Services", View::Services, current),
         nav_button("💾  Storage", View::Storage, current),
         Space::new().height(Length::Fill),
@@ -1308,6 +1746,86 @@ fn styled_button(label: &'static str, is_primary: bool) -> button::Button<'stati
                 snap: false,
             }
         })
+}
+
+/// Unified Cursor view with tabbed navigation
+fn view_cursor(state: &ContinuumStudio) -> Element<Message> {
+    let current_tab = state.cursor_tab;
+    
+    // Tab bar
+    let tab_button = |label: &'static str, tab: CursorTab| -> Element<Message> {
+        let is_active = tab == current_tab;
+        button(
+            text(label)
+                .size(13)
+                .color(if is_active {
+                    iced::Color::WHITE
+                } else {
+                    iced::Color::from_rgb(0.7, 0.7, 0.7)
+                })
+        )
+        .padding([8, 16])
+        .on_press(Message::CursorTabChange(tab))
+        .style(move |_theme, status| {
+            let bg = if is_active {
+                iced::Color::from_rgb(0.25, 0.45, 0.65)
+            } else {
+                match status {
+                    button::Status::Hovered => iced::Color::from_rgb(0.25, 0.25, 0.25),
+                    _ => iced::Color::TRANSPARENT,
+                }
+            };
+            button::Style {
+                background: Some(iced::Background::Color(bg)),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 0.0,
+                    color: iced::Color::TRANSPARENT,
+                },
+                text_color: iced::Color::WHITE,
+                shadow: iced::Shadow::default(),
+                snap: false,
+            }
+        })
+        .into()
+    };
+    
+    let tabs = row![
+        tab_button("💬 Sessions", CursorTab::Sessions),
+        tab_button("🤖 Sub-agents", CursorTab::SubAgents),
+        tab_button("🔑 Auth", CursorTab::Auth),
+        tab_button("📦 Versions", CursorTab::Versions),
+        tab_button("📁 Workspaces", CursorTab::Workspaces),
+    ]
+    .spacing(4)
+    .padding(0);
+    
+    // Header
+    let header = column![
+        text("Cursor Management").size(24),
+        text("Sessions, agents, auth, versions, and workspaces")
+            .size(12)
+            .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+    ]
+    .spacing(4);
+    
+    // Tab content - delegate to existing view functions
+    let tab_content: Element<Message> = match current_tab {
+        CursorTab::Sessions => view_sessions(state),
+        CursorTab::SubAgents => view_subagents(state),
+        CursorTab::Auth => view_auth(state),
+        CursorTab::Versions => view_cursor_versions(state),
+        CursorTab::Workspaces => view_workspaces(state),
+    };
+    
+    column![
+        header,
+        Space::new().height(16),
+        tabs,
+        tab_content,
+    ]
+    .spacing(8)
+    .into()
 }
 
 /// Cursor version management view with improved organization
@@ -2023,14 +2541,129 @@ fn view_workspaces(state: &ContinuumStudio) -> Element<Message> {
         .padding([0, 16]),
     );
 
+    // --- WORKSPACE FILES SECTION ---
+    let scan_action: Element<Message> = if state.workspace_files_loading {
+        text("Scanning...")
+            .size(12)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.8))
+            .into()
+    } else {
+        styled_button("Scan", false)
+            .on_press(Message::WorkspaceAction(WorkspaceMessage::ScanWorkspaceFiles))
+            .into()
+    };
+
+    let ws_files_header = row![
+        column![
+            text(".code-workspace Files").size(16),
+            text(format!("{} files found", state.workspace_files.len()))
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        ]
+        .spacing(2),
+        Space::new().width(Length::Fill),
+        scan_action,
+    ]
+    .align_y(Alignment::Center)
+    .padding([12, 16]);
+
+    let ws_files_list: Element<Message> = if state.workspace_files.is_empty() {
+        container(
+            text("No .code-workspace files found. Click 'Scan' to search.")
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+        )
+        .padding([16, 16])
+        .into()
+    } else {
+        let file_rows: Vec<Element<Message>> = state
+            .workspace_files
+            .iter()
+            .map(|ws| workspace_file_row(ws))
+            .collect();
+        column(file_rows).spacing(4).into()
+    };
+
+    let ws_files_card = container(
+        column![
+            ws_files_header,
+            ws_files_list,
+        ]
+    )
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.12, 0.12, 0.12,
+        ))),
+        border: iced::Border {
+            radius: 10.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.2, 0.2, 0.2),
+        },
+        ..container::Style::default()
+    });
+
     column![
         header_card,
         Space::new().height(16),
+        ws_files_card,
+        Space::new().height(16),
+        text("Tracked Projects").size(16),
+        Space::new().height(8),
         table_header,
         Space::new().height(8),
-        scrollable(workspace_list).height(400),
+        scrollable(workspace_list).height(300),
     ]
     .spacing(0)
+    .into()
+}
+
+/// Create a row for a .code-workspace file
+fn workspace_file_row(ws: &CodeWorkspaceFile) -> Element<'static, Message> {
+    let path = ws.path.clone();
+    let name = ws.name.clone();
+    let folder_count = ws.folders.len();
+    let folders_str: String = if folder_count == 1 {
+        ws.folders.first().cloned().unwrap_or_default()
+    } else {
+        format!("{} folders", folder_count)
+    };
+    let modified = ws.modified.clone().unwrap_or_else(|| "-".to_string());
+
+    container(
+        row![
+            column![
+                text(name).size(13),
+                text(folders_str)
+                    .size(10)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            ]
+            .spacing(2)
+            .width(200),
+            text(modified)
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                .width(120),
+            Space::new().width(Length::Fill),
+            small_button("Open", true)
+                .on_press(Message::WorkspaceAction(WorkspaceMessage::OpenWorkspaceFile(path))),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center)
+        .padding([8, 12]),
+    )
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.14, 0.14, 0.14,
+        ))),
+        border: iced::Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.18, 0.18, 0.18),
+        },
+        ..container::Style::default()
+    })
     .into()
 }
 
@@ -2866,24 +3499,58 @@ fn view_services(state: &ContinuumStudio) -> Element<Message> {
     // Quick commands section
     let quick_commands = container(
         column![
-            text("Quick Commands").size(14),
+            row![
+                text("Quick Commands").size(14),
+                Space::new().width(8),
+                container(
+                    text("bash/nu")
+                        .size(9)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.6))
+                )
+                .padding([2, 6])
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.12, 0.15))),
+                    border: iced::Border {
+                        radius: 4.0.into(),
+                        width: 0.0,
+                        color: iced::Color::TRANSPARENT,
+                    },
+                    ..container::Style::default()
+                }),
+            ]
+            .align_y(Alignment::Center),
             Space::new().height(12),
-            // Core interactive
+            // Core interactive - same in both shells
             command_row(
                 "Start Core (Interactive)",
                 "cd /home/e421/continuum-studio/core/studio_core && iex -S mix",
             ),
             Space::new().height(8),
-            // Dialog daemon
-            command_row(
+            // Dialog daemon - background syntax differs
+            dual_command_row(
                 "Start Dialog Daemon", 
                 "synapsix-dialog-daemon --web-port 8080 &",
+                "synapsix-dialog-daemon --web-port 8080 | ignore",
             ),
             Space::new().height(8),
-            // Check dialog
+            // Check dialog - same
             command_row(
                 "Check Dialog Status",
                 "synapsix-dialog-cli ping",
+            ),
+            Space::new().height(8),
+            // Terminal monitor - background syntax
+            dual_command_row(
+                "Start Terminal Monitor",
+                "synapsix-terminal-monitor &",
+                "synapsix-terminal-monitor | ignore",
+            ),
+            Space::new().height(8),
+            // UI launch
+            dual_command_row(
+                "Start Continuum Studio UI",
+                "cd /home/e421/continuum-studio/ui-iced && ./target/release/continuum-studio-iced &",
+                "cd /home/e421/continuum-studio/ui-iced; ./target/release/continuum-studio-iced | ignore",
             ),
         ]
         .padding([16, 20]),
@@ -2917,153 +3584,482 @@ fn view_services(state: &ContinuumStudio) -> Element<Message> {
 
 /// Helper for command rows in quick commands section
 fn command_row<'a>(label: &'a str, command: &'a str) -> Element<'a, Message> {
-    container(
-        row![
+    dual_command_row(label, command, command)
+}
+
+/// Helper for command rows with both bash and nushell variants
+fn dual_command_row<'a>(label: &'a str, bash_cmd: &'a str, nu_cmd: &'a str) -> Element<'a, Message> {
+    let bash_cmd_owned = bash_cmd.to_string();
+    let nu_cmd_owned = nu_cmd.to_string();
+    let is_same = bash_cmd == nu_cmd;
+    
+    if is_same {
+        // Single command variant (shell-agnostic)
+        container(
+            row![
+                column![
+                    text(label)
+                        .size(11)
+                        .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                    Space::new().height(2),
+                    text(bash_cmd)
+                        .size(10)
+                        .font(iced::Font::MONOSPACE)
+                        .color(iced::Color::from_rgb(0.7, 0.7, 0.7)),
+                ],
+                Space::new().width(Length::Fill),
+                small_button("Copy", false)
+                    .on_press(Message::ServiceAction(ServiceMessage::CopyCommand(
+                        bash_cmd_owned,
+                    ))),
+            ]
+            .align_y(Alignment::Center)
+            .padding([6, 10]),
+        )
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.08, 0.08, 0.08,
+            ))),
+            border: iced::Border {
+                radius: 4.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.15, 0.15, 0.15),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    } else {
+        // Dual command variant (bash + nushell)
+        container(
             column![
                 text(label)
                     .size(11)
                     .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
-                Space::new().height(2),
-                text(command)
-                    .size(10)
-                    .font(iced::Font::MONOSPACE)
-                    .color(iced::Color::from_rgb(0.7, 0.7, 0.7)),
-            ],
-            Space::new().width(Length::Fill),
-            small_button("Copy", false)
-                .on_press(Message::ServiceAction(ServiceMessage::CopyCommand(
-                    command.to_string(),
-                ))),
-        ]
-        .align_y(Alignment::Center)
-        .padding([6, 10]),
-    )
-    .width(Length::Fill)
-    .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(
-            0.08, 0.08, 0.08,
-        ))),
-        border: iced::Border {
-            radius: 4.0.into(),
-            width: 1.0,
-            color: iced::Color::from_rgb(0.15, 0.15, 0.15),
-        },
-        ..container::Style::default()
-    })
-    .into()
+                Space::new().height(4),
+                // Bash row
+                row![
+                    container(
+                        text("bash")
+                            .size(8)
+                            .color(iced::Color::from_rgb(0.4, 0.7, 0.4))
+                    )
+                    .padding([1, 4])
+                    .style(|_theme| container::Style {
+                        background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.2, 0.1))),
+                        border: iced::Border {
+                            radius: 3.0.into(),
+                            width: 0.0,
+                            color: iced::Color::TRANSPARENT,
+                        },
+                        ..container::Style::default()
+                    }),
+                    Space::new().width(8),
+                    text(bash_cmd)
+                        .size(10)
+                        .font(iced::Font::MONOSPACE)
+                        .color(iced::Color::from_rgb(0.65, 0.65, 0.65)),
+                    Space::new().width(Length::Fill),
+                    small_button("Copy", false)
+                        .on_press(Message::ServiceAction(ServiceMessage::CopyCommand(
+                            bash_cmd_owned,
+                        ))),
+                ]
+                .align_y(Alignment::Center),
+                Space::new().height(4),
+                // Nushell row
+                row![
+                    container(
+                        text("nu")
+                            .size(8)
+                            .color(iced::Color::from_rgb(0.4, 0.6, 0.9))
+                    )
+                    .padding([1, 4])
+                    .style(|_theme| container::Style {
+                        background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.15, 0.25))),
+                        border: iced::Border {
+                            radius: 3.0.into(),
+                            width: 0.0,
+                            color: iced::Color::TRANSPARENT,
+                        },
+                        ..container::Style::default()
+                    }),
+                    Space::new().width(8),
+                    text(nu_cmd)
+                        .size(10)
+                        .font(iced::Font::MONOSPACE)
+                        .color(iced::Color::from_rgb(0.65, 0.65, 0.65)),
+                    Space::new().width(Length::Fill),
+                    small_button("Copy", false)
+                        .on_press(Message::ServiceAction(ServiceMessage::CopyCommand(
+                            nu_cmd_owned,
+                        ))),
+                ]
+                .align_y(Alignment::Center),
+            ]
+            .padding([6, 10]),
+        )
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.08, 0.08, 0.08,
+            ))),
+            border: iced::Border {
+                radius: 4.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.15, 0.15, 0.15),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    }
 }
 
 /// Storage management view - shows disk usage and cleanup options for Cursor versions
 fn view_storage(state: &ContinuumStudio) -> Element<Message> {
     let install_type = InstallationType::detect();
 
-    // Header
-    let header = column![
-        text("Storage Management").size(28),
-        Space::new().height(4),
-        text("Manage disk usage for Cursor versions and Continuum Studio updates").size(14),
-        Space::new().height(4),
-        text(format!("Installation: {}", install_type.description())).size(12),
-    ];
+    // Header card
+    let total_disk: u64 = state.storage_disk_usage.iter().map(|v| v.total_size).sum();
+    let selected_count = state.storage_selected.len();
+    let selected_size: u64 = state.storage_disk_usage.iter()
+        .filter(|v| state.storage_selected.contains(&v.version))
+        .map(|v| v.total_size)
+        .sum();
 
-    // Installed versions with disk info
-    let installed_versions: Vec<&CursorVersion> = state.versions.iter()
-        .filter(|v| v.status == VersionStatus::Installed || v.status == VersionStatus::Running)
-        .collect();
+    let header_card = container(
+        column![
+            row![
+                column![
+                    text("Storage Management").size(20),
+                    text(format!("Installation: {}", install_type.description()))
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                ]
+                .spacing(4),
+                Space::new().width(Length::Fill),
+                column![
+                    text(format!("Total: {}", format_bytes(total_disk)))
+                        .size(16),
+                    text(format!("{} versions installed", state.storage_disk_usage.len()))
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                ]
+                .spacing(4)
+                .align_x(Alignment::End),
+            ]
+            .align_y(Alignment::Center),
+            Space::new().height(12),
+            row![
+                styled_button("Scan Disk Usage", false)
+                    .on_press(Message::StorageAction(StorageMessage::RefreshDiskUsage)),
+                Space::new().width(12),
+                styled_button("Select All", false)
+                    .on_press(Message::StorageAction(StorageMessage::SelectAll)),
+                Space::new().width(4),
+                styled_button("Deselect", false)
+                    .on_press(Message::StorageAction(StorageMessage::DeselectAll)),
+                Space::new().width(Length::Fill),
+                if selected_count > 0 {
+                    text(format!("{} selected ({})", selected_count, format_bytes(selected_size)))
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.9, 0.6, 0.3))
+                } else {
+                    text("No versions selected")
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                },
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+        ],
+    )
+    .padding(20)
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.15))),
+        border: iced::Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.22, 0.22, 0.22),
+        },
+        ..container::Style::default()
+    });
 
-    let total_count = installed_versions.len();
-
-    let version_rows: Vec<Element<Message>> = if installed_versions.is_empty() {
+    // Version table with disk usage breakdown
+    let version_rows: Vec<Element<Message>> = if state.storage_loading {
         vec![
             container(
-                text("No installed Cursor versions found. Install versions from the Versions tab.")
-                    .size(14)
+                text("Scanning disk usage...").size(14).color(iced::Color::from_rgb(0.5, 0.5, 0.5))
             )
             .padding(20)
             .into()
         ]
+    } else if state.storage_disk_usage.is_empty() {
+        // Show basic list from state.versions if disk usage not yet scanned
+        let installed: Vec<&CursorVersion> = state.versions.iter()
+            .filter(|v| v.status == VersionStatus::Installed || v.status == VersionStatus::Running)
+            .collect();
+
+        if installed.is_empty() {
+            vec![
+                container(
+                    column![
+                        text("No installed Cursor versions found.").size(14),
+                        Space::new().height(4),
+                        text("Install versions from the Versions tab, then click 'Scan Disk Usage'.")
+                            .size(12)
+                            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    ]
+                )
+                .padding(20)
+                .into()
+            ]
+        } else {
+            vec![
+                container(
+                    column![
+                        text(format!("{} installed versions detected.", installed.len())).size(14),
+                        Space::new().height(4),
+                        text("Click 'Scan Disk Usage' to see detailed size breakdown per version.")
+                            .size(12)
+                            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    ]
+                )
+                .padding(20)
+                .into()
+            ]
+        }
     } else {
-        installed_versions.iter().map(|v| {
-            let version_label = text(format!("Cursor {}", v.version)).size(14);
-
-            // Data dir path for info
-            let home = dirs::home_dir().unwrap_or_default();
-            let data_dir = home.join(format!(".cursor-{}", v.version));
-            let has_data = data_dir.exists();
-
-            let status_text = if v.status == VersionStatus::Running {
-                text("Running").size(11)
-            } else if has_data {
-                text("Has data dir").size(11)
-            } else {
-                text("AppImage only").size(11)
-            };
-
-            let uninstall_btn = button(text("Remove AppImage").size(11))
-                .on_press(Message::CursorAction(CursorMessage::UninstallVersion(v.version.clone())))
-                .padding([4, 8]);
-
-            let row_content: Element<Message> = row![
-                version_label,
+        // Table header
+        let header_row: Element<Message> = container(
+            row![
+                Space::new().width(30), // checkbox column
+                text("Version").size(11).color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
                 Space::new().width(Length::Fill),
-                status_text,
-                Space::new().width(10),
-                uninstall_btn,
+                container(text("AppImage").size(11).color(iced::Color::from_rgb(0.6, 0.6, 0.6))).width(80),
+                container(text("Data").size(11).color(iced::Color::from_rgb(0.6, 0.6, 0.6))).width(80),
+                container(text("Extensions").size(11).color(iced::Color::from_rgb(0.6, 0.6, 0.6))).width(80),
+                container(text("Total").size(11).color(iced::Color::from_rgb(0.6, 0.6, 0.6))).width(80),
+                container(text("Last Used").size(11).color(iced::Color::from_rgb(0.6, 0.6, 0.6))).width(120),
+                Space::new().width(30), // status column
             ]
             .spacing(8)
-            .align_y(Alignment::Center)
+            .align_y(Alignment::Center),
+        )
+        .padding([6, 12])
+        .width(Length::Fill)
+        .into();
+
+        let mut rows = vec![header_row];
+
+        for usage in &state.storage_disk_usage {
+            let is_selected = state.storage_selected.contains(&usage.version);
+            let version_clone = usage.version.clone();
+
+            let select_btn = button(
+                text(if is_selected { "x" } else { " " })
+                    .size(11)
+                    .font(iced::Font::MONOSPACE)
+            )
+            .padding([2, 6])
+            .on_press_maybe(
+                if usage.is_running { None } else { Some(Message::StorageAction(StorageMessage::ToggleVersionSelect(version_clone))) }
+            )
+            .style(move |_theme, _status| {
+                button::Style {
+                    background: Some(iced::Background::Color(if is_selected {
+                        iced::Color::from_rgb(0.25, 0.45, 0.7)
+                    } else {
+                        iced::Color::from_rgb(0.2, 0.2, 0.2)
+                    })),
+                    text_color: iced::Color::WHITE,
+                    border: iced::Border {
+                        radius: 4.0.into(),
+                        width: 1.0,
+                        color: iced::Color::from_rgb(0.3, 0.3, 0.3),
+                    },
+                    shadow: iced::Shadow::default(),
+                    snap: false,
+                }
+            });
+
+            let version_text = text(format!("Cursor {}", usage.version)).size(13);
+
+            let status_indicator = if usage.is_running {
+                text("RUN").size(10).color(iced::Color::from_rgb(0.3, 0.8, 0.4))
+            } else if usage.has_data_dir {
+                text("").size(10)
+            } else {
+                text("").size(10)
+            };
+
+            let last_used_text = text(
+                usage.last_used.as_deref().unwrap_or("Never")
+            )
+            .size(11)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5));
+
+            let bg_color = if is_selected {
+                iced::Color::from_rgb(0.15, 0.2, 0.28)
+            } else {
+                iced::Color::from_rgb(0.12, 0.12, 0.12)
+            };
+
+            let row_content: Element<Message> = container(
+                row![
+                    select_btn,
+                    version_text,
+                    Space::new().width(Length::Fill),
+                    container(text(format_bytes(usage.appimage_size)).size(11)).width(80),
+                    container(
+                        text(if usage.has_data_dir { format_bytes(usage.data_dir_size) } else { "-".to_string() })
+                            .size(11)
+                    ).width(80),
+                    container(
+                        text(if usage.has_extensions { format_bytes(usage.extensions_size) } else { "-".to_string() })
+                            .size(11)
+                    ).width(80),
+                    container(text(format_bytes(usage.total_size)).size(11)).width(80),
+                    container(last_used_text).width(120),
+                    status_indicator,
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            )
+            .padding([8, 12])
+            .width(Length::Fill)
+            .style(move |_theme| container::Style {
+                background: Some(iced::Background::Color(bg_color)),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    width: 0.0,
+                    color: iced::Color::TRANSPARENT,
+                },
+                ..container::Style::default()
+            })
             .into();
 
-            container(row_content)
-                .padding([8, 12])
-                .width(Length::Fill)
-                .into()
-        }).collect()
+            rows.push(row_content);
+        }
+
+        rows
     };
 
-    // Summary section
-    let summary = column![
-        text(format!("Installed Versions: {}", total_count)).size(14),
-        Space::new().height(4),
-        text("Tip: Use the Versions tab to download/manage individual versions.").size(12),
-        text("Data directories (~/.cursor-VERSION/) contain extensions, settings, and auth.").size(12),
-    ];
+    // Cleanup actions card (only visible when versions are selected)
+    let cleanup_card: Element<Message> = if selected_count > 0 {
+        container(
+            column![
+                text("Cleanup Options").size(14).color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                Space::new().height(12),
+                row![
+                    styled_button("Remove AppImage Only", false)
+                        .on_press(Message::StorageAction(StorageMessage::CleanupSelected(CleanupMode::AppImageOnly))),
+                    Space::new().width(8),
+                    styled_button("Remove AppImage + Data", false)
+                        .on_press(Message::StorageAction(StorageMessage::CleanupSelected(CleanupMode::AppImageAndData))),
+                    Space::new().width(8),
+                    styled_button("Remove All (Keep Auth)", false)
+                        .on_press(Message::StorageAction(StorageMessage::CleanupSelected(CleanupMode::KeepAuth))),
+                ]
+                .spacing(4),
+                Space::new().height(8),
+                text("AppImage Only: Removes the installer, keeps data and extensions intact.")
+                    .size(11)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                text("AppImage + Data: Removes everything including settings and extensions.")
+                    .size(11)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                text("Keep Auth: Removes everything but extracts auth profile first.")
+                    .size(11)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            ],
+        )
+        .padding(20)
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.18, 0.14, 0.12))),
+            border: iced::Border {
+                radius: 12.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.35, 0.25, 0.18),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    } else {
+        Space::new().height(0).into()
+    };
 
-    // Update info
-    let update_section = {
+    // Continuum Studio builds section
+    let builds_section = {
         let builds_dir = continuum_studio_iced::updater::local_builds_dir();
         let nightly_exists = builds_dir.join("nightly").join("continuum-studio").exists();
         let stable_exists = builds_dir.join("stable").join("continuum-studio").exists();
 
-        column![
-            Space::new().height(16),
-            text("Continuum Studio Builds").size(20),
-            Space::new().height(8),
-            text(format!("Nightly build: {}", if nightly_exists { "Available" } else { "Not built" })).size(14),
-            text(format!("Stable build: {}", if stable_exists { "Available" } else { "Not built" })).size(14),
-            text(format!("Builds directory: {}", builds_dir.display())).size(12),
-        ]
+        container(
+            column![
+                text("Continuum Studio Builds").size(14).color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                Space::new().height(12),
+                row![
+                    text("Nightly:").size(13),
+                    Space::new().width(8),
+                    text(if nightly_exists { "Available" } else { "Not built" })
+                        .size(13)
+                        .color(if nightly_exists {
+                            iced::Color::from_rgb(0.3, 0.7, 0.4)
+                        } else {
+                            iced::Color::from_rgb(0.5, 0.5, 0.5)
+                        }),
+                    Space::new().width(24),
+                    text("Stable:").size(13),
+                    Space::new().width(8),
+                    text(if stable_exists { "Available" } else { "Not built" })
+                        .size(13)
+                        .color(if stable_exists {
+                            iced::Color::from_rgb(0.3, 0.7, 0.4)
+                        } else {
+                            iced::Color::from_rgb(0.5, 0.5, 0.5)
+                        }),
+                ],
+                Space::new().height(4),
+                text(format!("Builds dir: {}", builds_dir.display()))
+                    .size(11)
+                    .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+            ],
+        )
+        .padding(20)
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.15))),
+            border: iced::Border {
+                radius: 12.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.22, 0.22, 0.22),
+            },
+            ..container::Style::default()
+        })
     };
 
-    let content = column![
-        header,
-        Space::new().height(16),
-        text("Installed Cursor Versions").size(20),
-        Space::new().height(8),
+    // Assemble the full view
+    let mut content = column![
+        header_card,
+        Space::new().height(12),
     ];
 
-    // Build the scrollable list
-    let mut full_content = content;
+    // Add version rows
     for row in version_rows {
-        full_content = full_content.push(row);
+        content = content.push(row);
     }
-    full_content = full_content
-        .push(Space::new().height(16))
-        .push(summary)
-        .push(update_section);
+
+    content = content
+        .push(Space::new().height(12))
+        .push(cleanup_card)
+        .push(Space::new().height(12))
+        .push(builds_section);
 
     scrollable(
-        container(full_content)
+        container(content)
             .width(Length::Fill)
             .padding(10)
     )
@@ -3372,6 +4368,20 @@ fn view_settings(state: &ContinuumStudio) -> Element<Message> {
             ),
             Space::new().height(8),
             settings_row(
+                "Release source",
+                row![
+                    forge_pill("Local", state.settings.updates.forge_type == ForgeType::Local, ForgeType::Local),
+                    forge_pill("GitHub", state.settings.updates.forge_type == ForgeType::GitHub, ForgeType::GitHub),
+                    forge_pill("Forgejo", state.settings.updates.forge_type == ForgeType::Forgejo, ForgeType::Forgejo),
+                ]
+                .spacing(6),
+            ),
+            Space::new().height(4),
+            text(state.settings.updates.forge_type.description())
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            Space::new().height(8),
+            settings_row(
                 "Auto-check updates",
                 toggle_button(
                     state.settings.updates.auto_check,
@@ -3469,6 +4479,19 @@ fn channel_pill(
     button(text(label).size(11))
         .padding([6, 12])
         .on_press(Message::SettingsAction(SettingsMessage::SetUpdateChannel(channel)))
+        .style(move |_theme, status| pill_style(is_active, status))
+        .into()
+}
+
+/// Forge type pill button for release source selection
+fn forge_pill(
+    label: &'static str,
+    is_active: bool,
+    forge_type: ForgeType,
+) -> Element<'static, Message> {
+    button(text(label).size(11))
+        .padding([6, 12])
+        .on_press(Message::SettingsAction(SettingsMessage::SetForgeType(forge_type)))
         .style(move |_theme, status| pill_style(is_active, status))
         .into()
 }
@@ -3614,4 +4637,1734 @@ fn pill_style(is_active: bool, status: button::Status) -> button::Style {
         shadow: iced::Shadow::default(),
         snap: false,
     }
+}
+
+// ===========================================================================
+// Chat Pipeline Integration
+// ===========================================================================
+
+fn handle_chat_pipeline_message(state: &mut ContinuumStudio, msg: ChatPipelineMsg) -> Task<Message> {
+    match msg {
+        ChatPipelineMsg::SwitchSubView(sub) => {
+            state.chat_pipeline.sub_view = sub;
+            // Auto-fetch data for the sub-view
+            match sub {
+                ChatSubView::Scanner => {
+                    if state.chat_pipeline.locations.is_none() {
+                        state.chat_pipeline.loading = true;
+                        return Task::perform(
+                            async { ChatApiClient::fetch_locations().await },
+                            |result| Message::ChatPipelineAction(ChatPipelineMsg::LocationsLoaded(result)),
+                        );
+                    }
+                }
+                ChatSubView::Topics => {
+                    state.chat_pipeline.loading = true;
+                    return Task::perform(
+                        async { ChatApiClient::fetch_topics().await },
+                        |result| Message::ChatPipelineAction(
+                            ChatPipelineMsg::TopicsLoaded(result.map(|t| t.topics)),
+                        ),
+                    );
+                }
+                ChatSubView::Conversations => {
+                    state.chat_pipeline.loading = true;
+                    return Task::perform(
+                        async { ChatApiClient::fetch_conversations(100).await },
+                        |result| Message::ChatPipelineAction(
+                            ChatPipelineMsg::ConversationsLoaded(result.map(|c| c.conversations)),
+                        ),
+                    );
+                }
+                _ => {}
+            }
+        }
+        ChatPipelineMsg::RefreshAll => {
+            state.chat_pipeline.loading = true;
+            state.chat_pipeline.error = None;
+            // Fire off parallel fetches
+            let stats_task = Task::perform(
+                async { ChatApiClient::fetch_stats().await },
+                |result| Message::ChatPipelineAction(ChatPipelineMsg::StatsLoaded(result)),
+            );
+            let health_task = Task::perform(
+                async { ChatApiClient::fetch_health().await },
+                |result| Message::ChatPipelineAction(
+                    ChatPipelineMsg::HealthChecked(result.map(|h| h.status == "ok")),
+                ),
+            );
+            let convos_task = Task::perform(
+                async { ChatApiClient::fetch_conversations(100).await },
+                |result| Message::ChatPipelineAction(
+                    ChatPipelineMsg::ConversationsLoaded(result.map(|c| c.conversations)),
+                ),
+            );
+            return Task::batch([stats_task, health_task, convos_task]);
+        }
+        ChatPipelineMsg::HealthChecked(result) => {
+            match result {
+                Ok(ok) => {
+                    state.chat_pipeline.api_available = ok;
+                    state.chat_pipeline.loading = false;
+                }
+                Err(e) => {
+                    state.chat_pipeline.api_available = false;
+                    state.chat_pipeline.error = Some(format!("API unavailable: {}", e));
+                    state.chat_pipeline.loading = false;
+                }
+            }
+        }
+        ChatPipelineMsg::StatsLoaded(result) => {
+            state.chat_pipeline.loading = false;
+            match result {
+                Ok(stats) => {
+                    state.chat_pipeline.api_available = true;
+                    state.chat_pipeline.stats = Some(stats);
+                }
+                Err(e) => {
+                    state.chat_pipeline.error = Some(format!("Failed to load stats: {}", e));
+                }
+            }
+        }
+        ChatPipelineMsg::ConversationsLoaded(result) => {
+            state.chat_pipeline.loading = false;
+            match result {
+                Ok(convos) => state.chat_pipeline.conversations = convos,
+                Err(e) => {
+                    state.chat_pipeline.error = Some(format!("Failed to load conversations: {}", e));
+                }
+            }
+        }
+        ChatPipelineMsg::ConversationLoaded(result) => {
+            state.chat_pipeline.loading = false;
+            match result {
+                Ok(detail) => state.chat_pipeline.selected_conversation = Some(detail),
+                Err(e) => {
+                    state.chat_pipeline.error =
+                        Some(format!("Failed to load conversation: {}", e));
+                }
+            }
+        }
+        ChatPipelineMsg::TopicsLoaded(result) => {
+            state.chat_pipeline.loading = false;
+            match result {
+                Ok(topics) => state.chat_pipeline.topics = topics,
+                Err(e) => {
+                    state.chat_pipeline.error = Some(format!("Failed to load topics: {}", e));
+                }
+            }
+        }
+        ChatPipelineMsg::SearchCompleted(result) => {
+            state.chat_pipeline.loading = false;
+            match result {
+                Ok(results) => state.chat_pipeline.search_results = results,
+                Err(e) => {
+                    state.chat_pipeline.error = Some(format!("Search failed: {}", e));
+                }
+            }
+        }
+        ChatPipelineMsg::LocationsLoaded(result) => {
+            state.chat_pipeline.loading = false;
+            match result {
+                Ok(locations) => state.chat_pipeline.locations = Some(locations),
+                Err(e) => {
+                    state.chat_pipeline.error = Some(format!("Failed to scan locations: {}", e));
+                }
+            }
+        }
+        ChatPipelineMsg::SearchQueryChanged(query) => {
+            state.chat_pipeline.search_query = query;
+        }
+        ChatPipelineMsg::DoSearch => {
+            let query = state.chat_pipeline.search_query.clone();
+            if !query.is_empty() {
+                state.chat_pipeline.loading = true;
+                return Task::perform(
+                    async move { ChatApiClient::search(query, "hybrid".to_string()).await },
+                    |result| Message::ChatPipelineAction(
+                        ChatPipelineMsg::SearchCompleted(result.map(|s| s.results)),
+                    ),
+                );
+            }
+        }
+        ChatPipelineMsg::SelectConversation(id) => {
+            state.chat_pipeline.loading = true;
+            state.chat_pipeline.expanded_messages.clear();
+            state.chat_pipeline.show_full_conversation = false;
+            return Task::perform(
+                async move { ChatApiClient::fetch_conversation(id).await },
+                |result| Message::ChatPipelineAction(ChatPipelineMsg::ConversationLoaded(result)),
+            );
+        }
+        ChatPipelineMsg::BackToList => {
+            state.chat_pipeline.selected_conversation = None;
+            state.chat_pipeline.expanded_messages.clear();
+            state.chat_pipeline.show_full_conversation = false;
+        }
+        ChatPipelineMsg::DoBatchIngest => {
+            state.chat_pipeline.loading = true;
+            state.chat_pipeline.last_action_result = None;
+            return Task::perform(
+                async { ChatApiClient::batch_ingest().await },
+                |result| Message::ChatPipelineAction(ChatPipelineMsg::BatchIngestDone(
+                    result.map(|r| format!("Imported: {}, Summarized: {}, Topics: {}",
+                        r.imported, r.summarize_queued, r.topics_created)),
+                )),
+            );
+        }
+        ChatPipelineMsg::DoSummarizePending => {
+            state.chat_pipeline.loading = true;
+            return Task::perform(
+                async { ChatApiClient::summarize_pending().await },
+                |result| Message::ChatPipelineAction(ChatPipelineMsg::SummarizeDone(
+                    result.map(|v| format!("{}", v)),
+                )),
+            );
+        }
+        ChatPipelineMsg::DoClusterTopics => {
+            state.chat_pipeline.loading = true;
+            return Task::perform(
+                async { ChatApiClient::cluster_topics().await },
+                |result| Message::ChatPipelineAction(ChatPipelineMsg::ClusterDone(
+                    result.map(|v| format!("{}", v)),
+                )),
+            );
+        }
+        ChatPipelineMsg::DoImportOrphaned => {
+            state.chat_pipeline.loading = true;
+            return Task::perform(
+                async { ChatApiClient::import_orphaned().await },
+                |result| Message::ChatPipelineAction(ChatPipelineMsg::ImportOrphanedDone(
+                    result.map(|v| format!("{}", v)),
+                )),
+            );
+        }
+        ChatPipelineMsg::BatchIngestDone(result) => {
+            state.chat_pipeline.loading = false;
+            match result {
+                Ok(msg) => state.chat_pipeline.last_action_result = Some(format!("Batch ingest: {}", msg)),
+                Err(e) => state.chat_pipeline.error = Some(format!("Batch ingest failed: {}", e)),
+            }
+            // Refresh stats
+            return Task::perform(
+                async { ChatApiClient::fetch_stats().await },
+                |result| Message::ChatPipelineAction(ChatPipelineMsg::StatsLoaded(result)),
+            );
+        }
+        ChatPipelineMsg::SummarizeDone(result) | ChatPipelineMsg::ImportOrphanedDone(result) => {
+            state.chat_pipeline.loading = false;
+            match result {
+                Ok(msg) => state.chat_pipeline.last_action_result = Some(msg),
+                Err(e) => state.chat_pipeline.error = Some(e),
+            }
+            return Task::perform(
+                async { ChatApiClient::fetch_stats().await },
+                |result| Message::ChatPipelineAction(ChatPipelineMsg::StatsLoaded(result)),
+            );
+        }
+        ChatPipelineMsg::ClusterDone(result) => {
+            state.chat_pipeline.loading = false;
+            match result {
+                Ok(msg) => state.chat_pipeline.last_action_result = Some(msg),
+                Err(e) => state.chat_pipeline.error = Some(e),
+            }
+            // Refresh both stats and topics after clustering
+            let stats_task = Task::perform(
+                async { ChatApiClient::fetch_stats().await },
+                |result| Message::ChatPipelineAction(ChatPipelineMsg::StatsLoaded(result)),
+            );
+            let topics_task = Task::perform(
+                async { ChatApiClient::fetch_topics().await },
+                |result| Message::ChatPipelineAction(
+                    ChatPipelineMsg::TopicsLoaded(result.map(|t| t.topics)),
+                ),
+            );
+            return Task::batch([stats_task, topics_task]);
+        }
+        ChatPipelineMsg::ClearError => {
+            state.chat_pipeline.error = None;
+        }
+        ChatPipelineMsg::ClearActionResult => {
+            state.chat_pipeline.last_action_result = None;
+        }
+        ChatPipelineMsg::ToggleMessageExpand(idx) => {
+            if state.chat_pipeline.expanded_messages.contains(&idx) {
+                state.chat_pipeline.expanded_messages.remove(&idx);
+            } else {
+                state.chat_pipeline.expanded_messages.insert(idx);
+            }
+        }
+        ChatPipelineMsg::ToggleShowFull => {
+            state.chat_pipeline.show_full_conversation = !state.chat_pipeline.show_full_conversation;
+            if !state.chat_pipeline.show_full_conversation {
+                state.chat_pipeline.expanded_messages.clear();
+            }
+        }
+    }
+    Task::none()
+}
+
+// ---------------------------------------------------------------------------
+// Chat Pipeline View
+// ---------------------------------------------------------------------------
+
+fn view_chat_pipeline(state: &ContinuumStudio) -> Element<Message> {
+    let cp = &state.chat_pipeline;
+
+    // Sub-navigation tabs
+    let tab_bar = chat_tab_bar(cp.sub_view);
+
+    // Status indicator
+    let status = if cp.api_available {
+        text("● Synapsix Connected")
+            .size(12)
+            .color(iced::Color::from_rgb(0.25, 0.75, 0.35))
+    } else {
+        text("○ Synapsix Offline")
+            .size(12)
+            .color(iced::Color::from_rgb(0.75, 0.35, 0.35))
+    };
+
+    // Error banner
+    let error_banner: Element<Message> = if let Some(ref err) = cp.error {
+        container(
+            row![
+                text(format!("⚠ {}", err))
+                    .size(12)
+                    .color(iced::Color::from_rgb(1.0, 0.6, 0.4)),
+                Space::new().width(Length::Fill),
+                button(text("✕").size(12))
+                    .on_press(Message::ChatPipelineAction(ChatPipelineMsg::ClearError))
+                    .padding([2, 8]),
+            ]
+            .align_y(Alignment::Center),
+        )
+        .padding(8)
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.2, 0.1, 0.1))),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.4, 0.2, 0.2),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    } else {
+        Space::new().height(0).into()
+    };
+
+    // Action result banner
+    let result_banner: Element<Message> = if let Some(ref msg) = cp.last_action_result {
+        container(
+            row![
+                text(format!("✓ {}", msg))
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.4, 0.9, 0.5)),
+                Space::new().width(Length::Fill),
+                button(text("✕").size(12))
+                    .on_press(Message::ChatPipelineAction(ChatPipelineMsg::ClearActionResult))
+                    .padding([2, 8]),
+            ]
+            .align_y(Alignment::Center),
+        )
+        .padding(8)
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.08, 0.18, 0.1))),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.2, 0.4, 0.25),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    } else {
+        Space::new().height(0).into()
+    };
+
+    // Content based on sub-view
+    let content: Element<Message> = match cp.sub_view {
+        ChatSubView::Dashboard => chat_dashboard_view(cp),
+        ChatSubView::Scanner => chat_scanner_view(cp),
+        ChatSubView::Conversations => {
+            if cp.selected_conversation.is_some() {
+                chat_conversation_detail_view(cp)
+            } else {
+                chat_conversations_view(cp)
+            }
+        }
+        ChatSubView::Topics => chat_topics_view(cp),
+        ChatSubView::Search => chat_search_view(cp),
+    };
+
+    // Header
+    let header = row![
+        column![
+            text("Chat Pipeline").size(24),
+            text("Synapsix-powered chat intelligence")
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        ]
+        .spacing(4),
+        Space::new().width(Length::Fill),
+        status,
+        Space::new().width(10),
+        button(text(if cp.loading { "⟳ Loading..." } else { "⟳ Refresh" }).size(12))
+            .on_press_maybe(if cp.loading {
+                None
+            } else {
+                Some(Message::ChatPipelineAction(ChatPipelineMsg::RefreshAll))
+            })
+            .padding([6, 12]),
+    ]
+    .align_y(Alignment::Center)
+    .spacing(8);
+
+    scrollable(
+        column![header, tab_bar, error_banner, result_banner, content,]
+            .spacing(12)
+            .width(Length::Fill),
+    )
+    .into()
+}
+
+fn chat_tab_bar(current: ChatSubView) -> Element<'static, Message> {
+    let tab = |label: &'static str, sub: ChatSubView| -> Element<'static, Message> {
+        let is_active = current == sub;
+        let btn = button(text(label).size(13))
+            .on_press(Message::ChatPipelineAction(ChatPipelineMsg::SwitchSubView(sub)))
+            .padding([6, 16])
+            .style(move |_theme, _status| {
+                let bg = if is_active {
+                    iced::Color::from_rgb(0.2, 0.35, 0.55)
+                } else {
+                    iced::Color::from_rgb(0.15, 0.15, 0.15)
+                };
+                button::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    text_color: if is_active {
+                        iced::Color::WHITE
+                    } else {
+                        iced::Color::from_rgb(0.6, 0.6, 0.6)
+                    },
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        width: 0.0,
+                        color: iced::Color::TRANSPARENT,
+                    },
+                    shadow: iced::Shadow::default(),
+                    snap: false,
+                }
+            });
+        btn.into()
+    };
+
+    row![
+        tab("Dashboard", ChatSubView::Dashboard),
+        tab("Scanner", ChatSubView::Scanner),
+        tab("Conversations", ChatSubView::Conversations),
+        tab("Topics", ChatSubView::Topics),
+        tab("Search", ChatSubView::Search),
+    ]
+    .spacing(4)
+    .into()
+}
+
+// ---------------------------------------------------------------------------
+// Chat Sub-Views
+// ---------------------------------------------------------------------------
+
+fn chat_dashboard_view(cp: &ChatPipelineState) -> Element<'_, Message> {
+    let stats_cards: Element<'_, Message> = if let Some(ref stats) = cp.stats {
+        let s = &stats.store;
+        let sm = &stats.summarizer;
+
+        let card = |title: &str, value: String, color: iced::Color| -> Element<'static, Message> {
+            let t = title.to_string();
+            container(
+                column![
+                    text(value).size(28).color(color),
+                    text(t)
+                        .size(11)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                ]
+                .spacing(4)
+                .align_x(Alignment::Center),
+            )
+            .padding(16)
+            .width(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.12, 0.12, 0.15,
+                ))),
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.2, 0.2, 0.25),
+                },
+                ..container::Style::default()
+            })
+            .into()
+        };
+
+        column![
+            text("Overview").size(16),
+            row![
+                card("Conversations", fmt_num(s.conversations), iced::Color::from_rgb(0.4, 0.7, 1.0)),
+                card("Messages", fmt_num(s.messages), iced::Color::from_rgb(0.5, 0.8, 0.5)),
+                card("Chunks", fmt_num(s.chunks), iced::Color::from_rgb(0.8, 0.7, 0.4)),
+                card("Embeddings", fmt_num(s.embeddings), iced::Color::from_rgb(0.7, 0.5, 0.9)),
+            ]
+            .spacing(8),
+            row![
+                card("Summaries", fmt_num(s.summaries), iced::Color::from_rgb(0.4, 0.8, 0.8)),
+                card("Topics", fmt_num(s.topics), iced::Color::from_rgb(0.9, 0.5, 0.6)),
+                card("LLM Calls", fmt_num(sm.total_llm_calls), iced::Color::from_rgb(0.8, 0.6, 0.4)),
+                card("Workspace Summaries", fmt_num(s.workspace_summaries), iced::Color::from_rgb(0.6, 0.7, 0.9)),
+            ]
+            .spacing(8),
+            Space::new().height(16),
+            text("Actions").size(16),
+            row![
+                button(text("Import + Summarize + Cluster").size(12))
+                    .on_press_maybe(if cp.loading {
+                        None
+                    } else {
+                        Some(Message::ChatPipelineAction(ChatPipelineMsg::DoBatchIngest))
+                    })
+                    .padding([8, 16]),
+                button(text("Summarize Pending").size(12))
+                    .on_press_maybe(if cp.loading {
+                        None
+                    } else {
+                        Some(Message::ChatPipelineAction(ChatPipelineMsg::DoSummarizePending))
+                    })
+                    .padding([8, 16]),
+                button(text("Cluster Topics").size(12))
+                    .on_press_maybe(if cp.loading {
+                        None
+                    } else {
+                        Some(Message::ChatPipelineAction(ChatPipelineMsg::DoClusterTopics))
+                    })
+                    .padding([8, 16]),
+                button(text("Import Orphaned").size(12))
+                    .on_press_maybe(if cp.loading {
+                        None
+                    } else {
+                        Some(Message::ChatPipelineAction(ChatPipelineMsg::DoImportOrphaned))
+                    })
+                    .padding([8, 16]),
+            ]
+            .spacing(8),
+        ]
+        .spacing(12)
+        .into()
+    } else if cp.loading {
+        container(
+            text("Loading pipeline stats...")
+                .size(14)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        )
+        .center_x(Length::Fill)
+        .padding(40)
+        .into()
+    } else {
+        container(
+            column![
+                text("No data available").size(16),
+                text("Make sure Synapsix is running on port 4001")
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                Space::new().height(8),
+                button(text("Connect & Refresh").size(12))
+                    .on_press(Message::ChatPipelineAction(ChatPipelineMsg::RefreshAll))
+                    .padding([8, 16]),
+            ]
+            .spacing(8)
+            .align_x(Alignment::Center),
+        )
+        .center_x(Length::Fill)
+        .padding(40)
+        .into()
+    };
+
+    stats_cards
+}
+
+fn chat_scanner_view(cp: &ChatPipelineState) -> Element<'_, Message> {
+    let content: Element<'_, Message> = if let Some(ref locs) = cp.locations {
+        let header = row![
+            text(format!("Platform: {}", locs.platform)).size(14),
+            Space::new().width(Length::Fill),
+            text(format!("{} locations found", locs.location_count))
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        ];
+
+        let mut items = column![].spacing(4);
+        for loc in &locs.locations {
+            let exists_indicator = if loc.exists {
+                text("●")
+                    .size(10)
+                    .color(iced::Color::from_rgb(0.3, 0.8, 0.4))
+            } else {
+                text("○")
+                    .size(10)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+            };
+
+            let loc_row = container(
+                row![
+                    exists_indicator,
+                    Space::new().width(8),
+                    column![
+                        text(truncate(&loc.path, 80))
+                            .size(12)
+                            .color(iced::Color::from_rgb(0.8, 0.8, 0.8)),
+                        row![
+                            text(format!("Type: {}", loc.loc_type))
+                                .size(10)
+                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                            Space::new().width(12),
+                            text(format!("Source: {}", loc.source))
+                                .size(10)
+                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                            Space::new().width(12),
+                            text(if loc.size_bytes > 0 {
+                                fmt_bytes(loc.size_bytes)
+                            } else {
+                                "—".to_string()
+                            })
+                            .size(10)
+                            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                        ]
+                        .spacing(4),
+                    ]
+                    .spacing(2),
+                ]
+                .align_y(Alignment::Center),
+            )
+            .padding([6, 10])
+            .width(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.1, 0.1, 0.12,
+                ))),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.18, 0.18, 0.2),
+                },
+                ..container::Style::default()
+            });
+
+            items = items.push(loc_row);
+        }
+
+        column![
+            header,
+            Space::new().height(8),
+            button(text("Rescan Locations").size(12))
+                .on_press_maybe(if cp.loading {
+                    None
+                } else {
+                    Some(Message::ChatPipelineAction(ChatPipelineMsg::SwitchSubView(ChatSubView::Scanner)))
+                })
+                .padding([6, 12]),
+            Space::new().height(8),
+            items,
+        ]
+        .spacing(8)
+        .into()
+    } else if cp.loading {
+        container(
+            text("Scanning locations...")
+                .size(14)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        )
+        .center_x(Length::Fill)
+        .padding(40)
+        .into()
+    } else {
+        container(
+            column![
+                text("Click to scan for Cursor databases").size(14),
+                Space::new().height(8),
+                button(text("Scan Locations").size(12))
+                    .on_press(Message::ChatPipelineAction(ChatPipelineMsg::SwitchSubView(ChatSubView::Scanner)))
+                    .padding([8, 16]),
+            ]
+            .spacing(4)
+            .align_x(Alignment::Center),
+        )
+        .center_x(Length::Fill)
+        .padding(40)
+        .into()
+    };
+
+    column![
+        text("Database Scanner").size(16),
+        content,
+    ]
+    .spacing(12)
+    .into()
+}
+
+fn chat_conversations_view(cp: &ChatPipelineState) -> Element<'_, Message> {
+    let count = cp.conversations.len();
+    let header = row![
+        text("Conversations").size(16),
+        Space::new().width(Length::Fill),
+        text(format!("{} total", count))
+            .size(12)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+    ];
+
+    if cp.conversations.is_empty() && !cp.loading {
+        return column![
+            header,
+            container(
+                text("No conversations found. Run batch ingest from Dashboard.")
+                    .size(13)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            )
+            .center_x(Length::Fill)
+            .padding(40),
+        ]
+        .spacing(12)
+        .into();
+    }
+
+    let mut list = column![].spacing(4);
+    for conv in &cp.conversations {
+        let title = conv
+            .title
+            .as_deref()
+            .unwrap_or("Untitled conversation");
+        let workspace = conv
+            .workspace
+            .as_deref()
+            .unwrap_or("unknown");
+
+        let has_summary = conv.summary.is_some();
+        let id = conv.id.clone();
+
+        let conv_row = button(
+            container(
+                row![
+                    column![
+                        text(truncate(title, 70))
+                            .size(13)
+                            .color(iced::Color::from_rgb(0.85, 0.85, 0.9)),
+                        row![
+                            text(format!("{} msgs", conv.message_count))
+                                .size(10)
+                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                            Space::new().width(8),
+                            text(truncate(workspace, 30))
+                                .size(10)
+                                .color(iced::Color::from_rgb(0.4, 0.5, 0.6)),
+                            Space::new().width(8),
+                            text(if has_summary { "✓ summarized" } else { "" })
+                                .size(10)
+                                .color(iced::Color::from_rgb(0.4, 0.7, 0.5)),
+                        ]
+                        .spacing(4),
+                    ]
+                    .spacing(3)
+                    .width(Length::Fill),
+                    text(if conv.is_agentic { "🤖" } else { "💬" }).size(14),
+                ]
+                .align_y(Alignment::Center),
+            )
+            .padding([8, 12])
+            .width(Length::Fill),
+        )
+        .on_press(Message::ChatPipelineAction(ChatPipelineMsg::SelectConversation(id)))
+        .width(Length::Fill)
+        .style(|_theme, _status| button::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.1, 0.1, 0.12,
+            ))),
+            text_color: iced::Color::WHITE,
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.18, 0.18, 0.2),
+            },
+            shadow: iced::Shadow::default(),
+            snap: false,
+        });
+
+        list = list.push(conv_row);
+    }
+
+    column![header, list,].spacing(12).into()
+}
+
+fn chat_conversation_detail_view(cp: &ChatPipelineState) -> Element<'_, Message> {
+    let detail = match &cp.selected_conversation {
+        Some(d) => d,
+        None => {
+            return text("No conversation selected").into();
+        }
+    };
+
+    let conv = &detail.conversation;
+    let title = conv
+        .title
+        .as_deref()
+        .unwrap_or("Untitled");
+
+    let back_btn = button(text("← Back to list").size(12))
+        .on_press(Message::ChatPipelineAction(ChatPipelineMsg::BackToList))
+        .padding([6, 12]);
+
+    let expand_btn = button(
+        text(if cp.show_full_conversation {
+            "Collapse All"
+        } else {
+            "Expand All"
+        })
+        .size(12),
+    )
+    .on_press(Message::ChatPipelineAction(ChatPipelineMsg::ToggleShowFull))
+    .padding([6, 12]);
+
+    let header = column![
+        row![
+            back_btn,
+            Space::new().width(Length::Fill),
+            expand_btn,
+        ]
+        .align_y(Alignment::Center),
+        Space::new().height(8),
+        text(title).size(18),
+        row![
+            text(format!("{} messages", conv.message_count))
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            Space::new().width(12),
+            text(format!(
+                "Tokens: {} in / {} out",
+                fmt_num(conv.total_input_tokens),
+                fmt_num(conv.total_output_tokens)
+            ))
+            .size(12)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            Space::new().width(12),
+            text(if conv.is_agentic { "🤖 Agentic" } else { "💬 Standard" })
+                .size(12),
+        ]
+        .spacing(4),
+    ]
+    .spacing(4);
+
+    // Summary section
+    let summary: Element<'_, Message> = if let Some(ref s) = conv.summary {
+        container(
+            column![
+                text("Summary").size(14).color(iced::Color::from_rgb(0.6, 0.8, 1.0)),
+                text(s.as_str()).size(12).color(iced::Color::from_rgb(0.7, 0.7, 0.7)),
+            ]
+            .spacing(4),
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.12, 0.16))),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.15, 0.2, 0.3),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    } else {
+        Space::new().height(0).into()
+    };
+
+    // Messages with expand/collapse
+    let mut messages = column![].spacing(4);
+    for (idx, msg) in detail.messages.iter().enumerate() {
+        let is_expanded = cp.show_full_conversation || cp.expanded_messages.contains(&idx);
+        let (role_label, role_color) = match msg.role.as_str() {
+            "user" => ("User", iced::Color::from_rgb(0.4, 0.7, 1.0)),
+            "assistant" => ("Assistant", iced::Color::from_rgb(0.5, 0.9, 0.5)),
+            _ => ("System", iced::Color::from_rgb(0.6, 0.6, 0.6)),
+        };
+
+        let content_text = if is_expanded {
+            msg.content.clone()
+        } else if msg.content.len() > 300 {
+            format!("{}... [click to expand]", &msg.content[..300.min(msg.content.len())])
+        } else {
+            msg.content.clone()
+        };
+
+        let is_long = msg.content.len() > 300;
+        let char_count = msg.content.len();
+        let token_info = if msg.input_tokens > 0 || msg.output_tokens > 0 {
+            format!(" | {}in/{}out tokens", fmt_num(msg.input_tokens), fmt_num(msg.output_tokens))
+        } else {
+            String::new()
+        };
+
+        let msg_content = container(
+            column![
+                row![
+                    text(role_label)
+                        .size(11)
+                        .color(role_color),
+                    Space::new().width(8),
+                    text(format!("#{}", idx + 1))
+                        .size(10)
+                        .color(iced::Color::from_rgb(0.35, 0.35, 0.4)),
+                    Space::new().width(Length::Fill),
+                    text(format!(
+                        "{} chars{}",
+                        fmt_num(char_count as u64),
+                        token_info,
+                    ))
+                    .size(10)
+                    .color(iced::Color::from_rgb(0.4, 0.4, 0.5)),
+                    Space::new().width(8),
+                    text(msg.model.as_deref().unwrap_or(""))
+                        .size(10)
+                        .color(iced::Color::from_rgb(0.4, 0.4, 0.5)),
+                ],
+                text(content_text)
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.75, 0.75, 0.75)),
+            ]
+            .spacing(4),
+        )
+        .padding([8, 12])
+        .width(Length::Fill)
+        .style(move |_theme| {
+            let bg = match role_label {
+                "User" => iced::Color::from_rgb(0.1, 0.12, 0.16),
+                "Assistant" => iced::Color::from_rgb(0.1, 0.14, 0.1),
+                _ => iced::Color::from_rgb(0.1, 0.1, 0.1),
+            };
+            container::Style {
+                background: Some(iced::Background::Color(bg)),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.18, 0.18, 0.2),
+                },
+                ..container::Style::default()
+            }
+        });
+
+        // Make long messages clickable to expand/collapse
+        if is_long {
+            let msg_btn = button(msg_content)
+                .on_press(Message::ChatPipelineAction(
+                    ChatPipelineMsg::ToggleMessageExpand(idx),
+                ))
+                .width(Length::Fill)
+                .style(|_theme, _status| button::Style {
+                    background: None,
+                    text_color: iced::Color::WHITE,
+                    border: iced::Border {
+                        radius: 0.0.into(),
+                        width: 0.0,
+                        color: iced::Color::TRANSPARENT,
+                    },
+                    shadow: iced::Shadow::default(),
+                    snap: false,
+                });
+            messages = messages.push(msg_btn);
+        } else {
+            messages = messages.push(msg_content);
+        }
+    }
+
+    column![
+        header,
+        summary,
+        Space::new().height(8),
+        text(format!("Messages ({})", detail.messages.len())).size(14),
+        messages,
+    ]
+    .spacing(8)
+    .into()
+}
+
+fn chat_topics_view(cp: &ChatPipelineState) -> Element<'_, Message> {
+    let header = row![
+        text("Topics").size(16),
+        Space::new().width(Length::Fill),
+        text(format!("{} topics", cp.topics.len()))
+            .size(12)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        Space::new().width(8),
+        button(text("Refresh").size(12))
+            .on_press_maybe(if cp.loading {
+                None
+            } else {
+                Some(Message::ChatPipelineAction(ChatPipelineMsg::SwitchSubView(ChatSubView::Topics)))
+            })
+            .padding([6, 12]),
+        Space::new().width(4),
+        button(text("Re-cluster").size(12))
+            .on_press_maybe(if cp.loading {
+                None
+            } else {
+                Some(Message::ChatPipelineAction(ChatPipelineMsg::DoClusterTopics))
+            })
+            .padding([6, 12]),
+    ]
+    .align_y(Alignment::Center);
+
+    if cp.topics.is_empty() && !cp.loading {
+        return column![
+            header,
+            container(
+                column![
+                    text("No topics yet").size(14),
+                    text("Run 'Re-cluster' above or use 'Import + Summarize + Cluster' from Dashboard")
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                ]
+                .spacing(4)
+                .align_x(Alignment::Center),
+            )
+            .center_x(Length::Fill)
+            .padding(40),
+        ]
+        .spacing(12)
+        .into();
+    }
+
+    if cp.loading {
+        return column![
+            header,
+            container(
+                text("Loading topics...")
+                    .size(14)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            )
+            .center_x(Length::Fill)
+            .padding(40),
+        ]
+        .spacing(12)
+        .into();
+    }
+
+    let mut list = column![].spacing(8);
+    for topic in &cp.topics {
+        let desc = topic
+            .description
+            .as_deref()
+            .unwrap_or("No description");
+
+        let topic_card = container(
+            column![
+                row![
+                    text(&topic.label)
+                        .size(15)
+                        .color(iced::Color::from_rgb(0.8, 0.7, 1.0)),
+                    Space::new().width(Length::Fill),
+                    container(
+                        text(format!("{} conversations", topic.conversation_count))
+                            .size(11)
+                            .color(iced::Color::from_rgb(0.7, 0.8, 0.9)),
+                    )
+                    .padding([3, 8])
+                    .style(|_theme| container::Style {
+                        background: Some(iced::Background::Color(iced::Color::from_rgb(
+                            0.15, 0.18, 0.25,
+                        ))),
+                        border: iced::Border {
+                            radius: 10.0.into(),
+                            width: 0.0,
+                            color: iced::Color::TRANSPARENT,
+                        },
+                        ..container::Style::default()
+                    }),
+                ]
+                .align_y(Alignment::Center),
+                text(desc)
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.55, 0.55, 0.6)),
+            ]
+            .spacing(6),
+        )
+        .padding([12, 16])
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.1, 0.1, 0.13,
+            ))),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.2, 0.18, 0.28),
+            },
+            ..container::Style::default()
+        });
+
+        list = list.push(topic_card);
+    }
+
+    column![header, list,].spacing(12).into()
+}
+
+fn chat_search_view(cp: &ChatPipelineState) -> Element<'_, Message> {
+    let search_input = iced::widget::text_input("Search conversations, messages, chunks...", &cp.search_query)
+        .on_input(|s| Message::ChatPipelineAction(ChatPipelineMsg::SearchQueryChanged(s)))
+        .on_submit(Message::ChatPipelineAction(ChatPipelineMsg::DoSearch))
+        .padding([8, 12])
+        .size(14);
+
+    let search_btn = button(text("Search").size(12))
+        .on_press_maybe(if cp.loading || cp.search_query.is_empty() {
+            None
+        } else {
+            Some(Message::ChatPipelineAction(ChatPipelineMsg::DoSearch))
+        })
+        .padding([8, 16]);
+
+    let search_bar = row![search_input, search_btn,]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+    let results: Element<'_, Message> = if cp.search_results.is_empty() {
+        if cp.search_query.is_empty() {
+            container(
+                text("Enter a query to search across all conversations")
+                    .size(13)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            )
+            .center_x(Length::Fill)
+            .padding(40)
+            .into()
+        } else {
+            container(
+                text("No results found")
+                    .size(13)
+                    .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            )
+            .center_x(Length::Fill)
+            .padding(40)
+            .into()
+        }
+    } else {
+        let mut list = column![
+            text(format!("{} results", cp.search_results.len()))
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        ]
+        .spacing(4);
+
+        for result in &cp.search_results {
+            let conv_id = result.conversation_id.clone();
+            let result_row = button(
+                container(
+                    column![
+                        row![
+                            text(format!("Score: {:.2}", result.score))
+                                .size(10)
+                                .color(iced::Color::from_rgb(0.4, 0.7, 0.4)),
+                            Space::new().width(8),
+                            text(result.source.as_deref().unwrap_or(""))
+                                .size(10)
+                                .color(iced::Color::from_rgb(0.5, 0.5, 0.6)),
+                        ],
+                        text(truncate(&result.text, 200))
+                            .size(12)
+                            .color(iced::Color::from_rgb(0.75, 0.75, 0.75)),
+                    ]
+                    .spacing(4),
+                )
+                .padding([8, 12])
+                .width(Length::Fill),
+            )
+            .on_press(Message::ChatPipelineAction(
+                ChatPipelineMsg::SelectConversation(conv_id),
+            ))
+            .width(Length::Fill)
+            .style(|_theme, _status| button::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.1, 0.1, 0.12,
+                ))),
+                text_color: iced::Color::WHITE,
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.18, 0.18, 0.2),
+                },
+                shadow: iced::Shadow::default(),
+                snap: false,
+            });
+
+            list = list.push(result_row);
+        }
+
+        list.into()
+    };
+
+    column![
+        text("Search").size(16),
+        search_bar,
+        results,
+    ]
+    .spacing(12)
+    .into()
+}
+
+// ===========================================================================
+// Workspace File Discovery
+// ===========================================================================
+
+/// Scan for .code-workspace files in common locations
+async fn scan_workspace_files() -> Vec<CodeWorkspaceFile> {
+    use std::path::PathBuf;
+    use std::fs;
+    
+    let mut files = Vec::new();
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/e421".to_string());
+    
+    // Directories to scan for .code-workspace files
+    let scan_dirs = vec![
+        PathBuf::from(&home),
+        PathBuf::from(format!("{}/homelab", home)),
+        PathBuf::from(format!("{}/continuum-studio", home)),
+        PathBuf::from(format!("{}/synapsix", home)),
+        PathBuf::from(format!("{}/phosphor", home)),
+        PathBuf::from(format!("{}/projects", home)),
+        PathBuf::from(format!("{}/code", home)),
+    ];
+    
+    for dir in scan_dirs {
+        if !dir.exists() {
+            continue;
+        }
+        
+        // Look for .code-workspace files (non-recursive for now, just top level)
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "code-workspace").unwrap_or(false) {
+                    if let Some(ws) = parse_workspace_file(&path) {
+                        files.push(ws);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Sort by modified time (newest first)
+    files.sort_by(|a, b| b.modified.cmp(&a.modified));
+    
+    files
+}
+
+/// Parse a .code-workspace file and extract relevant info
+fn parse_workspace_file(path: &std::path::Path) -> Option<CodeWorkspaceFile> {
+    use std::fs;
+    
+    let content = fs::read_to_string(path).ok()?;
+    let name = path.file_stem()?.to_string_lossy().to_string();
+    let full_path = path.to_string_lossy().to_string();
+    
+    // Parse JSON to extract folders
+    let folders: Vec<String> = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+        json.get("folders")
+            .and_then(|f| f.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|f| f.get("path").and_then(|p| p.as_str()))
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    
+    // Get modification time
+    let modified = fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .map(|t| {
+            let datetime: chrono::DateTime<chrono::Local> = t.into();
+            datetime.format("%Y-%m-%d %H:%M").to_string()
+        });
+    
+    Some(CodeWorkspaceFile {
+        path: full_path,
+        name,
+        folders,
+        modified,
+    })
+}
+
+// ===========================================================================
+// Sub-agent Monitoring Integration
+// ===========================================================================
+
+/// Async function to fetch sub-agent stats from D-Bus
+async fn fetch_subagent_stats() -> Result<MonitorStats, String> {
+    use std::process::Command;
+    
+    let output = Command::new("busctl")
+        .args([
+            "--user", "call",
+            "sh.synapsix.TerminalMonitor",
+            "/sh/synapsix/TerminalMonitor",
+            "sh.synapsix.TerminalMonitor1",
+            "GetStats",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to execute busctl: {}", e))?;
+    
+    if !output.status.success() {
+        return Err(format!("D-Bus call failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    // Parse the response (busctl returns "s \"json_string\"")
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json_start = stdout.find('"').ok_or("Invalid response format")?;
+    let json_end = stdout.rfind('"').ok_or("Invalid response format")?;
+    if json_start >= json_end {
+        return Err("Empty JSON response".to_string());
+    }
+    
+    let json_str = &stdout[json_start + 1..json_end];
+    // Unescape the JSON string (busctl escapes quotes)
+    let unescaped = json_str.replace("\\\"", "\"").replace("\\\\", "\\");
+    
+    serde_json::from_str(&unescaped).map_err(|e| format!("JSON parse error: {}", e))
+}
+
+/// Async function to fetch recent commands from D-Bus
+async fn fetch_subagent_commands(limit: u32) -> Result<Vec<CommandRecord>, String> {
+    use std::process::Command;
+    
+    let output = Command::new("busctl")
+        .args([
+            "--user", "call",
+            "sh.synapsix.TerminalMonitor",
+            "/sh/synapsix/TerminalMonitor",
+            "sh.synapsix.TerminalMonitor1",
+            "GetSubagentCommands",
+            "u", &limit.to_string(),
+        ])
+        .output()
+        .map_err(|e| format!("Failed to execute busctl: {}", e))?;
+    
+    if !output.status.success() {
+        return Err(format!("D-Bus call failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json_start = stdout.find('"').ok_or("Invalid response format")?;
+    let json_end = stdout.rfind('"').ok_or("Invalid response format")?;
+    if json_start >= json_end {
+        return Ok(Vec::new()); // Empty array
+    }
+    
+    let json_str = &stdout[json_start + 1..json_end];
+    let unescaped = json_str.replace("\\\"", "\"").replace("\\\\", "\\");
+    
+    serde_json::from_str(&unescaped).map_err(|e| format!("JSON parse error: {}", e))
+}
+
+/// Async function to fetch running commands from D-Bus  
+async fn fetch_running_commands() -> Result<Vec<CommandRecord>, String> {
+    use std::process::Command;
+    
+    let output = Command::new("busctl")
+        .args([
+            "--user", "call",
+            "sh.synapsix.TerminalMonitor",
+            "/sh/synapsix/TerminalMonitor",
+            "sh.synapsix.TerminalMonitor1",
+            "GetRunningCommands",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to execute busctl: {}", e))?;
+    
+    if !output.status.success() {
+        return Err(format!("D-Bus call failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json_start = stdout.find('"').ok_or("Invalid response format")?;
+    let json_end = stdout.rfind('"').ok_or("Invalid response format")?;
+    if json_start >= json_end {
+        return Ok(Vec::new());
+    }
+    
+    let json_str = &stdout[json_start + 1..json_end];
+    let unescaped = json_str.replace("\\\"", "\"").replace("\\\\", "\\");
+    
+    serde_json::from_str(&unescaped).map_err(|e| format!("JSON parse error: {}", e))
+}
+
+/// Handle sub-agent panel messages
+fn handle_subagent_message(state: &mut ContinuumStudio, msg: SubagentMessage) -> Task<Message> {
+    match msg {
+        SubagentMessage::Refresh => {
+            state.subagent_state.loading = true;
+            // Batch multiple D-Bus queries
+            Task::batch([
+                Task::perform(
+                    fetch_subagent_stats(),
+                    |result| Message::SubagentAction(SubagentMessage::StatsLoaded(result))
+                ),
+                Task::perform(
+                    fetch_subagent_commands(20),
+                    |result| Message::SubagentAction(SubagentMessage::SubagentsLoaded(result))
+                ),
+                Task::perform(
+                    fetch_running_commands(),
+                    |result| Message::SubagentAction(SubagentMessage::RunningLoaded(result))
+                ),
+            ])
+        }
+        SubagentMessage::StatsLoaded(result) => {
+            state.subagent_state.loading = false;
+            match result {
+                Ok(stats) => {
+                    state.subagent_state.update_stats(stats);
+                }
+                Err(e) => {
+                    state.subagent_state.set_error(e);
+                }
+            }
+            Task::none()
+        }
+        SubagentMessage::RecentLoaded(result) => {
+            if let Ok(commands) = result {
+                state.subagent_state.update_recent(commands);
+            }
+            Task::none()
+        }
+        SubagentMessage::SubagentsLoaded(result) => {
+            if let Ok(commands) = result {
+                state.subagent_state.update_subagents(commands);
+            }
+            Task::none()
+        }
+        SubagentMessage::RunningLoaded(result) => {
+            if let Ok(commands) = result {
+                state.subagent_state.update_running(commands);
+            }
+            Task::none()
+        }
+        SubagentMessage::ServiceCheck(available) => {
+            state.subagent_state.service_available = available;
+            if !available {
+                state.subagent_state.set_error("Terminal monitor service not available".to_string());
+            }
+            Task::none()
+        }
+    }
+}
+
+/// View for sub-agent monitoring panel
+fn view_subagents(state: &ContinuumStudio) -> Element<Message> {
+    let subagent = &state.subagent_state;
+    
+    // Header
+    let header = row![
+        text("🤖 Sub-agent Monitor").size(20),
+        Space::new().width(Length::Fill),
+        button(text("⟳ Refresh").size(12))
+            .padding([6, 12])
+            .on_press(Message::SubagentAction(SubagentMessage::Refresh))
+            .style(|_theme, _status| button::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(0.2, 0.4, 0.6))),
+                text_color: iced::Color::WHITE,
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    width: 0.0,
+                    color: iced::Color::TRANSPARENT,
+                },
+                shadow: iced::Shadow::default(),
+                snap: false,
+            }),
+    ]
+    .align_y(Alignment::Center)
+    .spacing(12);
+
+    // Service status
+    let (health_r, health_g, health_b) = subagent.health_color();
+    let health_color = iced::Color::from_rgb(health_r, health_g, health_b);
+    
+    let status_indicator = container(
+        row![
+            text(if subagent.service_available { "●" } else { "○" })
+                .color(health_color),
+            text(if subagent.service_available { "Connected to Terminal Monitor" } else { "Terminal Monitor Unavailable" })
+                .size(12)
+                .color(iced::Color::from_rgb(0.7, 0.7, 0.7)),
+        ]
+        .spacing(8)
+    )
+    .padding([8, 12])
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.12, 0.14))),
+        border: iced::Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.2, 0.2, 0.22),
+        },
+        ..container::Style::default()
+    });
+
+    // Stats cards
+    let stats = &subagent.stats;
+    let stats_row = row![
+        stat_card("Total Commands", &stats.total_commands.to_string(), "📊"),
+        stat_card("Active", &stats.active_commands.to_string(), "⏳"),
+        stat_card("Failed", &stats.failed_commands.to_string(), "❌"),
+        stat_card("Sub-agents", &stats.subagent_commands.to_string(), "🤖"),
+        stat_card("Error Rate", &format!("{:.1}%", stats.error_rate * 100.0), "⚠️"),
+    ]
+    .spacing(12);
+
+    // Running commands section
+    let running_section = if subagent.running_commands.is_empty() {
+        container(
+            text("No commands currently running")
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+        )
+        .padding(16)
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.1, 0.12))),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.18, 0.18, 0.2),
+            },
+            ..container::Style::default()
+        })
+    } else {
+        let mut running_list = column![].spacing(4);
+        for cmd in subagent.running_commands.iter().take(5) {
+            running_list = running_list.push(subagent_command_row(cmd));
+        }
+        container(running_list)
+            .padding(12)
+            .width(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.1, 0.12))),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.18, 0.18, 0.2),
+                },
+                ..container::Style::default()
+            })
+    };
+
+    // Recent sub-agent commands
+    let subagent_section = if subagent.subagent_commands.is_empty() {
+        container(
+            text("No sub-agent activity recorded yet")
+                .size(12)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+        )
+        .padding(16)
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.1, 0.12))),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.18, 0.18, 0.2),
+            },
+            ..container::Style::default()
+        })
+    } else {
+        let mut cmd_list = column![].spacing(4);
+        for cmd in subagent.subagent_commands.iter().take(10) {
+            cmd_list = cmd_list.push(subagent_command_row_with_codename(cmd));
+        }
+        container(cmd_list)
+            .padding(12)
+            .width(Length::Fill)
+            .style(|_theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.1, 0.12))),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.18, 0.18, 0.2),
+                },
+                ..container::Style::default()
+            })
+    };
+
+    // Error message if any
+    let error_banner: Element<Message> = if let Some(ref err) = subagent.error_message {
+        container(
+            row![
+                text("⚠️").size(14),
+                text(err)
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.9, 0.7, 0.4)),
+            ]
+            .spacing(8)
+        )
+        .padding([8, 12])
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.25, 0.18, 0.1))),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.4, 0.3, 0.2),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    } else {
+        Space::new().height(0).into()
+    };
+
+    // Main content
+    scrollable(
+        column![
+            header,
+            Space::new().height(16),
+            status_indicator,
+            error_banner,
+            Space::new().height(20),
+            text("📊 Statistics").size(14),
+            stats_row,
+            Space::new().height(20),
+            text("⏳ Running Commands").size(14),
+            running_section,
+            Space::new().height(20),
+            text("🤖 Recent Sub-agent Activity").size(14),
+            subagent_section,
+        ]
+        .spacing(8)
+        .padding(4)
+    )
+    .into()
+}
+
+/// Create a stats card widget
+fn stat_card(label: &str, value: &str, icon: &str) -> Element<'static, Message> {
+    let label_owned = label.to_string();
+    let value_owned = value.to_string();
+    let icon_owned = icon.to_string();
+    
+    container(
+        column![
+            text(icon_owned).size(16),
+            text(value_owned).size(18),
+            text(label_owned)
+                .size(10)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        ]
+        .spacing(4)
+        .align_x(Alignment::Center)
+    )
+    .padding([12, 16])
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.1, 0.12))),
+        border: iced::Border {
+            radius: 8.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.18, 0.18, 0.2),
+        },
+        ..container::Style::default()
+    })
+    .into()
+}
+
+/// Create a command row widget for sub-agent view
+/// show_codename: if true, always shows the codename badge (used for sub-agent sections)
+fn subagent_command_row_impl(cmd: &CommandRecord, show_codename: bool) -> Element<'static, Message> {
+    use continuum_studio_iced::subagents::{format_command, format_elapsed, format_exit_code, generate_codename};
+    
+    let truncated_cmd = format_command(&cmd.command, 50);
+    let elapsed = format_elapsed(cmd.elapsed_ms);
+    let (exit_text, exit_color) = format_exit_code(cmd.exit_code);
+    
+    // Show codename if explicitly requested or if command is marked as subagent
+    let display_codename = show_codename || cmd.is_subagent;
+    
+    // Generate code name from terminal_id
+    let codename = generate_codename(&cmd.terminal_id);
+    
+    let agent_badge: Element<Message> = if display_codename {
+        let name = codename.name.clone();
+        let rgb = codename.rgb;
+        container(
+            row![
+                text("🤖").size(10),
+                text(name)
+                    .size(9)
+                    .color(iced::Color::from_rgb(rgb.0, rgb.1, rgb.2)),
+            ]
+            .spacing(4)
+        )
+        .padding([2, 6])
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.18, 0.25))),
+            border: iced::Border {
+                radius: 4.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(rgb.0 * 0.5, rgb.1 * 0.5, rgb.2 * 0.5),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    } else {
+        Space::new().width(0).into()
+    };
+
+    container(
+        row![
+            agent_badge,
+            text(truncated_cmd)
+                .size(11)
+                .color(iced::Color::from_rgb(0.8, 0.8, 0.8)),
+            Space::new().width(Length::Fill),
+            text(elapsed)
+                .size(10)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            text(exit_text)
+                .size(10)
+                .color(iced::Color::from_rgb(exit_color.0, exit_color.1, exit_color.2)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+    )
+    .padding([6, 10])
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(0.08, 0.08, 0.1))),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.15, 0.15, 0.17),
+        },
+        ..container::Style::default()
+    })
+    .into()
+}
+
+/// Create a command row widget for sub-agent view (default: show codename based on is_subagent)
+fn subagent_command_row(cmd: &CommandRecord) -> Element<'static, Message> {
+    subagent_command_row_impl(cmd, false)
+}
+
+/// Create a command row widget that always shows the codename (for sub-agent sections)
+fn subagent_command_row_with_codename(cmd: &CommandRecord) -> Element<'static, Message> {
+    subagent_command_row_impl(cmd, true)
 }

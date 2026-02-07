@@ -65,8 +65,24 @@ pub enum CoreRequest {
     LaunchVersion { version: String, folder: Option<String> },
     /// Download/install a version
     InstallVersion { version: String },
-    /// Uninstall a version
+    /// Uninstall a version (AppImage only)
     UninstallVersion { version: String },
+    /// Uninstall a version with extended options
+    UninstallVersionExtended {
+        version: String,
+        /// Also remove the data directory (~/.cursor-VERSION)
+        remove_data: bool,
+        /// When removing data, preserve auth profile first
+        keep_auth: bool,
+    },
+    /// Batch uninstall multiple versions
+    BatchUninstallVersions {
+        versions: Vec<String>,
+        remove_data: bool,
+        keep_auth: bool,
+    },
+    /// Get detailed disk usage for all installed versions
+    GetDiskUsageAll,
     /// Get sessions
     GetSessions,
     /// Get version statistics
@@ -112,6 +128,21 @@ impl CoreRequest {
             CoreRequest::UninstallVersion { version } => {
                 ("versions_uninstall", serde_json::json!({"version": version}))
             }
+            CoreRequest::UninstallVersionExtended { version, remove_data, keep_auth } => {
+                ("versions_uninstall", serde_json::json!({
+                    "version": version,
+                    "remove_data": remove_data,
+                    "keep_auth": keep_auth,
+                }))
+            }
+            CoreRequest::BatchUninstallVersions { versions, remove_data, keep_auth } => {
+                ("versions_batch_uninstall", serde_json::json!({
+                    "versions": versions,
+                    "remove_data": remove_data,
+                    "keep_auth": keep_auth,
+                }))
+            }
+            CoreRequest::GetDiskUsageAll => ("versions_disk_usage_all", serde_json::json!({})),
             CoreRequest::GetSessions => ("sessions_list", serde_json::json!({})),
             CoreRequest::GetStats => ("versions_stats", serde_json::json!({})),
             CoreRequest::GetWorkspaces { limit } => {
