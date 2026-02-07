@@ -1,5 +1,8 @@
 # Continuum Studio Architecture
 
+**Last Updated**: 2026-02-07  
+**Status**: Active Development (iced migration complete)
+
 ## Overview
 
 Continuum Studio is a modular AI orchestration platform built with a clear separation of concerns:
@@ -10,7 +13,7 @@ Continuum Studio is a modular AI orchestration platform built with a clear separ
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
 │  │  Studio UI  │  │ Studio Core │  │Agent Bridge │  │  Synapsix   │    │
-│  │   (Rust)    │  │  (Elixir)   │  │  (Elixir)   │  │  (Elixir)   │    │
+│  │(Rust/iced)  │  │  (Elixir)   │  │  (Elixir)   │  │  (Elixir)   │    │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘    │
 │         │                │                │                │            │
 │         └────────────────┴────────────────┴────────────────┘            │
@@ -24,19 +27,21 @@ Continuum Studio is a modular AI orchestration platform built with a clear separ
 
 ## Components
 
-### 1. Studio UI (Rust/egui)
+### 1. Studio UI (Rust/iced)
 
-**Path**: `continuum-studio/ui/`
+**Path**: `continuum-studio/ui-iced/`
 
-The graphical user interface built with Rust and egui/eframe.
+The graphical user interface built with Rust and the **iced** framework (COSMIC-compatible).
 
 **Key Features**:
-- Widget-based architecture (AgentStream, HarnessPanel, Diagram, Code, Terminal)
-- Tiling and tabbed layouts
+- COSMIC desktop ecosystem compatibility
+- Elm architecture (Model-View-Update pattern)
+- First-class Wayland support
+- Multiple views: Dashboard, Chat Pipeline, Services, Versions, Settings, Subagents
 - VS Code theme compatibility
-- KDE/Wayland native support
+- Session monitoring and metrics dashboard
 
-**IPC**: JSON-framed messages over Unix socket to Studio Core
+**IPC**: JSON-framed messages over Unix socket to Studio Core (`/tmp/continuum-studio.sock`)
 
 ### 2. Studio Core (Elixir/BEAM)
 
@@ -77,32 +82,38 @@ Unified interface for AI providers with intelligent routing.
 
 ### 4. Synapsix (Elixir)
 
-**Path**: `synapsix/`
+**Path**: `synapsix/` (separate repository)
 
-Distributed AI harness orchestrator for controlling external applications.
+AI harness orchestrator with formal verification capabilities.
 
 **Key Features**:
 - Multi-application control (Cursor, Android Studio, Godot)
-- Wayland/X11 window automation
-- Fault-tolerant supervision
-- Dialog daemon integration
+- **NeSy Stack** - Nickel→SMT formal verification
+- Chat pipeline with semantic search
+- Dialog system for AI agent interaction
+- Terminal monitoring
+- Z3 SMT solver integration via Rust NIF
 
-**Harnesses**:
-- **Cursor IDE** - Full AI IDE control
-- **Android Studio** - Android development automation
-- **Godot Editor** - Game development automation
+**Major Components**:
+- **Harnesses** - Cursor IDE, Android Studio, Godot Editor
+- **NeSy Orchestrator** - Formal verification of agent actions
+- **Chat Pipeline** - 117+ conversations indexed with hybrid search
+- **Dialog System** - D-Bus + Web UI for agent interaction
 
 ### 5. Dialog Daemon (Rust)
 
-**Path**: `synapsix/priv/dialog-daemon/`
+**Path**: `synapsix/dialog/`
 
-D-Bus service for interactive AI agent dialogs.
+D-Bus service for interactive AI agent dialogs with web fallback.
 
 **Key Features**:
-- Native dialog rendering
-- Non-blocking user input
-- Multiple dialog types (choice, confirm, text, slider)
-- CLI tool for testing
+- Native dialog rendering via GTK
+- Web UI on port 8080 (for mobile access)
+- Hold mode for complex decisions
+- Multiple dialog types (choice, confirm, text, slider, file picker)
+- CLI tool (`synapsix-dialog-cli`)
+
+**D-Bus Service**: `sh.synapsix.Dialog`
 
 ## Communication Protocols
 
@@ -141,8 +152,8 @@ Agent Bridge runs alongside Studio Core on the BEAM VM, using native Elixir mess
 └──────────────┘          └──────────────┘
 ```
 
-**Service**: `sh.continuum.studio.Dialog`
-**Interface**: `sh.continuum.studio.Dialog1`
+**Service**: `sh.synapsix.Dialog`
+**Interface**: `sh.synapsix.Dialog1`
 
 ## Data Flow Examples
 
@@ -174,69 +185,91 @@ Agent continues ← DialogManager ← D-Bus ← User Response ← Native Dialog
 
 ```
 continuum-studio/
-├── ui/                          # Studio UI (Rust/egui)
+├── ui-iced/                     # Studio UI (Rust/iced) - ACTIVE
 │   ├── src/
-│   │   ├── main.rs              # Entry point
-│   │   ├── lib.rs               # Library exports
-│   │   ├── theme/               # VS Code theme support
-│   │   ├── widgets/             # UI widgets
-│   │   ├── ipc/                 # IPC client
-│   │   └── approval/            # Approval workflows
+│   │   ├── main.rs              # Entry point with tokio runtime
+│   │   ├── core.rs              # iced Application implementation
+│   │   ├── theme.rs             # VS Code theme support
+│   │   ├── monitoring.rs        # Metrics dashboard
+│   │   ├── sessions.rs          # Session management
+│   │   ├── settings.rs          # Settings view
+│   │   ├── services.rs          # Services panel
+│   │   ├── subagents.rs         # Sub-agent management
+│   │   ├── chat_pipeline.rs     # Chat pipeline view
+│   │   ├── updater.rs           # State update logic
+│   │   └── log_capture.rs       # Log interception
 │   └── Cargo.toml
+│
+├── ui/                          # OLD egui UI (deprecated, archive candidate)
 │
 ├── core/
 │   ├── studio_core/             # Studio Core (Elixir)
 │   │   ├── lib/
-│   │   │   ├── studio_core/
-│   │   │   │   ├── application.ex
-│   │   │   │   ├── state.ex
-│   │   │   │   ├── event_bus.ex
-│   │   │   │   ├── harness_registry.ex
-│   │   │   │   └── socket/
-│   │   │   └── studio_core.ex
+│   │   │   └── studio_core/
+│   │   │       ├── application.ex
+│   │   │       ├── state.ex
+│   │   │       ├── state_snapshot.ex
+│   │   │       ├── event_bus.ex
+│   │   │       ├── version_registry.ex
+│   │   │       └── socket/
+│   │   │           ├── acceptor.ex
+│   │   │           └── handler.ex
 │   │   └── mix.exs
 │   │
 │   └── agent_bridge/            # Agent Bridge (Elixir)
 │       ├── lib/
-│       │   ├── agent_bridge/
-│       │   │   ├── application.ex
-│       │   │   ├── router.ex
-│       │   │   ├── provider_registry.ex
-│       │   │   ├── context_manager.ex
-│       │   │   ├── cost_tracker.ex
-│       │   │   ├── rate_limiter.ex
-│       │   │   ├── middleware.ex
-│       │   │   ├── message.ex
-│       │   │   ├── provider.ex
-│       │   │   └── providers/
-│       │   │       ├── claude.ex
-│       │   │       ├── ollama.ex
-│       │   │       └── cursor.ex
-│       │   └── agent_bridge.ex
+│       │   └── agent_bridge/
+│       │       ├── application.ex
+│       │       ├── router.ex
+│       │       ├── provider_registry.ex
+│       │       ├── context_manager.ex
+│       │       ├── cost_tracker.ex
+│       │       ├── rate_limiter.ex
+│       │       ├── middleware.ex
+│       │       ├── message.ex
+│       │       └── providers/
+│       │           ├── claude.ex
+│       │           ├── ollama.ex
+│       │           └── cursor.ex
 │       └── mix.exs
 │
-├── docs/
-│   ├── diagrams/                # D2 architecture diagrams
-│   └── research/                # Research documents
+├── android/                     # Continuum Studio Android app
 │
+├── archive/                     # Archived components
+│
+└── docs/
+    ├── ARCHITECTURE.md          # This file
+    ├── UI_STABILIZATION_PLAN.md # iced UI development plan
+    └── diagrams/                # D2 architecture diagrams
+
 synapsix/                        # Separate repo
-├── lib/
-│   ├── synapsix/
-│   │   ├── application.ex
-│   │   ├── harnesses/
-│   │   │   ├── cursor.ex
-│   │   │   ├── android_studio.ex
-│   │   │   └── godot.ex
-│   │   ├── dialog_manager.ex
-│   │   └── core_client.ex
-│   └── synapsix.ex
-├── priv/
-│   └── dialog-daemon/           # Dialog Daemon (Rust)
-│       ├── src/
-│       │   ├── main.rs
-│       │   ├── cli.rs
-│       │   └── dbus_interface.rs
-│       └── Cargo.toml
+├── lib/synapsix/
+│   ├── application.ex
+│   ├── harnesses/               # IDE automation
+│   │   ├── cursor.ex
+│   │   ├── android_studio.ex
+│   │   └── godot.ex
+│   ├── chat/                    # Chat pipeline
+│   │   ├── pipeline.ex
+│   │   ├── store.ex
+│   │   ├── search.ex
+│   │   └── embeddings.ex
+│   ├── nesy/                    # Neurosymbolic AI
+│   │   ├── orchestrator.ex
+│   │   ├── nickel_smt.ex
+│   │   ├── z3.ex
+│   │   └── constraint/
+│   ├── dialog/                  # Agent dialog system
+│   └── terminal/                # Terminal monitoring
+├── dialog/                      # Dialog Daemon (Rust)
+│   ├── src/
+│   │   ├── main.rs
+│   │   ├── cli.rs
+│   │   └── dbus_interface.rs
+│   └── Cargo.toml
+├── native/                      # Rust NIFs
+│   ├── synapsix_nickel_smt/     # Nickel→SMT compiler
+│   └── synapsix_z3/             # Z3 solver bindings
 └── mix.exs
 ```
 
@@ -253,19 +286,29 @@ See the following D2 diagrams for visual architecture:
 
 | Component | Language | Rationale |
 |-----------|----------|-----------|
-| Studio UI | Rust/egui | Native performance, Wayland support, single binary |
+| Studio UI | Rust/iced | COSMIC compatibility, Elm architecture, first-class Wayland |
 | Studio Core | Elixir | Fault tolerance, hot reloading, BEAM distribution |
 | Agent Bridge | Elixir | BEAM benefits, same VM as Core |
-| Synapsix | Elixir | Fault tolerance, process supervision |
-| Dialog Daemon | Rust | D-Bus integration, native dialogs |
+| Synapsix | Elixir + Rust NIFs | Fault tolerance + performance-critical parsing/solving |
+| Dialog Daemon | Rust | D-Bus integration, native GTK dialogs |
+| Chat Pipeline NIFs | Rust | High-performance parsing, embedding operations |
+| NeSy Solver | Rust + Z3 | Formal verification with SMT solver |
+
+## Migration Status
+
+| Component | From | To | Status |
+|-----------|------|-----|--------|
+| Studio UI | egui | iced | ✅ Complete (Feb 2026) |
+| Dialog Service | continuum namespace | synapsix namespace | ✅ Complete |
+| D-Bus Interface | `sh.continuum.studio.Dialog` | `sh.synapsix.Dialog` | ✅ Complete |
 
 ## Future Considerations
 
 1. **BEAM Distribution** - Connect multiple nodes for distributed harnesses
-2. **gRPC for Agent Bridge** - Alternative protocol for external integrations
+2. **Phosphor Integration** - Screen capture for agent vision
 3. **WebSocket** - Browser-based UI option
-4. **Plugin System** - Third-party widget and harness support
-5. **Mobile Client** - Continuum Studio companion app
+4. **Mobile Client** - Continuum Studio Android companion (in progress)
+5. **Nickel Configuration** - Type-safe configuration with formal verification
 
 ## License
 

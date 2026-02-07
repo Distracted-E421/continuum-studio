@@ -1,5 +1,8 @@
 # Agent Bridge Architecture
 
+**Last Updated**: 2026-02-07  
+**Status**: Active Development
+
 > The Agent Bridge connects AI agents (Cursor, Claude, OpenAI, local LLMs) to the Continuum Studio ecosystem, providing unified message routing, context management, and provider abstraction.
 
 ## Overview
@@ -11,7 +14,7 @@
 │                                                                              │
 │  ┌───────────────┐     ┌───────────────┐     ┌───────────────────────────┐  │
 │  │   Studio UI   │────▶│  Studio Core  │◀───▶│        Synapsix          │  │
-│  │   (Rust)      │     │   (Elixir)    │     │   (Harness Control)      │  │
+│  │  (Rust/iced)  │     │   (Elixir)    │     │   (Harness Control)      │  │
 │  └───────────────┘     └───────┬───────┘     └───────────────────────────┘  │
 │                                │                                             │
 │                                │ EventBus                                    │

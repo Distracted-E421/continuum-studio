@@ -1,8 +1,13 @@
 # nixos-cursor Migration Handoff Document
 
+> **⚠️ ARCHIVED**: February 7, 2026  
+> **Reason**: Migration approach changed. The egui UI was replaced entirely with **iced** (in `ui-iced/`).
+> The `nixos-cursor` repository has been deprecated. See `ARCHITECTURE.md` for current project structure.
+
 **Created**: January 31, 2026  
-**Purpose**: Detailed instructions for agent to complete Continuum Studio migration  
-**Priority**: High - Complete before starting new nixos-cursor features
+**Archived**: February 7, 2026  
+**Original Purpose**: Detailed instructions for agent to complete Continuum Studio migration  
+**Status**: ~~High Priority~~ → Superseded by iced migration
 
 ## Executive Summary
 
@@ -393,20 +398,27 @@ The harness uses configuration from:
 
 ### Remaining Migration Work
 
-- [ ] Transfer cursor-docs to synapsix/lib/synapsix/docs/
-- [ ] Transfer cursor-studio-egui to continuum-studio/ui/
-- [ ] Transfer cursor-proxy to synapsix/tools/proxy/
-- [ ] Transfer security assets to synapsix/priv/security/
-- [ ] Clean up nixos-cursor (remove transferred code)
-- [ ] Update cross-references between repos
-- [ ] Update all documentation
+> **Note**: This section is outdated. The migration approach changed in February 2026.
+
+**What Actually Happened**:
+- ❌ cursor-docs → synapsix: Replaced by Chat Pipeline (`synapsix/lib/synapsix/chat/`)
+- ❌ cursor-studio-egui → ui/: Replaced by iced rewrite (`continuum-studio/ui-iced/`)
+- ❌ cursor-proxy: Archived with nixos-cursor
+- ✅ Security concepts → Integrated into NeSy constraint system
+- ✅ nixos-cursor → Deprecated, Cursor packaging moved elsewhere
+
+**Current References**:
+- UI: `continuum-studio/ui-iced/` (Rust/iced)
+- Chat: `synapsix/lib/synapsix/chat/` (Elixir)
+- Security: `synapsix/lib/synapsix/nesy/constraint/security.ex` (Elixir)
 
 ### Agent Instructions
 
-When resuming this migration:
+~~When resuming this migration:~~
 
-1. Follow the steps in this document sequentially
-2. Test each transfer before proceeding
-3. Keep nixos-cursor packaging functional throughout
-4. Update this document with any issues encountered
-5. Mark checkboxes as completed
+**This document is archived for historical reference only.**
+
+For current project structure, see:
+- `continuum-studio/docs/ARCHITECTURE.md`
+- `synapsix/docs/CHAT_PIPELINE_DESIGN.md`
+- `homelab/docs/planning/PROJECT_ROADMAP_2026-02.md`
