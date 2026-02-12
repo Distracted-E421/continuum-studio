@@ -52,43 +52,43 @@ impl button::Catalog for CosmicButton {
     fn style(&self, _class: &Self::Class<'_>, status: button::Status) -> button::Style {
         let (bg, text_color) = if self.is_destructive {
             match status {
-                button::Status::Active => (self.palette.destructive, Color::WHITE),
-                button::Status::Hovered => (lighten(self.palette.destructive, 0.1), Color::WHITE),
-                button::Status::Pressed => (darken(self.palette.destructive, 0.1), Color::WHITE),
+                button::Status::Active => (self.palette.destructive(), Color::WHITE),
+                button::Status::Hovered => (lighten(self.palette.destructive(), 0.1), Color::WHITE),
+                button::Status::Pressed => (darken(self.palette.destructive(), 0.1), Color::WHITE),
                 button::Status::Disabled => (
-                    with_alpha(self.palette.destructive, 0.5),
+                    with_alpha(self.palette.destructive(), 0.5),
                     with_alpha(Color::WHITE, 0.5),
                 ),
             }
         } else if self.is_primary {
             match status {
-                button::Status::Active => (self.palette.accent, self.palette.on_accent),
+                button::Status::Active => (self.palette.accent(), self.palette.on_accent()),
                 button::Status::Hovered => {
-                    (lighten(self.palette.accent, 0.1), self.palette.on_accent)
+                    (lighten(self.palette.accent(), 0.1), self.palette.on_accent())
                 }
                 button::Status::Pressed => {
-                    (darken(self.palette.accent, 0.1), self.palette.on_accent)
+                    (darken(self.palette.accent(), 0.1), self.palette.on_accent())
                 }
                 button::Status::Disabled => (
-                    with_alpha(self.palette.accent, 0.5),
-                    with_alpha(self.palette.on_accent, 0.5),
+                    with_alpha(self.palette.accent(), 0.5),
+                    with_alpha(self.palette.on_accent(), 0.5),
                 ),
             }
         } else {
             // Standard button
             match status {
-                button::Status::Active => (self.palette.button_bg, self.palette.on_bg_color),
+                button::Status::Active => (self.palette.button_bg(), self.palette.on_bg_color()),
                 button::Status::Hovered => (
-                    lighten(self.palette.button_bg, 0.1),
-                    self.palette.on_bg_color,
+                    lighten(self.palette.button_bg(), 0.1),
+                    self.palette.on_bg_color(),
                 ),
                 button::Status::Pressed => (
-                    darken(self.palette.button_bg, 0.1),
-                    self.palette.on_bg_color,
+                    darken(self.palette.button_bg(), 0.1),
+                    self.palette.on_bg_color(),
                 ),
                 button::Status::Disabled => (
-                    with_alpha(self.palette.button_bg, 0.5),
-                    with_alpha(self.palette.on_bg_color, 0.5),
+                    with_alpha(self.palette.button_bg(), 0.5),
+                    with_alpha(self.palette.on_bg_color(), 0.5),
                 ),
             }
         };
@@ -183,11 +183,11 @@ impl container::Catalog for CosmicContainer {
                 background: None,
                 border: Border::default(),
                 shadow: Shadow::default(),
-                text_color: Some(self.palette.on_bg_color),
+                text_color: Some(self.palette.on_bg_color()),
                 snap: false,
             },
             ContainerVariant::Primary => container::Style {
-                background: Some(Background::Color(self.palette.primary_container_bg)),
+                background: Some(Background::Color(self.palette.primary_container_bg())),
                 border: Border {
                     radius: 12.0.into(),
                     width: 0.0,
@@ -198,11 +198,11 @@ impl container::Catalog for CosmicContainer {
                     offset: Vector::new(0.0, 2.0),
                     blur_radius: 8.0,
                 },
-                text_color: Some(self.palette.on_bg_color),
+                text_color: Some(self.palette.on_bg_color()),
                 snap: false,
             },
             ContainerVariant::Secondary => container::Style {
-                background: Some(Background::Color(self.palette.secondary_container_bg)),
+                background: Some(Background::Color(self.palette.secondary_container_bg())),
                 border: Border {
                     radius: 12.0.into(),
                     width: 0.0,
@@ -213,33 +213,33 @@ impl container::Catalog for CosmicContainer {
                     offset: Vector::new(0.0, 1.0),
                     blur_radius: 4.0,
                 },
-                text_color: Some(self.palette.on_bg_color),
+                text_color: Some(self.palette.on_bg_color()),
                 snap: false,
             },
             ContainerVariant::Sidebar => container::Style {
-                background: Some(Background::Color(self.palette.primary_container_bg)),
+                background: Some(Background::Color(self.palette.primary_container_bg())),
                 border: Border {
                     radius: 0.0.into(), // No rounding for sidebar
                     width: 1.0,
-                    color: self.palette.divider,
+                    color: self.palette.divider(),
                 },
                 shadow: Shadow::default(),
-                text_color: Some(self.palette.on_bg_color),
+                text_color: Some(self.palette.on_bg_color()),
                 snap: false,
             },
             ContainerVariant::Card => container::Style {
-                background: Some(Background::Color(self.palette.primary_container_bg)),
+                background: Some(Background::Color(self.palette.primary_container_bg())),
                 border: Border {
                     radius: 16.0.into(), // Larger rounding for cards
                     width: 1.0,
-                    color: self.palette.divider,
+                    color: self.palette.divider(),
                 },
                 shadow: Shadow {
                     color: with_alpha(Color::BLACK, 0.1),
                     offset: Vector::new(0.0, 2.0),
                     blur_radius: 6.0,
                 },
-                text_color: Some(self.palette.on_bg_color),
+                text_color: Some(self.palette.on_bg_color()),
                 snap: false,
             },
         }

@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Maximum number of historical data points to keep for each session
 const MAX_HISTORY_POINTS: usize = 60;
@@ -264,7 +264,7 @@ impl SessionMonitor {
         
         // Parse the stat file - format is: pid (comm) state ppid pgrp session tty_nr tpgid flags
         // We need to handle the comm field which can contain spaces and parentheses
-        let start_comm = content.find('(')?;
+        let _start_comm = content.find('(')?;
         let end_comm = content.rfind(')')?;
         
         let after_comm = &content[end_comm + 2..]; // Skip ") "

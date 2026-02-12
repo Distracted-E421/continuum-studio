@@ -186,7 +186,7 @@ defmodule StudioCore.StateSnapshot do
 
   defp collect_harness_state do
     try do
-      StudioCore.HarnessRegistry.list_harnesses()
+      StudioCore.HarnessRegistry.list()
       |> Enum.map(fn harness ->
         # Strip non-serializable data (PIDs, sockets)
         {harness.id, Map.drop(harness, [:pid, :socket, :__struct__])}

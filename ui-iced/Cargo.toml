@@ -8,6 +8,9 @@ license = "AGPL-3.0"
 rust-version = "1.80"
 
 [dependencies]
+# Shared COSMIC theme system (local copy for Nix build)
+synapsix-theme = { path = "../crates/synapsix-theme", features = ["iced"] }
+
 # iced GUI framework (0.14.0 - latest with time travel debugging, hot reload)
 iced = { version = "0.14", features = [
     "tokio",
@@ -29,6 +32,13 @@ tokio = { version = "1.0", features = [
     "signal",
 ] }
 futures = "0.3"
+futures-util = "0.3"
+
+# iced subscription utilities
+iced_futures = "0.14"
+
+# WebSocket client for real-time updates
+tokio-tungstenite = "0.24"
 
 # D-Bus integration for dialog daemon
 zbus = { version = "4.4", default-features = false, features = ["tokio"] }
@@ -48,6 +58,10 @@ regex = "1.10"
 
 # HTTP client for update checking
 ureq = { version = "2.9", features = ["json"] }
+# Async HTTP client for task queue API
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# URL parsing
+url = "2.5"
 chrono = "0.4"
 
 # Logging

@@ -51,12 +51,21 @@
             vulkan-headers
           ];
 
+          # Source includes ui-iced, local crates, and scripts
+          srcRoot = pkgsWithOverlay.runCommand "continuum-studio-src" {} ''
+            mkdir -p $out
+            cp -r ${./ui-iced} $out/ui-iced
+            cp -r ${./crates} $out/crates
+            cp -r ${./scripts} $out/scripts
+          '';
+
           # The Rust GUI application
           continuum-studio-gui = pkgsWithOverlay.rustPlatform.buildRustPackage {
             pname = "continuum-studio";
             version = "0.1.0";
             
-            src = ./ui-iced;
+            src = srcRoot;
+            sourceRoot = "continuum-studio-src/ui-iced";
             
             cargoLock = {
               lockFile = ./ui-iced/Cargo.lock;

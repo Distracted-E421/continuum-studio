@@ -1,11 +1,11 @@
 //! Theme system for Continuum Studio iced UI
 //!
 //! This module provides theme support including:
+//! - COSMIC Desktop-inspired themes (via shared `synapsix-theme` crate)
 //! - VS Code theme compatibility (parsing JSON theme files)
-//! - COSMIC Desktop-inspired themes
 //!
-//! The theming system allows users to choose from built-in presets
-//! or load custom VS Code themes.
+//! The theming system is unified with Synapsix, ensuring visual consistency
+//! across all applications in the ecosystem.
 
 use iced::Color;
 use std::path::Path;
@@ -15,6 +15,16 @@ pub mod vscode;
 
 // Re-export COSMIC theme types
 pub use cosmic::{CosmicPalette, CosmicThemePreset};
+
+// Re-export shared theme types for convenience
+pub use synapsix_theme::{
+    CosmicPreset,
+    DesignTokens,
+    Radii,
+    Spacing,
+    Theme as SynapsixTheme,
+    Typography,
+};
 
 /// Global theme context for easy access in views
 /// 
@@ -56,103 +66,124 @@ pub struct AppColors {
 impl AppColors {
     /// Dark theme colors (COSMIC-inspired)
     pub fn dark() -> Self {
-        Self {
-            background: Color::from_rgb(0.08, 0.08, 0.08),     // #141414
-            surface: Color::from_rgb(0.12, 0.12, 0.12),        // #1f1f1f
-            surface_elevated: Color::from_rgb(0.15, 0.15, 0.15), // #262626
-            
-            text_primary: Color::from_rgb(0.95, 0.95, 0.95),   // #f2f2f2
-            text_secondary: Color::from_rgb(0.6, 0.6, 0.6),    // #999999
-            text_muted: Color::from_rgb(0.4, 0.4, 0.4),        // #666666
-            
-            accent: Color::from_rgb(0.35, 0.55, 0.85),         // #5a8cd9 (blue)
-            accent_hover: Color::from_rgb(0.45, 0.65, 0.95),   // #73a6f2
-            success: Color::from_rgb(0.25, 0.75, 0.35),        // #40bf5a
-            warning: Color::from_rgb(0.85, 0.65, 0.25),        // #d9a640
-            error: Color::from_rgb(0.85, 0.35, 0.35),          // #d95959
-            
-            border: Color::from_rgb(0.22, 0.22, 0.22),         // #383838
-            border_subtle: Color::from_rgb(0.18, 0.18, 0.18),  // #2e2e2e
-            hover: Color::from_rgb(0.2, 0.2, 0.2),             // #333333
-            
-            status_connected: Color::from_rgb(0.25, 0.75, 0.35),
-            status_connecting: Color::from_rgb(0.85, 0.65, 0.25),
-            status_disconnected: Color::from_rgb(0.85, 0.35, 0.35),
-        }
+        Self::from_cosmic_preset(CosmicThemePreset::Dark)
     }
     
     /// Light theme colors
     pub fn light() -> Self {
-        Self {
-            background: Color::from_rgb(0.98, 0.98, 0.98),
-            surface: Color::WHITE,
-            surface_elevated: Color::from_rgb(0.96, 0.96, 0.96),
-            
-            text_primary: Color::from_rgb(0.1, 0.1, 0.1),
-            text_secondary: Color::from_rgb(0.4, 0.4, 0.4),
-            text_muted: Color::from_rgb(0.6, 0.6, 0.6),
-            
-            accent: Color::from_rgb(0.2, 0.45, 0.8),
-            accent_hover: Color::from_rgb(0.3, 0.55, 0.9),
-            success: Color::from_rgb(0.2, 0.6, 0.3),
-            warning: Color::from_rgb(0.7, 0.5, 0.1),
-            error: Color::from_rgb(0.7, 0.2, 0.2),
-            
-            border: Color::from_rgb(0.85, 0.85, 0.85),
-            border_subtle: Color::from_rgb(0.9, 0.9, 0.9),
-            hover: Color::from_rgb(0.92, 0.92, 0.92),
-            
-            status_connected: Color::from_rgb(0.2, 0.6, 0.3),
-            status_connecting: Color::from_rgb(0.7, 0.5, 0.1),
-            status_disconnected: Color::from_rgb(0.7, 0.2, 0.2),
-        }
+        Self::from_cosmic_preset(CosmicThemePreset::Light)
+    }
+    
+    /// Create from COSMIC preset
+    pub fn from_cosmic_preset(preset: CosmicThemePreset) -> Self {
+        Self::from_cosmic(&preset.palette())
     }
     
     /// Create from CosmicPalette
     pub fn from_cosmic(palette: &CosmicPalette) -> Self {
         Self {
-            background: palette.bg_color,
-            surface: palette.primary_container_bg,
-            surface_elevated: palette.secondary_container_bg,
+            background: palette.bg_color(),
+            surface: palette.primary_container_bg(),
+            surface_elevated: palette.secondary_container_bg(),
             
-            text_primary: palette.on_bg_color,
-            text_secondary: palette.secondary_text,
-            text_muted: Color::from_rgb(
-                palette.secondary_text.r * 0.7,
-                palette.secondary_text.g * 0.7,
-                palette.secondary_text.b * 0.7,
-            ),
+            text_primary: palette.on_bg_color(),
+            text_secondary: palette.secondary_text(),
+            text_muted: palette.muted_text(),
             
-            accent: palette.accent,
-            accent_hover: Color::from_rgb(
-                (palette.accent.r + 0.1).min(1.0),
-                (palette.accent.g + 0.1).min(1.0),
-                (palette.accent.b + 0.1).min(1.0),
-            ),
-            success: palette.success,
-            warning: palette.warning,
-            error: palette.destructive,
+            accent: palette.accent(),
+            accent_hover: palette.accent_hover(),
+            success: palette.success(),
+            warning: palette.warning(),
+            error: palette.destructive(),
             
-            border: palette.divider,
-            border_subtle: Color::from_rgb(
-                palette.divider.r * 0.8,
-                palette.divider.g * 0.8,
-                palette.divider.b * 0.8,
-            ),
-            hover: Color::from_rgb(
-                (palette.button_bg.r + 0.05).min(1.0),
-                (palette.button_bg.g + 0.05).min(1.0),
-                (palette.button_bg.b + 0.05).min(1.0),
-            ),
+            border: palette.divider(),
+            border_subtle: Color {
+                r: palette.divider().r * 0.8,
+                g: palette.divider().g * 0.8,
+                b: palette.divider().b * 0.8,
+                a: 1.0,
+            },
+            hover: Color {
+                r: (palette.button_bg().r + 0.05).min(1.0),
+                g: (palette.button_bg().g + 0.05).min(1.0),
+                b: (palette.button_bg().b + 0.05).min(1.0),
+                a: 1.0,
+            },
             
-            status_connected: palette.success,
-            status_connecting: palette.warning,
-            status_disconnected: palette.destructive,
+            status_connected: palette.success(),
+            status_connecting: palette.warning(),
+            status_disconnected: palette.destructive(),
         }
     }
 }
 
 impl Default for AppColors {
+    fn default() -> Self {
+        Self::dark()
+    }
+}
+
+/// Complete theme with colors and design tokens
+/// 
+/// This extends the shared `synapsix_theme::Theme` with iced-specific
+/// convenience methods and the `AppColors` abstraction.
+#[derive(Debug, Clone)]
+pub struct AppTheme {
+    /// Theme preset
+    pub preset: CosmicThemePreset,
+    /// Application colors (derived from palette)
+    pub colors: AppColors,
+    /// Design tokens (spacing, radii, typography)
+    pub tokens: DesignTokens,
+}
+
+impl AppTheme {
+    /// Create a new app theme from a preset
+    pub fn from_preset(preset: CosmicThemePreset) -> Self {
+        Self {
+            preset,
+            colors: AppColors::from_cosmic_preset(preset),
+            tokens: DesignTokens::default(),
+        }
+    }
+
+    /// Dark theme (default)
+    pub fn dark() -> Self {
+        Self::from_preset(CosmicThemePreset::Dark)
+    }
+
+    /// Light theme
+    pub fn light() -> Self {
+        Self::from_preset(CosmicThemePreset::Light)
+    }
+
+    /// Get the iced Theme
+    pub fn to_iced_theme(&self) -> iced::Theme {
+        self.preset.to_iced_theme()
+    }
+
+    /// Is this a light theme?
+    pub fn is_light(&self) -> bool {
+        self.preset.palette().is_light()
+    }
+
+    /// Get spacing tokens
+    pub fn spacing(&self) -> &Spacing {
+        &self.tokens.spacing
+    }
+
+    /// Get border radius tokens
+    pub fn radii(&self) -> &Radii {
+        &self.tokens.radii
+    }
+
+    /// Get typography tokens
+    pub fn typography(&self) -> &Typography {
+        &self.tokens.typography
+    }
+}
+
+impl Default for AppTheme {
     fn default() -> Self {
         Self::dark()
     }
@@ -399,5 +430,22 @@ mod tests {
     fn test_light_theme_is_light() {
         let theme = SemanticColors::light();
         assert!(theme.is_light());
+    }
+
+    #[test]
+    fn test_app_theme() {
+        let theme = AppTheme::dark();
+        assert!(!theme.is_light());
+        assert_eq!(theme.tokens.spacing.md, 12.0);
+    }
+
+    #[test]
+    fn test_app_colors_from_preset() {
+        for preset in CosmicThemePreset::all() {
+            let colors = AppColors::from_cosmic_preset(*preset);
+            // Just verify it doesn't panic
+            let _ = colors.background;
+            let _ = colors.accent;
+        }
     }
 }

@@ -15,5 +15,19 @@ pub mod helpers;
 // COSMIC-inspired styling
 pub mod cosmic_style;
 
+// TaskQueue widget for persistent task management
+pub mod task_queue;
+
 // Re-export commonly used items
 pub use cosmic_style::{ContainerVariant, CosmicButton, CosmicContainer};
+pub use task_queue::{
+    TaskQueueWidget, TaskQueueMessage, TaskQueueAction, 
+    WidgetSize as TaskQueueSize, TaskQueueColors,
+    Task, TaskStatus, Priority, QueueStats,
+    // Agent types
+    Agent, AgentType, AgentStatus,
+    // History types
+    TaskHistoryEntry,
+    // Layout types
+    PanelLayout, ActivePanel,
+};

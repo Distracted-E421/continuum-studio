@@ -136,6 +136,26 @@ defmodule StudioCore.Socket.Acceptor do
   end
 
   @impl true
+  def handle_info({:tcp_closed, socket}, state) do
+    # Find and remove the client associated with this socket
+    new_clients = state.clients
+      |> Enum.reject(fn {_pid, client_socket} -> client_socket == socket end)
+      |> Enum.into(%{})
+    Logger.debug("TCP socket closed, cleaned up clients (total: #{map_size(new_clients)})")
+    {:noreply, %{state | clients: new_clients}}
+  end
+
+  @impl true
+  def handle_info({:tcp_error, socket, reason}, state) do
+    Logger.warning("TCP socket error: #{inspect(reason)}")
+    # Handle similar to tcp_closed
+    new_clients = state.clients
+      |> Enum.reject(fn {_pid, client_socket} -> client_socket == socket end)
+      |> Enum.into(%{})
+    {:noreply, %{state | clients: new_clients}}
+  end
+
+  @impl true
   def terminate(_reason, state) do
     if state.listen_socket do
       :gen_tcp.close(state.listen_socket)

@@ -1,0 +1,326 @@
+//! Activity Feed Client for Synapsix Integration
+//!
+//! Connects to the ActivityFeed service via WebSocket for real-time updates
+//! and HTTP for queries and posting agent updates.
+
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+use futures_util::StreamExt;
+use url::Url;
+
+/// Default Synapsix API base URLs
+pub const DEFAULT_API_URL: &str = "http://localhost:4001/api/feed";
+pub const DEFAULT_WS_URL: &str = "ws://localhost:4001/ws/feed";
+
+// ============================================================================
+// Data Types (matching Synapsix ActivityFeed.Entry)
+// ============================================================================
+
+/// Source of a feed entry
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedSource {
+    Git,
+    FileChange,
+    Agent,
+    TaskQueue,
+    Nesy,
+    System,
+    #[serde(other)]
+    Unknown,
+}
+
+impl FeedSource {
+    pub fn icon(&self) -> &'static str {
+        match self {
+            FeedSource::Git => "🔀",
+            FeedSource::FileChange => "📁",
+            FeedSource::Agent => "🤖",
+            FeedSource::TaskQueue => "📋",
+            FeedSource::Nesy => "🧮",
+            FeedSource::System => "⚙️",
+            FeedSource::Unknown => "❓",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            FeedSource::Git => "git",
+            FeedSource::FileChange => "file",
+            FeedSource::Agent => "agent",
+            FeedSource::TaskQueue => "task",
+            FeedSource::Nesy => "nesy",
+            FeedSource::System => "system",
+            FeedSource::Unknown => "unknown",
+        }
+    }
+}
+
+/// A hyperlink in a feed entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedLink {
+    pub label: String,
+    pub url: String,
+    #[serde(rename = "type")]
+    pub link_type: String,
+}
+
+/// A single activity feed entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedEntry {
+    pub id: String,
+    pub timestamp: String,
+    pub source: FeedSource,
+    pub event_type: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    pub title: String,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub links: Vec<FeedLink>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// Feed statistics
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FeedStats {
+    #[serde(default)]
+    pub total_entries: usize,
+    #[serde(default)]
+    pub by_source: serde_json::Value,
+    #[serde(default)]
+    pub by_event_type: serde_json::Value,
+}
+
+// ============================================================================
+// WebSocket Protocol (matching Synapsix ActivityFeed.WebSocket)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WsServerMessage {
+    Connected {
+        #[allow(dead_code)]
+        timestamp: Option<String>,
+    },
+    Init {
+        entries: Vec<FeedEntry>,
+        stats: FeedStats,
+        #[allow(dead_code)]
+        timestamp: Option<String>,
+    },
+    EntryAdded {
+        entry: FeedEntry,
+    },
+    Heartbeat {
+        #[allow(dead_code)]
+        timestamp: Option<String>,
+    },
+    Pong {
+        #[allow(dead_code)]
+        timestamp: Option<String>,
+    },
+    Error {
+        message: String,
+    },
+}
+
+/// Events emitted by the feed WebSocket client
+#[derive(Debug, Clone)]
+pub enum FeedEvent {
+    Connected,
+    Disconnected,
+    InitialState {
+        entries: Vec<FeedEntry>,
+        stats: FeedStats,
+    },
+    EntryAdded(FeedEntry),
+    Error(String),
+}
+
+// ============================================================================
+// WebSocket Connection
+// ============================================================================
+
+/// Spawn a WebSocket connection to the Activity Feed
+pub async fn spawn_feed_websocket() -> Result<mpsc::UnboundedReceiver<FeedEvent>, String> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let url = Url::parse(DEFAULT_WS_URL).map_err(|e| e.to_string())?;
+
+    tokio::spawn(async move {
+        loop {
+            match feed_connect_and_handle(&url, tx.clone()).await {
+                Ok(()) => {
+                    let _ = tx.send(FeedEvent::Disconnected);
+                    break;
+                }
+                Err(e) => {
+                    log::error!("[feed_ws] WebSocket error: {}", e);
+                    let _ = tx.send(FeedEvent::Error(e.clone()));
+                    let _ = tx.send(FeedEvent::Disconnected);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+    });
+
+    Ok(rx)
+}
+
+async fn feed_connect_and_handle(
+    url: &Url,
+    tx: mpsc::UnboundedSender<FeedEvent>,
+) -> Result<(), String> {
+    let (ws_stream, _) = connect_async(url.as_str())
+        .await
+        .map_err(|e| format!("Feed WebSocket connection failed: {}", e))?;
+
+    let _ = tx.send(FeedEvent::Connected);
+
+    let (_write, mut read) = ws_stream.split();
+
+    while let Some(msg_result) = read.next().await {
+        match msg_result {
+            Ok(WsMessage::Text(text)) => {
+                match serde_json::from_str::<WsServerMessage>(&text) {
+                    Ok(server_msg) => match server_msg {
+                        WsServerMessage::Connected { .. } => {
+                            log::info!("[feed_ws] Connected to Activity Feed");
+                        }
+                        WsServerMessage::Init { entries, stats, .. } => {
+                            log::info!("[feed_ws] Received {} initial entries", entries.len());
+                            let _ = tx.send(FeedEvent::InitialState { entries, stats });
+                        }
+                        WsServerMessage::EntryAdded { entry } => {
+                            let _ = tx.send(FeedEvent::EntryAdded(entry));
+                        }
+                        WsServerMessage::Heartbeat { .. } | WsServerMessage::Pong { .. } => {}
+                        WsServerMessage::Error { message } => {
+                            let _ = tx.send(FeedEvent::Error(message));
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("[feed_ws] Failed to parse: {}", e);
+                    }
+                }
+            }
+            Ok(WsMessage::Close(_)) => break,
+            Err(e) => return Err(format!("Feed WS read error: {}", e)),
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// HTTP Client
+// ============================================================================
+
+/// HTTP client for querying and posting to the Activity Feed
+#[derive(Debug, Clone)]
+pub struct FeedHttpClient {
+    client: reqwest::Client,
+    base_url: String,
+}
+
+impl FeedHttpClient {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            base_url: DEFAULT_API_URL.to_string(),
+        }
+    }
+
+    /// Post an agent NL update to the feed
+    pub async fn post_update(
+        &self,
+        agent_id: &str,
+        summary: &str,
+        body: Option<&str>,
+        project: Option<&str>,
+        links: Vec<FeedLink>,
+    ) -> Result<FeedEntry, String> {
+        let payload = serde_json::json!({
+            "agent_id": agent_id,
+            "summary": summary,
+            "body": body,
+            "project": project,
+            "links": links,
+        });
+
+        let resp = self.client
+            .post(format!("{}/update", self.base_url))
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        resp.json::<FeedEntry>()
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Get feed summary text (for context injection)
+    pub async fn get_summary(&self, limit: Option<usize>) -> Result<String, String> {
+        let mut url = format!("{}/summary", self.base_url);
+        if let Some(l) = limit {
+            url = format!("{}?limit={}", url, l);
+        }
+
+        #[derive(Deserialize)]
+        struct SummaryResponse {
+            summary: String,
+        }
+
+        let resp = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let data = resp.json::<SummaryResponse>()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(data.summary)
+    }
+
+    /// Get feed statistics
+    pub async fn get_stats(&self) -> Result<FeedStats, String> {
+        let resp = self.client
+            .get(format!("{}/stats", self.base_url))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        resp.json::<FeedStats>()
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Trigger a git poll
+    pub async fn trigger_git_poll(&self) -> Result<(), String> {
+        self.client
+            .post(format!("{}/git/poll", self.base_url))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+impl Default for FeedHttpClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}

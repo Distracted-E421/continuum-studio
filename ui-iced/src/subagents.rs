@@ -311,7 +311,6 @@ pub enum SubagentMessage {
 // ══════════════════════════════════════════════════════════════════
 
 /// Async D-Bus client for terminal monitor
-#[cfg(feature = "dbus")]
 pub mod dbus_client {
     use super::*;
     use zbus::{Connection, Proxy};

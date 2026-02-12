@@ -271,9 +271,9 @@ defmodule StudioCore.VersionRegistry do
     {:reply, {:ok, results}, state}
   end
 
-  def handle_call({:disk_usage_detailed, version}, _from, _state) do
+  def handle_call({:disk_usage_detailed, version}, _from, state) do
     result = do_disk_usage_detailed(version)
-    {:reply, {:ok, result}, _state}
+    {:reply, {:ok, result}, state}
   end
 
   def handle_call(:disk_usage_all, _from, state) do
@@ -288,9 +288,9 @@ defmodule StudioCore.VersionRegistry do
     {:reply, {:ok, %{versions: results, total_size: total, total_size_human: format_bytes(total)}}, state}
   end
 
-  def handle_call({:last_used, version}, _from, _state) do
+  def handle_call({:last_used, version}, _from, state) do
     result = do_last_used(version)
-    {:reply, {:ok, result}, _state}
+    {:reply, {:ok, result}, state}
   end
 
   def handle_call({:download_url, version}, _from, state) do
@@ -515,7 +515,7 @@ defmodule StudioCore.VersionRegistry do
     end
   end
 
-  defp download_file(url, version, opts) do
+  defp download_file(url, version, _opts) do
     dest = appimage_path(version)
     cache_file = Path.join(@cache_dir, "Cursor-#{version}.AppImage.partial")
 

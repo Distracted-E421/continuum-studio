@@ -4,7 +4,9 @@
 //! with the COSMIC desktop ecosystem.
 
 use iced::widget::{button, column, container, row, scrollable, text, Space};
-use iced::{Alignment, Element, Length, Task, Theme};
+use iced::window;
+use iced::{Alignment, Element, Length, Subscription, Task, Theme};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
@@ -13,9 +15,9 @@ use continuum_studio_iced::core::{
     CoreResponse, CursorVersion, VersionStatus, Workspace, DEFAULT_SOCKET_PATH,
 };
 use std::collections::HashMap;
-use continuum_studio_iced::log_capture::{init_logger, LogBuffer, LogEntry};
+use continuum_studio_iced::log_capture::{init_logger, LogBuffer};
 use continuum_studio_iced::services::{ServiceConfig, ServiceInfo, ServiceManager, ServiceStatus};
-use continuum_studio_iced::monitoring::{SessionMonitor, SessionMetrics, HealthStatus, DashboardData};
+use continuum_studio_iced::monitoring::{SessionMonitor, SessionMetrics, DashboardData};
 use continuum_studio_iced::sessions::{CursorSession, SessionTracker};
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
 use continuum_studio_iced::chat_pipeline::{
@@ -23,8 +25,15 @@ use continuum_studio_iced::chat_pipeline::{
     SearchResult, Topic, ScanLocations, fmt_num, fmt_bytes, truncate,
 };
 use continuum_studio_iced::theme::{AppColors, CosmicThemePreset};
-use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo, ForgeType, InstallationType, SelfUpdater};
+use continuum_studio_iced::updater::{UpdateChannel, UpdateChecker, UpdateInfo, ForgeType, InstallationType};
 use continuum_studio_iced::subagents::{SubagentPanelState, SubagentMessage, MonitorStats, CommandRecord};
+use continuum_studio_iced::feed_client::{
+    FeedEntry, FeedSource, FeedStats, FeedEvent, FeedHttpClient, spawn_feed_websocket,
+};
+use continuum_studio_iced::coordinator_client::{
+    Agent as CoordAgent, AgentStatus as CoordAgentStatus,
+    Conflict as CoordConflict, CoordinatorHttpClient,
+};
 
 /// Async task to check for updates
 async fn check_for_updates_task() -> Result<Option<UpdateInfo>, String> {
@@ -156,21 +165,84 @@ fn main() -> iced::Result {
         .unwrap_or(log::LevelFilter::Info);
     let log_buffer = init_logger(log_level);
 
-    iced::application(move || ContinuumStudio::new(log_buffer.clone()), update, view)
-        .title("Continuum Studio")
-        .theme(|state: &ContinuumStudio| state.theme.clone())
-        .window_size(iced::Size::new(1280.0, 800.0))
-        .antialiasing(true)
-        .subscription(|state| {
-            // Batch multiple subscriptions together
-            iced::Subscription::batch([
-                // Core IPC connection
-                core_subscription(),
-                // Sub-agent monitor polling (only when on Cursor view + SubAgents tab)
-                subagent_subscription(state.current_view == View::Cursor && state.cursor_tab == CursorTab::SubAgents),
-            ])
+    // Use daemon for multi-window support
+    iced::daemon(
+        move || ContinuumStudio::new_multi_window(log_buffer.clone()),
+        update,
+        view_for_window
+    )
+    .title(window_title)
+    .theme(|state: &ContinuumStudio, _window_id: window::Id| state.theme.clone())
+    .subscription(subscription)
+    .antialiasing(true)
+    .run()
+}
+
+/// Get title for a specific window
+fn window_title(state: &ContinuumStudio, window_id: window::Id) -> String {
+    state.windows.get(&window_id)
+        .map(|ws| match ws.window_type {
+            WindowType::Main => "Continuum Studio".to_string(),
+            WindowType::TaskQueue => "Task Queue".to_string(),
+            WindowType::DialogPanel => "Dialog Panel".to_string(),
+            WindowType::TiledPanel => "Task Queue + Dialog".to_string(),
         })
-        .run()
+        .unwrap_or_else(|| "Continuum Studio".to_string())
+}
+
+/// Combined subscription for all windows
+fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
+    Subscription::batch([
+        // Core IPC connection
+        core_subscription(),
+        // Sub-agent monitor polling (only when on Cursor view + SubAgents tab)
+        subagent_subscription(state.current_view == View::Cursor && state.cursor_tab == CursorTab::SubAgents),
+        // Task queue WebSocket connection (always active for real-time updates)
+        task_queue_subscription(true), // Always active now for multi-window support
+        // Dialog daemon monitor (always active for dialog panel)
+        dialog_daemon_subscription(),
+        // Activity feed WebSocket connection (always active for real-time feed)
+        activity_feed_subscription(),
+        // Agent coordinator polling (periodic refresh)
+        coordinator_poll_subscription(),
+        // Window close events
+        window::close_events().map(Message::WindowClosed),
+    ])
+}
+
+/// Subscription to monitor dialog daemon status
+fn dialog_daemon_subscription() -> iced::Subscription<Message> {
+    iced::Subscription::run(dialog_daemon_worker)
+}
+
+/// Dialog daemon monitor worker
+fn dialog_daemon_worker() -> impl iced::futures::Stream<Item = Message> {
+    use continuum_studio_iced::dialog_client::{DialogClientMessage, spawn_dialog_monitor};
+    
+    iced::stream::channel(
+        32,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use iced::futures::SinkExt;
+            
+            let mut monitor_rx = spawn_dialog_monitor();
+            
+            while let Some(event) = monitor_rx.recv().await {
+                let msg = match event {
+                    DialogClientMessage::Connected(connected) => {
+                        DialogMsg::DaemonConnected(connected)
+                    }
+                    DialogClientMessage::HoldModeChanged(enabled) => {
+                        DialogMsg::HoldModeChanged(enabled)
+                    }
+                    DialogClientMessage::Error(e) => {
+                        DialogMsg::Error(e)
+                    }
+                    _ => continue, // Ignore other messages for now
+                };
+                let _ = output.send(Message::DialogAction(msg)).await;
+            }
+        },
+    )
 }
 
 /// Subscription to handle Core IPC connection
@@ -221,6 +293,154 @@ fn subagent_subscription(active: bool) -> iced::Subscription<Message> {
     iced::time::every(std::time::Duration::from_secs(2)).map(|_| {
         Message::SubagentAction(SubagentMessage::Refresh)
     })
+}
+
+/// Subscription for task queue WebSocket real-time updates
+fn task_queue_subscription(active: bool) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
+    
+    iced::Subscription::run(task_queue_websocket_worker)
+}
+
+/// Task queue WebSocket worker that yields Messages
+fn task_queue_websocket_worker() -> impl iced::futures::Stream<Item = Message> {
+    use continuum_studio_iced::task_queue_client::{TaskQueueEvent, spawn_websocket_connection};
+    
+    iced::stream::channel(
+        100,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use iced::futures::SinkExt;
+            
+            // Try to connect to WebSocket
+            match spawn_websocket_connection(Some("continuum-studio-ui".to_string())).await {
+                Ok(mut event_rx) => {
+                    // Process events from WebSocket
+                    while let Some(event) = event_rx.recv().await {
+                        let msg = match event {
+                            TaskQueueEvent::Connected => {
+                                TaskQueueMsg::Connected
+                            }
+                            TaskQueueEvent::Disconnected => {
+                                TaskQueueMsg::Disconnected
+                            }
+                            TaskQueueEvent::InitialState { tasks, stats, current_task } => {
+                                TaskQueueMsg::InitialState { tasks, stats, current_task }
+                            }
+                            TaskQueueEvent::TaskAdded(task) => {
+                                TaskQueueMsg::TaskAdded(task)
+                            }
+                            TaskQueueEvent::TaskUpdated(task) => {
+                                TaskQueueMsg::TaskUpdated(task)
+                            }
+                            TaskQueueEvent::TaskStarted(task) => {
+                                TaskQueueMsg::TaskStarted(task)
+                            }
+                            TaskQueueEvent::TaskCompleted(task) => {
+                                TaskQueueMsg::TaskCompleted(task)
+                            }
+                            TaskQueueEvent::TaskCancelled(task) => {
+                                TaskQueueMsg::TaskCompleted(task) // Treat same as completed
+                            }
+                            TaskQueueEvent::TaskClaimed { task, .. } => {
+                                TaskQueueMsg::TaskUpdated(task)
+                            }
+                            TaskQueueEvent::TaskReleased(task) => {
+                                TaskQueueMsg::TaskUpdated(task)
+                            }
+                            TaskQueueEvent::TaskRemoved(id) => {
+                                TaskQueueMsg::TaskRemoved(id)
+                            }
+                            TaskQueueEvent::Error(e) => {
+                                TaskQueueMsg::Error(e)
+                            }
+                        };
+                        
+                        let _ = output.send(Message::TaskQueueAction(msg)).await;
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to connect to task queue WebSocket: {}", e);
+                    let _ = output.send(Message::TaskQueueAction(TaskQueueMsg::Error(e))).await;
+                }
+            }
+        },
+    )
+}
+
+/// Activity feed WebSocket subscription
+fn activity_feed_subscription() -> iced::Subscription<Message> {
+    iced::Subscription::run(activity_feed_worker)
+}
+
+/// Activity feed WebSocket worker
+fn activity_feed_worker() -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(
+        100,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use iced::futures::SinkExt;
+
+            match spawn_feed_websocket().await {
+                Ok(mut event_rx) => {
+                    while let Some(event) = event_rx.recv().await {
+                        let msg = match event {
+                            FeedEvent::Connected => ActivityFeedMsg::Connected,
+                            FeedEvent::Disconnected => ActivityFeedMsg::Disconnected,
+                            FeedEvent::InitialState { entries, stats } => {
+                                ActivityFeedMsg::InitialState { entries, stats }
+                            }
+                            FeedEvent::EntryAdded(entry) => ActivityFeedMsg::EntryAdded(entry),
+                            FeedEvent::Error(e) => ActivityFeedMsg::Error(e),
+                        };
+                        let _ = output.send(Message::ActivityFeedAction(msg)).await;
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to connect to activity feed WebSocket: {}", e);
+                    let _ = output
+                        .send(Message::ActivityFeedAction(ActivityFeedMsg::Error(e)))
+                        .await;
+                }
+            }
+        },
+    )
+}
+
+/// Coordinator polling subscription (refreshes every 10 seconds)
+fn coordinator_poll_subscription() -> iced::Subscription<Message> {
+    iced::Subscription::run(coordinator_poll_worker)
+}
+
+/// Coordinator polling worker
+fn coordinator_poll_worker() -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(
+        32,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use iced::futures::SinkExt;
+
+            let client = CoordinatorHttpClient::new();
+            loop {
+                // Fetch agents
+                let agents_result = client.list_agents().await;
+                let _ = output
+                    .send(Message::CoordinatorAction(CoordinatorMsg::AgentsLoaded(
+                        agents_result,
+                    )))
+                    .await;
+
+                // Fetch conflicts
+                let conflicts_result = client.get_conflicts().await;
+                let _ = output
+                    .send(Message::CoordinatorAction(
+                        CoordinatorMsg::ConflictsLoaded(conflicts_result),
+                    ))
+                    .await;
+
+                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            }
+        },
+    )
 }
 
 /// Derive iced Theme from Settings
@@ -313,6 +533,8 @@ impl ContinuumStudio {
                 connection_state: ConnectionState::Disconnected,
                 current_view: View::Dashboard,
                 cursor_tab: CursorTab::default(),
+                windows: BTreeMap::new(),
+                main_window_id: None,
                 versions,
                 workspaces: vec![],
                 workspace_files: vec![],
@@ -339,9 +561,101 @@ impl ContinuumStudio {
                 storage_disk_usage: Vec::new(),
                 storage_selected: std::collections::HashSet::new(),
                 storage_loading: false,
+                task_queue_tasks: Vec::new(),
+                task_queue_stats: continuum_studio_iced::task_queue_client::QueueStats::default(),
+                task_queue_current: None,
+                task_queue_connected: false,
+                task_queue_http: continuum_studio_iced::task_queue_client::TaskQueueHttpClient::new(),
+                task_queue_input: String::new(),
+                task_queue_selected: None,
+                task_queue_editing: None,
+                task_queue_subtask_input: String::new(),
+                new_task_content: String::new(),
+                new_task_priority: continuum_studio_iced::task_queue_client::Priority::Medium,
+                new_task_project: String::new(),
+                new_task_notes: String::new(),
+                new_task_subtasks: Vec::new(),
+                new_task_subtask_input: String::new(),
+                new_task_prereqs: Vec::new(),
+                task_queue_panel: TaskQueuePanel::default(),
+                task_queue_layout: TaskQueueLayout::default(),
+                task_queue_secondary_panel: TaskQueuePanel::Agents,
+                dialog_daemon_connected: false,
+                dialog_hold_mode: false,
+                // Activity Feed
+                activity_feed_entries: Vec::new(),
+                activity_feed_stats: FeedStats::default(),
+                activity_feed_connected: false,
+                activity_feed_http: FeedHttpClient::new(),
+                activity_feed_expanded: None,
+                activity_feed_source_filter: None,
+                // Zone Manager (xx-zones positioning)
+                zone_manager: continuum_studio_iced::zones::ZoneManager::new(2560, 1440),
+                // Agent Coordinator
+                coordinator_agents: Vec::new(),
+                coordinator_conflicts: Vec::new(),
+                coordinator_http: CoordinatorHttpClient::new(),
+                coordinator_selected: None,
             },
             startup_task,
         )
+    }
+    
+    /// Multi-window boot function - opens the first window
+    fn new_multi_window(log_buffer: LogBuffer) -> (Self, Task<Message>) {
+        let (mut state, startup_tasks) = Self::new(log_buffer);
+        
+        // Calculate zone-based layout
+        let (main_config, panel_config) = state.zone_manager.layout_main_with_side_panel();
+        
+        // Open the initial main window with zone-calculated position
+        let (main_window_id, open_task) = window::open(window::Settings {
+            size: iced::Size::new(main_config.width as f32, main_config.height as f32),
+            position: window::Position::Specific(
+                iced::Point::new(main_config.x as f32, main_config.y as f32)
+            ),
+            resizable: true,
+            decorations: true,
+            ..Default::default()
+        });
+        
+        // Register the main window
+        state.main_window_id = Some(main_window_id);
+        state.windows.insert(main_window_id, WindowState {
+            window_type: WindowType::Main,
+            vertical_split: true,
+            split_ratio: 0.5,
+        });
+        
+        // Auto-open a task queue window with zone-calculated position
+        let (tq_window_id, tq_open_task) = window::open(window::Settings {
+            size: iced::Size::new(panel_config.width as f32, panel_config.height as f32),
+            position: window::Position::Specific(
+                iced::Point::new(panel_config.x as f32, panel_config.y as f32)
+            ),
+            resizable: true,
+            decorations: true,
+            ..Default::default()
+        });
+        state.windows.insert(tq_window_id, WindowState {
+            window_type: WindowType::TaskQueue,
+            vertical_split: true,
+            split_ratio: 0.5,
+        });
+        // Start on Feed panel to show activity timeline by default
+        state.task_queue_panel = TaskQueuePanel::Feed;
+        
+        // Export zone snapshot so Phosphor knows where windows are
+        state.zone_manager.export_snapshot();
+        
+        // Combine the open tasks with startup tasks
+        let combined_task = Task::batch([
+            startup_tasks,
+            open_task.discard(),
+            tq_open_task.discard(),
+        ]);
+        
+        (state, combined_task)
     }
 }
 
@@ -357,6 +671,10 @@ struct ContinuumStudio {
     current_view: View,
     /// Current sub-tab within Cursor view
     cursor_tab: CursorTab,
+    /// Multi-window tracking: maps window ID to window state
+    windows: BTreeMap<window::Id, WindowState>,
+    /// The main window ID (first window created)
+    main_window_id: Option<window::Id>,
     /// Available Cursor versions
     versions: Vec<CursorVersion>,
     /// Tracked workspaces
@@ -409,6 +727,73 @@ struct ContinuumStudio {
     storage_selected: std::collections::HashSet<String>,
     /// Whether storage data is loading
     storage_loading: bool,
+    /// Task queue state for Synapsix integration
+    task_queue_tasks: Vec<continuum_studio_iced::task_queue_client::Task>,
+    /// Task queue stats
+    task_queue_stats: continuum_studio_iced::task_queue_client::QueueStats,
+    /// Current task being worked on
+    task_queue_current: Option<continuum_studio_iced::task_queue_client::Task>,
+    /// Task queue connection state
+    task_queue_connected: bool,
+    /// Task queue HTTP client
+    task_queue_http: continuum_studio_iced::task_queue_client::TaskQueueHttpClient,
+    /// Quick add input text for task queue
+    task_queue_input: String,
+    /// Currently expanded/selected task in the detail view
+    task_queue_selected: Option<String>,
+    /// Task currently in edit mode (shows priority dropdown, delete, etc.)
+    task_queue_editing: Option<String>,
+    /// Subtask input text for currently selected task
+    task_queue_subtask_input: String,
+    /// New task form: title/content
+    new_task_content: String,
+    /// New task form: selected priority
+    new_task_priority: continuum_studio_iced::task_queue_client::Priority,
+    /// New task form: project name
+    new_task_project: String,
+    /// New task form: notes
+    new_task_notes: String,
+    /// New task form: planned subtask texts (before creation)
+    new_task_subtasks: Vec<String>,
+    /// New task form: subtask input text
+    new_task_subtask_input: String,
+    /// New task form: selected prerequisite/blocker task IDs
+    new_task_prereqs: Vec<String>,
+    /// Active panel in task queue window (Tasks/Agents/History)
+    task_queue_panel: TaskQueuePanel,
+    /// Layout mode for task queue window (Single/SideBySide/Stacked/ThreeColumn)
+    task_queue_layout: TaskQueueLayout,
+    /// Secondary panel for multi-panel layouts
+    task_queue_secondary_panel: TaskQueuePanel,
+    /// Dialog daemon connection state
+    dialog_daemon_connected: bool,
+    /// Current hold mode state from dialog daemon
+    dialog_hold_mode: bool,
+    // === Activity Feed State ===
+    /// Activity feed entries (most recent first)
+    activity_feed_entries: Vec<FeedEntry>,
+    /// Activity feed statistics
+    activity_feed_stats: FeedStats,
+    /// Activity feed WebSocket connection state
+    activity_feed_connected: bool,
+    /// Activity feed HTTP client
+    activity_feed_http: FeedHttpClient,
+    /// Currently expanded feed entry ID
+    activity_feed_expanded: Option<String>,
+    /// Source filter for feed entries (None = show all)
+    activity_feed_source_filter: Option<FeedSource>,
+    // === Zone Manager (xx-zones positioning) ===
+    /// Zone manager for deterministic window positioning
+    zone_manager: continuum_studio_iced::zones::ZoneManager,
+    // === Agent Coordinator State ===
+    /// Registered agents from the coordinator
+    coordinator_agents: Vec<CoordAgent>,
+    /// Active conflicts detected by the coordinator
+    coordinator_conflicts: Vec<CoordConflict>,
+    /// Coordinator HTTP client
+    coordinator_http: CoordinatorHttpClient,
+    /// Selected agent ID in the coordinator panel
+    coordinator_selected: Option<String>,
 }
 
 /// Available views in the application
@@ -421,6 +806,85 @@ enum View {
     Storage,
     Settings,
     Logs,
+}
+
+// ============================================================================
+// Multi-Window Support
+// ============================================================================
+
+/// Types of windows in the application
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowType {
+    /// Main application window
+    Main,
+    /// Detached task queue panel
+    TaskQueue,
+    /// Dialog panel (for tiling with task queue)
+    DialogPanel,
+    /// Combined task queue + dialog (tiled view)
+    TiledPanel,
+}
+
+/// Active panel within the task queue window
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum TaskQueuePanel {
+    /// Task list (pending/current tasks)
+    #[default]
+    Tasks,
+    /// Active agents (session and sub-agents)
+    Agents,
+    /// Task history (completed/cancelled)
+    History,
+    /// Create new task form
+    NewTask,
+    /// Activity feed timeline
+    Feed,
+    /// Agent coordinator dashboard
+    Coordination,
+}
+
+/// Layout modes for the task queue window
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum TaskQueueLayout {
+    /// Single panel view (default)
+    #[default]
+    Single,
+    /// Two panels side by side (horizontal split)
+    SideBySide,
+    /// Two panels stacked (vertical split)
+    Stacked,
+    /// All three panels in a row
+    ThreeColumn,
+}
+
+impl TaskQueueLayout {
+    fn label(&self) -> &'static str {
+        match self {
+            TaskQueueLayout::Single => "Single",
+            TaskQueueLayout::SideBySide => "Side-by-Side",
+            TaskQueueLayout::Stacked => "Stacked",
+            TaskQueueLayout::ThreeColumn => "Three Column",
+        }
+    }
+    
+    fn icon(&self) -> &'static str {
+        match self {
+            TaskQueueLayout::Single => "▣",
+            TaskQueueLayout::SideBySide => "◫",
+            TaskQueueLayout::Stacked => "⬓",
+            TaskQueueLayout::ThreeColumn => "☰",
+        }
+    }
+}
+
+/// State for an individual window
+#[derive(Debug, Clone)]
+struct WindowState {
+    window_type: WindowType,
+    /// For tiled panels: split orientation (true = vertical, false = horizontal)
+    vertical_split: bool,
+    /// For tiled panels: split ratio (0.0-1.0, where the value is the size of the first panel)
+    split_ratio: f32,
 }
 
 /// Sub-tabs within the Cursor view
@@ -436,6 +900,7 @@ enum CursorTab {
 
 /// Application messages (Elm architecture)
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Some variants are planned features
 enum Message {
     /// Navigation
     NavigateTo(View),
@@ -475,6 +940,188 @@ enum Message {
     ChatPipelineAction(ChatPipelineMsg),
     /// Sub-agent monitoring actions
     SubagentAction(SubagentMessage),
+    /// Task queue actions
+    TaskQueueAction(TaskQueueMsg),
+    
+    // === Multi-Window Messages ===
+    /// Open a new window of the specified type
+    OpenWindow(WindowType),
+    /// A window was opened successfully
+    WindowOpened(window::Id, WindowType),
+    /// A window was closed
+    WindowClosed(window::Id),
+    /// Toggle vertical/horizontal split in tiled panel
+    ToggleSplitOrientation(window::Id),
+    /// Adjust split ratio
+    AdjustSplitRatio(window::Id, f32),
+    /// Pop out task queue to its own window
+    PopOutTaskQueue,
+    /// Pop out dialog panel to its own window
+    PopOutDialogPanel,
+    /// Merge task queue and dialog into tiled window
+    MergePanels,
+    
+    // === Dialog Daemon Messages ===
+    /// Dialog daemon actions
+    DialogAction(DialogMsg),
+    /// Activity feed actions
+    ActivityFeedAction(ActivityFeedMsg),
+    /// Agent coordinator actions
+    CoordinatorAction(CoordinatorMsg),
+    /// Zone layout actions
+    ZoneAction(ZoneMsg),
+}
+
+/// Zone manager sub-messages
+#[derive(Debug, Clone)]
+enum ZoneMsg {
+    /// Switch to a different layout
+    SetLayout(continuum_studio_iced::zones::ZoneLayout),
+    /// Apply layout to current windows
+    ApplyLayout,
+}
+
+/// Dialog daemon sub-messages
+#[derive(Debug, Clone)]
+enum DialogMsg {
+    /// Daemon connection status changed
+    DaemonConnected(bool),
+    /// Hold mode state changed
+    HoldModeChanged(bool),
+    /// Toggle hold mode
+    ToggleHoldMode,
+    /// Error occurred
+    Error(String),
+}
+
+/// Activity feed sub-messages
+#[derive(Debug, Clone)]
+enum ActivityFeedMsg {
+    /// WebSocket connected
+    Connected,
+    /// WebSocket disconnected
+    Disconnected,
+    /// Initial state received from WebSocket
+    InitialState {
+        entries: Vec<FeedEntry>,
+        stats: FeedStats,
+    },
+    /// New entry added via WebSocket
+    EntryAdded(FeedEntry),
+    /// Error from WebSocket or HTTP
+    Error(String),
+    /// Toggle expansion of a feed entry
+    ToggleEntry(String),
+    /// Set source filter
+    SetSourceFilter(Option<FeedSource>),
+    /// Trigger git poll via HTTP
+    TriggerGitPoll,
+    /// Git poll completed
+    GitPollDone(Result<(), String>),
+    /// Stats refreshed
+    StatsRefreshed(Result<FeedStats, String>),
+}
+
+/// Agent coordinator sub-messages
+#[derive(Debug, Clone)]
+enum CoordinatorMsg {
+    /// Agents list refreshed
+    AgentsLoaded(Result<Vec<CoordAgent>, String>),
+    /// Conflicts list refreshed
+    ConflictsLoaded(Result<Vec<CoordConflict>, String>),
+    /// Select an agent for detail view
+    SelectAgent(String),
+    /// Deselect agent
+    DeselectAgent,
+    /// Refresh agents and conflicts
+    Refresh,
+    /// Resolve a conflict
+    ResolveConflict(String),
+    /// Conflict resolved
+    ConflictResolved(Result<(), String>),
+    /// Error occurred
+    Error(String),
+}
+
+/// Task queue sub-messages
+#[derive(Debug, Clone)]
+enum TaskQueueMsg {
+    /// WebSocket connected
+    Connected,
+    /// WebSocket disconnected
+    Disconnected,
+    /// Initial state received
+    InitialState {
+        tasks: Vec<continuum_studio_iced::task_queue_client::Task>,
+        stats: continuum_studio_iced::task_queue_client::QueueStats,
+        current_task: Option<continuum_studio_iced::task_queue_client::Task>,
+    },
+    /// Task added
+    TaskAdded(continuum_studio_iced::task_queue_client::Task),
+    /// Task updated
+    TaskUpdated(continuum_studio_iced::task_queue_client::Task),
+    /// Task started
+    TaskStarted(continuum_studio_iced::task_queue_client::Task),
+    /// Task completed
+    TaskCompleted(continuum_studio_iced::task_queue_client::Task),
+    /// Task removed
+    TaskRemoved(String),
+    /// Error occurred
+    Error(String),
+    /// Quick-add input changed
+    QuickAddChanged(String),
+    /// Submit quick-add
+    QuickAddSubmit,
+    /// Start a task
+    StartTask(String),
+    /// Complete current task
+    CompleteCurrentTask,
+    /// Change task priority
+    ChangePriority(String, continuum_studio_iced::task_queue_client::Priority),
+    /// Delete a task
+    DeleteTask(String),
+    /// Cancel a task
+    CancelTask(String),
+    /// Toggle task detail expansion
+    ToggleTaskDetail(String),
+    /// Toggle edit mode for a task (priority dropdown, delete, etc.)
+    ToggleEditMode(String),
+    /// Subtask input changed
+    SubtaskInputChanged(String),
+    /// Submit subtask
+    SubmitSubtask(String),
+    /// Subtask added result
+    SubtaskAdded(Result<continuum_studio_iced::task_queue_client::Task, String>),
+    /// New task form: content changed
+    NewTaskContentChanged(String),
+    /// New task form: priority changed
+    NewTaskPriorityChanged(continuum_studio_iced::task_queue_client::Priority),
+    /// New task form: project changed
+    NewTaskProjectChanged(String),
+    /// New task form: notes changed
+    NewTaskNotesChanged(String),
+    /// New task form: subtask input changed
+    NewTaskSubtaskInputChanged(String),
+    /// New task form: add a subtask to the planned list
+    NewTaskAddSubtask,
+    /// New task form: remove a planned subtask
+    NewTaskRemoveSubtask(usize),
+    /// New task form: toggle a prereq task
+    NewTaskTogglePrereq(String),
+    /// Submit the full new task form
+    SubmitNewTask,
+    /// New task created result (after API call)
+    NewTaskCreated(Result<continuum_studio_iced::task_queue_client::Task, String>),
+    /// Task was deleted (for local state update)
+    TaskDeleted(String),
+    /// API operation result
+    ApiResult(Result<continuum_studio_iced::task_queue_client::Task, String>),
+    /// Switch panel view (Tasks/Agents/History)
+    SwitchPanel(TaskQueuePanel),
+    /// Change layout mode
+    SetLayout(TaskQueueLayout),
+    /// Set secondary panel (for multi-panel layouts)
+    SetSecondaryPanel(TaskQueuePanel),
 }
 
 /// Chat pipeline sub-messages
@@ -592,6 +1239,7 @@ struct VersionDiskUsage {
 
 /// Cursor-related messages
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // UninstallVersion planned for Phase 2
 enum CursorMessage {
     RefreshVersions,
     LaunchVersion(String),
@@ -618,6 +1266,7 @@ struct CodeWorkspaceFile {
 
 /// Workspace-related messages
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // RefreshGitStats planned feature
 enum WorkspaceMessage {
     RefreshWorkspaces,
     TogglePinned(String),
@@ -656,6 +1305,7 @@ enum ServiceMessage {
 
 /// Session management messages
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Some variants replaced by polling approach
 enum SessionMessage {
     /// Scan for running Cursor processes
     RefreshSessions,
@@ -673,6 +1323,7 @@ enum SessionMessage {
 
 /// Auth management messages
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // DeleteProfile, RefreshProfiles planned for Phase 2
 enum AuthMessage {
     /// Refresh auth statuses for all installed versions
     RefreshStatuses,
@@ -915,6 +1566,80 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         Message::SubagentAction(msg) => {
             return handle_subagent_message(state, msg);
         }
+        Message::TaskQueueAction(msg) => {
+            return handle_task_queue_message(state, msg);
+        }
+        Message::DialogAction(msg) => {
+            return handle_dialog_message(state, msg);
+        }
+        Message::ActivityFeedAction(msg) => {
+            return handle_activity_feed_message(state, msg);
+        }
+        Message::CoordinatorAction(msg) => {
+            return handle_coordinator_message(state, msg);
+        }
+        Message::ZoneAction(msg) => {
+            return handle_zone_message(state, msg);
+        }
+        
+        // === Multi-Window Message Handlers ===
+        Message::OpenWindow(window_type) => {
+            return handle_open_window(state, window_type);
+        }
+        Message::WindowOpened(id, window_type) => {
+            log::info!("Window opened: {:?} with type {:?}", id, window_type);
+            let window_state = WindowState {
+                window_type,
+                vertical_split: true,
+                split_ratio: 0.5,
+            };
+            state.windows.insert(id, window_state);
+            
+            // Track main window if not set
+            if state.main_window_id.is_none() && window_type == WindowType::Main {
+                state.main_window_id = Some(id);
+            }
+        }
+        Message::WindowClosed(id) => {
+            log::info!("Window closed: {:?}", id);
+            state.windows.remove(&id);
+            
+            // If main window closed, exit application
+            if state.main_window_id == Some(id) {
+                return iced::exit();
+            }
+        }
+        Message::ToggleSplitOrientation(id) => {
+            if let Some(ws) = state.windows.get_mut(&id) {
+                ws.vertical_split = !ws.vertical_split;
+            }
+        }
+        Message::AdjustSplitRatio(id, ratio) => {
+            if let Some(ws) = state.windows.get_mut(&id) {
+                ws.split_ratio = ratio.clamp(0.1, 0.9);
+            }
+        }
+        Message::PopOutTaskQueue => {
+            return handle_open_window(state, WindowType::TaskQueue);
+        }
+        Message::PopOutDialogPanel => {
+            return handle_open_window(state, WindowType::DialogPanel);
+        }
+        Message::MergePanels => {
+            // Close any existing task queue or dialog windows and open a tiled one
+            let to_close: Vec<window::Id> = state.windows.iter()
+                .filter(|(_, ws)| ws.window_type == WindowType::TaskQueue || ws.window_type == WindowType::DialogPanel)
+                .map(|(id, _)| *id)
+                .collect();
+            
+            let mut tasks = Vec::new();
+            for id in to_close {
+                tasks.push(window::close(id));
+            }
+            tasks.push(handle_open_window(state, WindowType::TiledPanel));
+            return Task::batch(tasks);
+        }
+        
         Message::UpdateCheckResult(result) => {
             state.checking_updates = false;
             state.settings.updates.mark_checked();
@@ -948,12 +1673,22 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 log::info!("Launching Cursor version: {}", version);
                 if let Some(tx) = &state.core_tx {
                     let tx = tx.clone();
+                    let version = version.clone();
                     return Task::perform(
                         async move {
                             let _ = tx.send(CoreRequest::LaunchVersion { version, folder: None }).await;
                         },
                         |_| Message::CursorAction(CursorMessage::RefreshVersions),
                     );
+                } else {
+                    // Core not connected: fallback to cursor-versions CLI (same as "our versions cli")
+                    log::warn!("Core not connected; launching Cursor via cursor-versions CLI");
+                    if let Err(e) = std::process::Command::new("cursor-versions")
+                        .args(["run", &version])
+                        .spawn()
+                    {
+                        log::error!("Failed to launch via CLI: {}", e);
+                    }
                 }
             }
             CursorMessage::InstallVersion(version) => {
@@ -1052,17 +1787,22 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             }
             WorkspaceMessage::OpenInCursor(ws_id, version) => {
                 log::info!("Opening workspace {} in Cursor {}", ws_id, version);
-                // Find workspace path
                 if let Some(ws) = state.workspaces.iter().find(|w| w.id == ws_id) {
                     let folder = ws.path.clone();
                     if let Some(tx) = &state.core_tx {
                         let tx = tx.clone();
+                        let version = version.clone();
                         return Task::perform(
                             async move {
                                 let _ = tx.send(CoreRequest::LaunchVersion { version, folder: Some(folder) }).await;
                             },
                             |_| Message::WorkspaceAction(WorkspaceMessage::RefreshWorkspaces),
                         );
+                    } else {
+                        // Core not connected: fallback to cursor-versions CLI
+                        let _ = std::process::Command::new("cursor-versions")
+                            .args(["run", &version, &folder])
+                            .spawn();
                     }
                 }
             }
@@ -1081,18 +1821,21 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             }
             WorkspaceMessage::OpenWorkspaceFile(path) => {
                 log::info!("Opening workspace file: {}", path);
-                // Launch Cursor with the workspace file
                 if let Some(tx) = &state.core_tx {
                     let tx = tx.clone();
                     return Task::perform(
                         async move {
-                            let _ = tx.send(CoreRequest::LaunchVersion { 
-                                version: "latest".to_string(), 
-                                folder: Some(path) 
+                            let _ = tx.send(CoreRequest::LaunchVersion {
+                                version: "latest".to_string(),
+                                folder: Some(path),
                             }).await;
                         },
                         |_| Message::WorkspaceAction(WorkspaceMessage::RefreshWorkspaces),
                     );
+                } else {
+                    let _ = std::process::Command::new("cursor-versions")
+                        .args(["run", "latest", &path])
+                        .spawn();
                 }
             }
         },
@@ -1438,7 +2181,24 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
     Task::none()
 }
 
-fn view(state: &ContinuumStudio) -> Element<Message> {
+/// Multi-window view dispatcher
+fn view_for_window(state: &ContinuumStudio, window_id: window::Id) -> Element<'_, Message> {
+    // Get the window type for this ID
+    let window_state = state.windows.get(&window_id);
+    
+    match window_state.map(|ws| ws.window_type) {
+        Some(WindowType::Main) | None => view_main_window(state),
+        Some(WindowType::TaskQueue) => view_task_queue_window(state),
+        Some(WindowType::DialogPanel) => view_dialog_panel_window(state),
+        Some(WindowType::TiledPanel) => {
+            let ws = window_state.unwrap();
+            view_tiled_panel_window(state, ws.vertical_split, ws.split_ratio)
+        }
+    }
+}
+
+/// Main application window view
+fn view_main_window(state: &ContinuumStudio) -> Element<'_, Message> {
     let sidebar = sidebar(state);
     let content = match state.current_view {
         View::Dashboard => view_dashboard(state),
@@ -1464,8 +2224,1460 @@ fn view(state: &ContinuumStudio) -> Element<Message> {
         .into()
 }
 
+/// Task queue detached window view
+fn view_task_queue_window(state: &ContinuumStudio) -> Element<'_, Message> {
+    let colors = &state.colors;
+    
+    // Header with connection status and layout controls
+    let header = row![
+        text("📋 Task Queue").size(18).color(colors.text_primary),
+        Space::new().width(Length::Fill),
+        // Layout buttons
+        view_layout_buttons(state),
+        Space::new().width(12),
+        text(if state.task_queue_connected { "● Online" } else { "○ Offline" })
+            .size(12)
+            .color(if state.task_queue_connected { 
+                colors.success 
+            } else { 
+                colors.text_muted 
+            }),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    
+    // Panel tabs only shown in Single layout
+    let show_tabs = matches!(state.task_queue_layout, TaskQueueLayout::Single);
+    
+    let tasks_active = matches!(state.task_queue_panel, TaskQueuePanel::Tasks);
+    let agents_active = matches!(state.task_queue_panel, TaskQueuePanel::Agents);
+    let history_active = matches!(state.task_queue_panel, TaskQueuePanel::History);
+    let new_task_active = matches!(state.task_queue_panel, TaskQueuePanel::NewTask);
+    let feed_active = matches!(state.task_queue_panel, TaskQueuePanel::Feed);
+    let coord_active = matches!(state.task_queue_panel, TaskQueuePanel::Coordination);
+    
+    let tasks_bg = if tasks_active { colors.accent } else { colors.surface };
+    let agents_bg = if agents_active { colors.accent } else { colors.surface };
+    let history_bg = if history_active { colors.accent } else { colors.surface };
+    let new_task_bg = if new_task_active { colors.accent } else { colors.surface };
+    let feed_bg = if feed_active { colors.accent } else { colors.surface };
+    let coord_bg = if coord_active { colors.accent } else { colors.surface };
+    
+    let panel_tabs: Element<'_, Message> = if show_tabs {
+        row![
+            button(text("Tasks").size(12).color(colors.text_primary))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::SwitchPanel(TaskQueuePanel::Tasks)))
+                .padding([6, 12])
+                .style(move |_theme, _status| button::Style {
+                    background: Some(iced::Background::Color(tasks_bg)),
+                    text_color: colors.text_primary,
+                    border: iced::Border::default().rounded(4),
+                    ..Default::default()
+                }),
+            button(text("Feed").size(12).color(colors.text_primary))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::SwitchPanel(TaskQueuePanel::Feed)))
+                .padding([6, 12])
+                .style(move |_theme, _status| button::Style {
+                    background: Some(iced::Background::Color(feed_bg)),
+                    text_color: colors.text_primary,
+                    border: iced::Border::default().rounded(4),
+                    ..Default::default()
+                }),
+            button(text("Agents").size(12).color(colors.text_primary))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::SwitchPanel(TaskQueuePanel::Agents)))
+                .padding([6, 12])
+                .style(move |_theme, _status| button::Style {
+                    background: Some(iced::Background::Color(agents_bg)),
+                    text_color: colors.text_primary,
+                    border: iced::Border::default().rounded(4),
+                    ..Default::default()
+                }),
+            button(text("Coord").size(12).color(colors.text_primary))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::SwitchPanel(TaskQueuePanel::Coordination)))
+                .padding([6, 12])
+                .style(move |_theme, _status| button::Style {
+                    background: Some(iced::Background::Color(coord_bg)),
+                    text_color: colors.text_primary,
+                    border: iced::Border::default().rounded(4),
+                    ..Default::default()
+                }),
+            button(text("History").size(12).color(colors.text_primary))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::SwitchPanel(TaskQueuePanel::History)))
+                .padding([6, 12])
+                .style(move |_theme, _status| button::Style {
+                    background: Some(iced::Background::Color(history_bg)),
+                    text_color: colors.text_primary,
+                    border: iced::Border::default().rounded(4),
+                    ..Default::default()
+                }),
+            button(text("+ New").size(12).color(colors.text_primary))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::SwitchPanel(TaskQueuePanel::NewTask)))
+                .padding([6, 12])
+                .style(move |_theme, _status| button::Style {
+                    background: Some(iced::Background::Color(new_task_bg)),
+                    text_color: colors.text_primary,
+                    border: iced::Border::default().rounded(4),
+                    ..Default::default()
+                }),
+        ]
+        .spacing(4)
+        .into()
+    } else {
+        Space::new().height(0).into()
+    };
+    
+    // Render content based on layout mode
+    let panel_content: Element<'_, Message> = match state.task_queue_layout {
+        TaskQueueLayout::Single => {
+            match state.task_queue_panel {
+                TaskQueuePanel::Tasks => view_task_queue_tasks_panel(state),
+                TaskQueuePanel::Agents => view_task_queue_agents_panel(state),
+                TaskQueuePanel::History => view_task_queue_history_panel(state),
+                TaskQueuePanel::NewTask => view_task_queue_new_task_panel(state),
+                TaskQueuePanel::Feed => view_activity_feed_panel(state),
+                TaskQueuePanel::Coordination => view_coordinator_panel(state),
+            }
+        }
+        TaskQueueLayout::SideBySide => {
+            row![
+                view_panel_container(state, state.task_queue_panel),
+                view_panel_container(state, state.task_queue_secondary_panel),
+            ]
+            .spacing(8)
+            .into()
+        }
+        TaskQueueLayout::Stacked => {
+            column![
+                view_panel_container(state, state.task_queue_panel),
+                view_panel_container(state, state.task_queue_secondary_panel),
+            ]
+            .spacing(8)
+            .into()
+        }
+        TaskQueueLayout::ThreeColumn => {
+            row![
+                view_panel_container(state, TaskQueuePanel::Tasks),
+                view_panel_container(state, TaskQueuePanel::Agents),
+                view_panel_container(state, TaskQueuePanel::History),
+            ]
+            .spacing(8)
+            .into()
+        }
+    };
+    
+    container(
+        column![
+            header,
+            Space::new().height(8),
+            panel_tabs,
+            Space::new().height(if show_tabs { 12 } else { 0 }),
+            panel_content,
+        ]
+        .spacing(0)
+        .padding(16)
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style({
+        let bg = colors.background;
+        move |_| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            ..Default::default()
+        }
+    })
+    .into()
+}
+
+/// Layout buttons for task queue window
+fn view_layout_buttons(state: &ContinuumStudio) -> Element<'_, Message> {
+    let colors = &state.colors;
+    let current_layout = state.task_queue_layout;
+    
+    let make_layout_btn = |layout: TaskQueueLayout| {
+        let is_active = current_layout == layout;
+        let bg = if is_active {
+            iced::Color::from_rgb(0.2, 0.4, 0.6)
+        } else {
+            iced::Color::from_rgb(0.15, 0.15, 0.15)
+        };
+        
+        button(text(layout.icon()).size(14).color(colors.text_primary))
+            .on_press(Message::TaskQueueAction(TaskQueueMsg::SetLayout(layout)))
+            .padding([4, 8])
+            .style(move |_theme, _status| button::Style {
+                background: Some(iced::Background::Color(bg)),
+                text_color: colors.text_primary,
+                border: iced::Border::default().rounded(4),
+                ..Default::default()
+            })
+    };
+    
+    row![
+        make_layout_btn(TaskQueueLayout::Single),
+        make_layout_btn(TaskQueueLayout::SideBySide),
+        make_layout_btn(TaskQueueLayout::Stacked),
+        make_layout_btn(TaskQueueLayout::ThreeColumn),
+    ]
+    .spacing(2)
+    .into()
+}
+
+/// Panel container with title bar
+fn view_panel_container<'a>(state: &'a ContinuumStudio, panel: TaskQueuePanel) -> Element<'a, Message> {
+    let colors = &state.colors;
+    
+    let title = match panel {
+        TaskQueuePanel::Tasks => "Tasks",
+        TaskQueuePanel::Agents => "Agents",
+        TaskQueuePanel::History => "History",
+        TaskQueuePanel::NewTask => "New Task",
+        TaskQueuePanel::Feed => "Activity Feed",
+        TaskQueuePanel::Coordination => "Agent Coordinator",
+    };
+    
+    let title_bar = text(title)
+        .size(11)
+        .color(colors.text_secondary);
+    
+    let content: Element<'_, Message> = match panel {
+        TaskQueuePanel::Tasks => view_task_queue_tasks_panel(state),
+        TaskQueuePanel::Agents => view_task_queue_agents_panel(state),
+        TaskQueuePanel::History => view_task_queue_history_panel(state),
+        TaskQueuePanel::NewTask => view_task_queue_new_task_panel(state),
+        TaskQueuePanel::Feed => view_activity_feed_panel(state),
+        TaskQueuePanel::Coordination => view_coordinator_panel(state),
+    };
+    
+    container(
+        column![
+            title_bar,
+            Space::new().height(4),
+            content,
+        ]
+        .spacing(0)
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .padding(8)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(0.12, 0.12, 0.12))),
+        border: iced::Border::default().rounded(6),
+        ..Default::default()
+    })
+    .into()
+}
+
+/// Tasks panel content for task queue window
+fn view_task_queue_tasks_panel(state: &ContinuumStudio) -> Element<'_, Message> {
+    use continuum_studio_iced::task_queue_client::{Creator, TaskStatus};
+    use iced::widget::text_input;
+    
+    let colors = &state.colors;
+    
+    // Current task section - prominent active task display
+    let current_section: Element<'_, Message> = if let Some(task) = &state.task_queue_current {
+        let task_id_cancel = task.id.clone();
+        let accent = colors.accent;
+        let surface = colors.surface;
+        let success = colors.success;
+        let error = colors.error;
+        let text_primary = colors.text_primary;
+        let text_muted = colors.text_muted;
+        
+        // Count subtask progress
+        let subtasks: Vec<_> = state.task_queue_tasks.iter()
+            .filter(|t| t.parent_id.as_deref() == Some(task.id.as_str()))
+            .collect();
+        let total_subtasks = subtasks.len();
+        let completed_subtasks = subtasks.iter()
+            .filter(|t| t.status == TaskStatus::Completed)
+            .count();
+        
+        let progress_elem: Element<'_, Message> = if total_subtasks > 0 {
+            let progress_text = format!("{}/{} subtasks", completed_subtasks, total_subtasks);
+            let progress_pct = if total_subtasks > 0 { completed_subtasks as f32 / total_subtasks as f32 } else { 0.0 };
+            let bar_width = (progress_pct * 200.0) as u16;
+            let success_color = success;
+            let surface_dim = iced::Color { 
+                r: surface.r * 0.8, g: surface.g * 0.8, b: surface.b * 0.8, a: 1.0 
+            };
+            column![
+                text(progress_text).size(11).color(colors.text_secondary),
+                // Simple progress bar
+                container(
+                    row![
+                        container(Space::new().width(Length::Fixed(bar_width as f32)).height(4))
+                            .style(move |_| container::Style {
+                                background: Some(iced::Background::Color(success_color)),
+                                border: iced::Border { radius: 2.0.into(), ..Default::default() },
+                                ..Default::default()
+                            }),
+                        Space::new().width(Length::Fill),
+                    ]
+                )
+                .width(200)
+                .height(6)
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(surface_dim)),
+                    border: iced::Border { radius: 3.0.into(), ..Default::default() },
+                    ..Default::default()
+                }),
+            ]
+            .spacing(3)
+            .into()
+        } else {
+            Element::from(Space::new().height(0))
+        };
+
+        // Active task subtask list (show in compact form)
+        let subtask_status_elems: Vec<Element<'_, Message>> = subtasks.iter().map(|st| {
+            let st_icon = match st.status {
+                TaskStatus::Completed => "✓",
+                TaskStatus::InProgress => "⟳",
+                _ => "○",
+            };
+            let st_color = match st.status {
+                TaskStatus::Completed => colors.success,
+                TaskStatus::InProgress => colors.accent,
+                _ => colors.text_muted,
+            };
+            Element::from(
+                row![
+                    text(st_icon).size(10).color(st_color),
+                    text(&st.content).size(10).color(
+                        if st.status == TaskStatus::Completed { colors.text_muted } else { colors.text_secondary }
+                    ),
+                ].spacing(4).align_y(Alignment::Center)
+            )
+        }).collect();
+        
+        let subtask_list: Element<'_, Message> = if subtask_status_elems.is_empty() {
+            Element::from(Space::new().height(0))
+        } else {
+            column(subtask_status_elems).spacing(2).into()
+        };
+        
+        container(
+            column![
+                // Header with pulsing accent
+                row![
+                    text("▶ ACTIVE").size(10).color(accent),
+                    Space::new().width(Length::Fill),
+                    row![
+                        text(task.priority.emoji()).size(11),
+                        text(task.priority.label()).size(10).color(colors.text_secondary),
+                    ].spacing(3),
+                ]
+                .align_y(Alignment::Center),
+                // Task content - larger and bolder
+                text(&task.content).size(15).color(text_primary),
+                // Subtask progress
+                progress_elem,
+                // Subtask list
+                subtask_list,
+                // Action buttons
+                row![
+                    button(
+                        row![
+                            text("✓").size(12),
+                            text("Complete").size(12),
+                        ].spacing(4).align_y(Alignment::Center)
+                    )
+                    .on_press(Message::TaskQueueAction(TaskQueueMsg::CompleteCurrentTask))
+                    .padding([6, 14])
+                    .style(move |_theme, status| {
+                        let bg = match status {
+                            button::Status::Hovered => iced::Color { r: (success.r * 1.2).min(1.0), g: (success.g * 1.2).min(1.0), b: (success.b * 1.2).min(1.0), a: 1.0 },
+                            _ => success,
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            text_color: text_primary,
+                            border: iced::Border { radius: 5.0.into(), ..Default::default() },
+                            ..Default::default()
+                        }
+                    }),
+                    button(text("Cancel").size(11).color(colors.text_muted))
+                        .on_press(Message::TaskQueueAction(TaskQueueMsg::CancelTask(task_id_cancel)))
+                        .padding([6, 12])
+                        .style(move |_theme, status| {
+                            let bg = match status {
+                                button::Status::Hovered => iced::Color { r: error.r * 0.4, g: error.g * 0.4, b: error.b * 0.4, a: 1.0 },
+                                _ => iced::Color::TRANSPARENT,
+                            };
+                            button::Style {
+                                background: Some(iced::Background::Color(bg)),
+                                text_color: text_muted,
+                                border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                                ..Default::default()
+                            }
+                        }),
+                ]
+                .spacing(8),
+            ]
+            .spacing(6)
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(surface)),
+            border: iced::Border { 
+                color: accent, 
+                width: 1.5, 
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+    } else {
+        container(
+            text("No current task - select one to start")
+                .size(13)
+                .color(colors.text_muted)
+        )
+        .padding(12)
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(colors.surface)),
+            border: iced::Border { 
+                color: colors.border_subtle, 
+                width: 1.0, 
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+    };
+
+    // Task count header
+    let total_count = state.task_queue_tasks.len();
+    let top_level_count = state.task_queue_tasks.iter()
+        .filter(|t| t.parent_id.is_none() && t.status.is_active())
+        .count();
+    let subtask_count_active = state.task_queue_tasks.iter()
+        .filter(|t| t.parent_id.is_some() && t.status.is_active())
+        .count();
+
+    let count_header = row![
+        text(format!("{} tasks", top_level_count)).size(11).color(colors.text_primary),
+        text("·").size(11).color(colors.text_muted),
+        text(format!("{} subtasks", subtask_count_active)).size(10).color(colors.text_secondary),
+        text("·").size(11).color(colors.text_muted),
+        text(format!("{} total", total_count)).size(10).color(colors.text_muted),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    
+    // Pending tasks - top-level with is_active, tree view shows subtasks
+    let pending_tasks: Vec<_> = state.task_queue_tasks.iter()
+        .filter(|t| t.status.is_active() && t.parent_id.is_none())
+        .collect();
+    
+    let pending_items: Vec<Element<'_, Message>> = pending_tasks.iter().map(|task| {
+        use continuum_studio_iced::task_queue_client::Priority;
+        let task_id_toggle = task.id.clone();
+        let task_id_start = task.id.clone();
+        let task_id_delete = task.id.clone();
+        let task_id_priority = task.id.clone();
+        let task_id_submit = task.id.clone();
+        let task_id_edit = task.id.clone();
+        let current_priority = task.priority;
+
+        // Priority-based accent color
+        let priority_color = match task.priority {
+            Priority::Critical => iced::Color::from_rgb(0.92, 0.34, 0.34),
+            Priority::High => iced::Color::from_rgb(0.96, 0.62, 0.04),
+            Priority::Medium => iced::Color::from_rgb(0.96, 0.86, 0.07),
+            Priority::Low => iced::Color::from_rgb(0.28, 0.73, 0.47),
+            Priority::Backlog => iced::Color::from_rgb(0.5, 0.5, 0.5),
+        };
+
+        let is_expanded = state.task_queue_selected.as_ref() == Some(&task.id);
+        let is_editing = state.task_queue_editing.as_ref() == Some(&task.id);
+        let expand_icon = if is_expanded { "▾" } else { "▸" };
+
+        // Count subtasks and blockers for badges
+        let subtask_count = state.task_queue_tasks.iter()
+            .filter(|t| t.parent_id.as_deref() == Some(task.id.as_str()))
+            .count();
+        let blocker_count = task.blocked_by.len();
+        let has_notes = task.notes.as_ref().map_or(false, |n| !n.is_empty());
+
+        // Build badges row
+        let mut badge_items: Vec<Element<'_, Message>> = Vec::new();
+        if let Some(proj) = &task.project {
+            if !proj.is_empty() {
+                let accent_text = colors.accent;
+                let surface = colors.surface;
+                badge_items.push(
+                    container(text(proj).size(9).color(accent_text))
+                        .padding([1, 5])
+                        .style(move |_| container::Style {
+                            background: Some(iced::Background::Color(surface)),
+                            border: iced::Border { radius: 3.0.into(), ..Default::default() },
+                            ..Default::default()
+                        })
+                        .into()
+                );
+            }
+        }
+        if subtask_count > 0 {
+            badge_items.push(
+                text(format!("⊟ {}", subtask_count)).size(9).color(colors.success).into()
+            );
+        }
+        if blocker_count > 0 {
+            badge_items.push(
+                text(format!("⊘ {}", blocker_count)).size(9).color(colors.warning).into()
+            );
+        }
+        if has_notes {
+            badge_items.push(
+                text("📝").size(9).into()
+            );
+        }
+        // Creator badge
+        let creator_text = match task.created_by {
+            Creator::User => "👤".to_string(),
+            Creator::Agent | Creator::Cli => task.agent_id.as_ref()
+                .map(|id| format!("🤖 {}", &id[..12.min(id.len())]))
+                .unwrap_or_else(|| "🤖".to_string()),
+            Creator::Unknown => "❓".to_string(),
+        };
+        badge_items.push(
+            text(creator_text).size(9).color(colors.text_muted).into()
+        );
+        let badges: Element<'_, Message> = if badge_items.is_empty() {
+            Element::from(Space::new().height(0))
+        } else {
+            row(badge_items).spacing(6).align_y(Alignment::Center).into()
+        };
+
+        // Compact card: [expand icon] [priority emoji] [content] [edit pencil]
+        let card = container(
+            row![
+                // Priority color bar (left accent)
+                container(Space::new().width(4).height(Length::Fill))
+                    .style(move |_| container::Style {
+                        background: Some(iced::Background::Color(priority_color)),
+                        ..Default::default()
+                    }),
+                // Main content area
+                column![
+                    row![
+                        // Expand toggle
+                        button(text(expand_icon).size(12).color(colors.text_secondary))
+                            .on_press(Message::TaskQueueAction(TaskQueueMsg::ToggleTaskDetail(task_id_toggle.clone())))
+                            .padding([4, 4])
+                            .style(|_theme, _status| button::Style {
+                                background: Some(iced::Background::Color(iced::Color::TRANSPARENT)),
+                                text_color: colors.text_muted,
+                                ..Default::default()
+                            }),
+                        // Priority emoji badge
+                        text(task.priority.emoji()).size(12),
+                        // Task content (clickable to expand)
+                        button(
+                            text(&task.content).size(12).color(colors.text_primary)
+                        )
+                        .on_press(Message::TaskQueueAction(TaskQueueMsg::ToggleTaskDetail(task_id_toggle)))
+                        .padding([4, 6])
+                        .width(Length::Fill)
+                        .style(|_theme, status| {
+                            let bg = match status {
+                                button::Status::Hovered => colors.hover,
+                                _ => iced::Color::TRANSPARENT,
+                            };
+                            button::Style {
+                                background: Some(iced::Background::Color(bg)),
+                                text_color: colors.text_primary,
+                                border: iced::Border { radius: 3.0.into(), ..Default::default() },
+                                ..Default::default()
+                            }
+                        }),
+                        // Edit toggle (pencil icon)
+                        button(text("✎").size(11).color(
+                            if is_editing { colors.accent }
+                            else { colors.text_muted }
+                        ))
+                        .on_press(Message::TaskQueueAction(TaskQueueMsg::ToggleEditMode(task_id_edit)))
+                        .padding([4, 5])
+                        .style(move |_theme, status| {
+                            let bg = match status {
+                                button::Status::Hovered => colors.hover,
+                                _ => iced::Color::TRANSPARENT,
+                            };
+                            button::Style {
+                                background: Some(iced::Background::Color(bg)),
+                                text_color: colors.text_muted,
+                                border: iced::Border { radius: 3.0.into(), ..Default::default() },
+                                ..Default::default()
+                            }
+                        }),
+                    ]
+                    .spacing(3)
+                    .align_y(Alignment::Center),
+                    // Badges row (project, subtask count, blocker count, notes indicator)
+                    badges,
+                ]
+                .spacing(2)
+                .padding([4, 6]),
+            ]
+            .spacing(0)
+        )
+        .style({
+            let surface = colors.surface;
+            move |_| container::Style {
+                background: Some(iced::Background::Color(surface)),
+                border: iced::Border { radius: 6.0.into(), ..Default::default() },
+                ..Default::default()
+            }
+        })
+        .width(Length::Fill);
+
+        // Always show subtasks in tree view (indented, CLI-style icons)
+        let task_subtasks: Vec<_> = state.task_queue_tasks.iter()
+            .filter(|t| t.parent_id.as_deref() == Some(task.id.as_str()))
+            .collect();
+        let subtask_tree: Vec<Element<'_, Message>> = task_subtasks.iter().map(|st| {
+            let st_icon = match st.status {
+                TaskStatus::Completed => "✓",
+                TaskStatus::InProgress => "→",
+                TaskStatus::Cancelled => "✗",
+                _ => "○",
+            };
+            let st_color = match st.status {
+                TaskStatus::Completed => colors.success,
+                TaskStatus::InProgress => colors.accent,
+                TaskStatus::Cancelled => colors.error,
+                _ => colors.text_muted,
+            };
+            let is_blocked = !st.blocked_by.is_empty();
+            let blocked_indicator = if is_blocked { " 🔒" } else { "" };
+            container(
+                row![
+                    Space::new().width(24),
+                    row![
+                        text(st_icon).size(11).color(st_color),
+                        text(format!("[{}]", &st.id[..8.min(st.id.len())])).size(9).color(colors.text_muted),
+                        text(format!("{}{}", st.content, blocked_indicator)).size(11).color(
+                            if st.status == TaskStatus::Completed { colors.text_muted }
+                            else { colors.text_secondary }
+                        ),
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
+                ]
+                .spacing(0)
+                .align_y(Alignment::Center)
+            )
+            .padding([2, 0])
+            .into()
+        }).collect();
+
+        // Edit controls (shown when editing)
+        let edit_section: Element<'_, Message> = if is_editing {
+            container(
+                row![
+                    iced::widget::pick_list(
+                        Priority::all(),
+                        Some(current_priority),
+                        move |new_priority| {
+                            Message::TaskQueueAction(TaskQueueMsg::ChangePriority(
+                                task_id_priority.clone(),
+                                new_priority,
+                            ))
+                        }
+                    )
+                    .text_size(11)
+                    .width(Length::Shrink),
+                    Space::new().width(Length::Fill),
+                    button(text("🗑 Delete").size(11).color(colors.error))
+                        .on_press(Message::TaskQueueAction(TaskQueueMsg::DeleteTask(task_id_delete)))
+                        .padding([5, 10])
+                        .style(|_theme, status| {
+                            let bg = match status {
+                                button::Status::Hovered => colors.error,
+                                _ => colors.error,
+                            };
+                            button::Style {
+                                background: Some(iced::Background::Color(bg)),
+                                text_color: colors.error,
+                                border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                                ..Default::default()
+                            }
+                        }),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+            )
+            .padding([6, 12])
+            .style({
+                let bg = colors.background;
+                move |_| container::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                    ..Default::default()
+                }
+            })
+            .width(Length::Fill)
+            .into()
+        } else {
+            Element::from(Space::new().height(0))
+        };
+
+        // Expanded detail section (shown when expanded)
+        let expanded_content: Element<'_, Message> = if is_expanded {
+            let mut detail_items: Vec<Element<'_, Message>> = Vec::new();
+
+            // Notes section
+            if let Some(notes) = task.notes.as_ref().filter(|n| !n.is_empty()) {
+                detail_items.push(
+                    container(
+                        column![
+                            text("NOTES").size(9).color(colors.text_muted),
+                            text(notes).size(11).color(colors.text_secondary),
+                        ].spacing(2)
+                    )
+                    .padding([6, 10])
+                    .style({
+                        let bg = colors.background;
+                        move |_| container::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                            ..Default::default()
+                        }
+                    })
+                    .width(Length::Fill)
+                    .into()
+                );
+            }
+
+            // Blocked-by / prerequisites section
+            if !task.blocked_by.is_empty() {
+                let blocker_elems: Vec<Element<'_, Message>> = task.blocked_by.iter()
+                    .map(|bid| {
+                        let blocker = state.task_queue_tasks.iter().find(|t| t.id == *bid);
+                        let label = blocker
+                            .map(|t| format!("[{}] {}", &t.id[..8.min(t.id.len())], t.content))
+                            .unwrap_or_else(|| format!("[{}...]", &bid[..8.min(bid.len())]));
+                        let status_icon = blocker.map_or("⊘", |b| if b.status == TaskStatus::Completed { "✓" } else { "⊘" });
+                        let status_color = blocker.map_or(
+                            colors.warning,
+                            |b| if b.status == TaskStatus::Completed { colors.success } else { colors.warning }
+                        );
+                        Element::from(
+                            row![
+                                text(status_icon).size(11).color(status_color),
+                                text(label).size(11).color(colors.text_secondary),
+                            ].spacing(4).align_y(Alignment::Center)
+                        )
+                    })
+                    .collect();
+                detail_items.push(
+                    container(
+                        column![
+                            text("BLOCKED BY").size(9).color(colors.warning),
+                        ]
+                        .push(column(blocker_elems).spacing(2))
+                        .spacing(3)
+                    )
+                    .padding([6, 10])
+                    .style({
+                        let bg = colors.background;
+                        move |_| container::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                            ..Default::default()
+                        }
+                    })
+                    .width(Length::Fill)
+                    .into()
+                );
+            }
+
+            // Add subtask input row
+            detail_items.push(
+                row![
+                    text_input("Add subtask...", &state.task_queue_subtask_input)
+                        .on_input(|s| Message::TaskQueueAction(TaskQueueMsg::SubtaskInputChanged(s)))
+                        .on_submit(Message::TaskQueueAction(TaskQueueMsg::SubmitSubtask(task_id_submit.clone())))
+                        .padding(6)
+                        .size(11)
+                        .width(Length::Fill),
+                    button(text("+").size(12))
+                        .on_press(Message::TaskQueueAction(TaskQueueMsg::SubmitSubtask(task_id_submit)))
+                        .padding([6, 10])
+                        .style(|_theme, status| {
+                            let bg = match status {
+                                button::Status::Hovered => colors.success,
+                                _ => colors.success,
+                            };
+                            button::Style {
+                                background: Some(iced::Background::Color(bg)),
+                                text_color: colors.text_primary,
+                                border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                                ..Default::default()
+                            }
+                        }),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into()
+            );
+
+            // Action buttons
+            detail_items.push(
+                row![
+                    button(
+                        row![
+                            text("▶").size(11),
+                            text("Start").size(11),
+                        ].spacing(4).align_y(Alignment::Center)
+                    )
+                    .on_press(Message::TaskQueueAction(TaskQueueMsg::StartTask(task_id_start)))
+                    .padding([6, 12])
+                    .style(|_theme, status| {
+                        let bg = match status {
+                            button::Status::Hovered => colors.accent_hover,
+                            _ => colors.accent,
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            text_color: colors.text_primary,
+                            border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                            ..Default::default()
+                        }
+                    }),
+                ]
+                .spacing(8)
+                .into()
+            );
+
+            container(
+                column(detail_items).spacing(6)
+            )
+            .padding([8, 10])
+            .style({
+                let bg = colors.background;
+                move |_| container::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    border: iced::Border { radius: 0.0.into(), ..Default::default() },
+                    ..Default::default()
+                }
+            })
+            .width(Length::Fill)
+            .into()
+        } else {
+            Element::from(Space::new().height(0))
+        };
+
+        let mut col_items: Vec<Element<'_, Message>> = vec![card.into()];
+        col_items.extend(subtask_tree);
+        col_items.push(edit_section);
+        col_items.push(expanded_content);
+        column(col_items).spacing(0).into()
+    }).collect();
+    
+    let pending_section: Element<'_, Message> = if pending_items.is_empty() {
+        text("All caught up!").size(12).color(colors.text_secondary).into()
+    } else {
+        scrollable(column(pending_items).spacing(4))
+            .height(Length::Fill)
+            .into()
+    };
+    
+    // New Task button (switches to NewTask tab)
+    let new_task_button = button(
+        row![
+            text("+").size(14),
+            text("New Task").size(12),
+        ].spacing(4).align_y(Alignment::Center)
+    )
+    .on_press(Message::TaskQueueAction(TaskQueueMsg::SwitchPanel(TaskQueuePanel::NewTask)))
+    .padding([8, 16])
+    .width(Length::Fill)
+    .style(|_theme, status| {
+        let bg = match status {
+            button::Status::Hovered => colors.accent_hover,
+            _ => colors.accent,
+        };
+        button::Style {
+            background: Some(iced::Background::Color(bg)),
+            text_color: colors.text_primary,
+            border: iced::Border { radius: 6.0.into(), ..Default::default() },
+            ..Default::default()
+        }
+    });
+    
+    // Stats
+    let stats = &state.task_queue_stats;
+    let stats_row = row![
+        text(format!("{} pending", stats.pending)).size(11).color(colors.text_secondary),
+        text("·").size(11).color(colors.text_secondary),
+        text(format!("{} active", stats.in_progress)).size(11).color(colors.text_secondary),
+        text("·").size(11).color(colors.text_secondary),
+        text(format!("{} done", stats.completed)).size(11).color(colors.text_secondary),
+    ].spacing(4);
+    
+    column![
+        current_section,
+        Space::new().height(16),
+        count_header,
+        Space::new().height(4),
+        text("PENDING").size(11).color(colors.text_secondary),
+        Space::new().height(4),
+        pending_section,
+        Space::new().height(12),
+        new_task_button,
+        Space::new().height(8),
+        stats_row,
+    ]
+    .spacing(0)
+    .into()
+}
+
+/// New Task creation panel for task queue window
+fn view_task_queue_new_task_panel(state: &ContinuumStudio) -> Element<'_, Message> {
+    use iced::widget::text_input;
+    use continuum_studio_iced::task_queue_client::Priority;
+    
+    let colors = &state.colors;
+    
+    // Header
+    let header = text("CREATE NEW TASK").size(13).color(colors.text_secondary);
+    
+    // Content/title field
+    let content_input = column![
+        text("Task Description").size(11).color(colors.text_secondary),
+        text_input("What needs to be done?", &state.new_task_content)
+            .on_input(|s| Message::TaskQueueAction(TaskQueueMsg::NewTaskContentChanged(s)))
+            .padding(10)
+            .size(14)
+            .width(Length::Fill),
+    ].spacing(4);
+    
+    // Priority picker
+    let priority_section = column![
+        text("Priority").size(11).color(colors.text_secondary),
+        iced::widget::pick_list(
+            Priority::all(),
+            Some(state.new_task_priority),
+            |p| Message::TaskQueueAction(TaskQueueMsg::NewTaskPriorityChanged(p))
+        )
+        .text_size(13)
+        .width(Length::Fill),
+    ].spacing(4);
+    
+    // Project field
+    let project_input = column![
+        text("Project (optional)").size(11).color(colors.text_secondary),
+        text_input("e.g. homelab, synapsix...", &state.new_task_project)
+            .on_input(|s| Message::TaskQueueAction(TaskQueueMsg::NewTaskProjectChanged(s)))
+            .padding(8)
+            .size(13)
+            .width(Length::Fill),
+    ].spacing(4);
+    
+    // Notes field
+    let notes_input = column![
+        text("Notes (optional)").size(11).color(colors.text_secondary),
+        text_input("Additional context or details...", &state.new_task_notes)
+            .on_input(|s| Message::TaskQueueAction(TaskQueueMsg::NewTaskNotesChanged(s)))
+            .padding(8)
+            .size(13)
+            .width(Length::Fill),
+    ].spacing(4);
+    
+    // Subtasks section
+    let subtask_items: Vec<Element<'_, Message>> = state.new_task_subtasks.iter().enumerate().map(|(i, st)| {
+        row![
+            text(format!("  ↳ {}", st)).size(12).color(colors.text_primary),
+            Space::new().width(Length::Fill),
+            button(text("✕").size(10))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::NewTaskRemoveSubtask(i)))
+                .padding([2, 6])
+                .style(|_theme, status| {
+                    let bg = match status {
+                        button::Status::Hovered => colors.error,
+                        _ => iced::Color::TRANSPARENT,
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: colors.text_muted,
+                        border: iced::Border { radius: 3.0.into(), ..Default::default() },
+                        ..Default::default()
+                    }
+                }),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center)
+        .into()
+    }).collect();
+    
+    let subtasks_section = column![
+        text("Subtasks").size(11).color(colors.text_secondary),
+        column(subtask_items).spacing(2),
+        row![
+            text_input("Add a subtask...", &state.new_task_subtask_input)
+                .on_input(|s| Message::TaskQueueAction(TaskQueueMsg::NewTaskSubtaskInputChanged(s)))
+                .on_submit(Message::TaskQueueAction(TaskQueueMsg::NewTaskAddSubtask))
+                .padding(8)
+                .size(12)
+                .width(Length::Fill),
+            button(text("+ Add").size(11))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::NewTaskAddSubtask))
+                .padding([8, 12])
+                .style(|_theme, status| {
+                    let bg = match status {
+                        button::Status::Hovered => colors.success,
+                        _ => colors.success,
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: colors.text_primary,
+                        border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                        ..Default::default()
+                    }
+                }),
+        ].spacing(6).align_y(Alignment::Center),
+    ].spacing(4);
+    
+    // Prerequisites section - show existing tasks as toggleable checkboxes
+    let available_prereqs: Vec<_> = state.task_queue_tasks.iter()
+        .filter(|t| t.status == continuum_studio_iced::task_queue_client::TaskStatus::Pending 
+             || t.status == continuum_studio_iced::task_queue_client::TaskStatus::InProgress
+             || t.status == continuum_studio_iced::task_queue_client::TaskStatus::Claimed)
+        .collect();
+    
+    let prereq_items: Vec<Element<'_, Message>> = available_prereqs.iter().map(|task| {
+        let is_selected = state.new_task_prereqs.contains(&task.id);
+        let task_id_clone = task.id.clone();
+        let check_color = if is_selected {
+            colors.accent
+        } else {
+            colors.text_muted
+        };
+        let check_text = if is_selected { "☑" } else { "☐" };
+        
+        button(
+            row![
+                text(check_text).size(14).color(check_color),
+                text(&task.content).size(12).color(colors.text_primary),
+            ].spacing(6).align_y(Alignment::Center)
+        )
+        .on_press(Message::TaskQueueAction(TaskQueueMsg::NewTaskTogglePrereq(task_id_clone)))
+        .padding([4, 8])
+        .width(Length::Fill)
+        .style(|_theme, status| {
+            let bg = match status {
+                button::Status::Hovered => colors.hover,
+                _ => iced::Color::TRANSPARENT,
+            };
+            button::Style {
+                background: Some(iced::Background::Color(bg)),
+                text_color: colors.text_primary,
+                border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                ..Default::default()
+            }
+        })
+        .into()
+    }).collect();
+    
+    let prereqs_section = if available_prereqs.is_empty() {
+        column![
+            text("Prerequisites (Blocked By)").size(11).color(colors.text_secondary),
+            text("No pending tasks to select as prerequisites").size(11).color(colors.text_muted),
+        ].spacing(4)
+    } else {
+        column![
+            text("Prerequisites (Blocked By)").size(11).color(colors.text_secondary),
+            text("Select tasks that must complete before this one:").size(10).color(colors.text_muted),
+            scrollable(column(prereq_items).spacing(2))
+                .height(Length::Shrink),
+        ].spacing(4)
+    };
+    
+    // Submit button
+    let can_submit = !state.new_task_content.trim().is_empty();
+    let submit_btn = button(
+        row![
+            text("✓").size(14),
+            text("Create Task").size(13),
+        ].spacing(6).align_y(Alignment::Center)
+    )
+    .padding([10, 20])
+    .width(Length::Fill)
+    .style(move |_theme, status| {
+        let bg = if !can_submit {
+            colors.surface
+        } else {
+            match status {
+                button::Status::Hovered => colors.accent_hover,
+                _ => colors.accent,
+            }
+        };
+        button::Style {
+            background: Some(iced::Background::Color(bg)),
+            text_color: if can_submit { colors.text_primary } else { colors.text_muted },
+            border: iced::Border { radius: 6.0.into(), ..Default::default() },
+            ..Default::default()
+        }
+    });
+    let submit_btn = if can_submit {
+        submit_btn.on_press(Message::TaskQueueAction(TaskQueueMsg::SubmitNewTask))
+    } else {
+        submit_btn
+    };
+    
+    // Cancel/back button
+    let back_btn = button(
+        text("← Back to Tasks").size(12).color(colors.text_secondary)
+    )
+    .on_press(Message::TaskQueueAction(TaskQueueMsg::SwitchPanel(TaskQueuePanel::Tasks)))
+    .padding([6, 12])
+    .style(|_theme, status| {
+        let bg = match status {
+            button::Status::Hovered => colors.hover,
+            _ => iced::Color::TRANSPARENT,
+        };
+        button::Style {
+            background: Some(iced::Background::Color(bg)),
+            text_color: colors.text_muted,
+            border: iced::Border { radius: 4.0.into(), ..Default::default() },
+            ..Default::default()
+        }
+    });
+    
+    scrollable(
+        column![
+            header,
+            Space::new().height(12),
+            content_input,
+            Space::new().height(12),
+            priority_section,
+            Space::new().height(12),
+            project_input,
+            Space::new().height(12),
+            notes_input,
+            Space::new().height(16),
+            subtasks_section,
+            Space::new().height(16),
+            prereqs_section,
+            Space::new().height(20),
+            submit_btn,
+            Space::new().height(8),
+            back_btn,
+            Space::new().height(16),
+        ]
+        .spacing(0)
+    )
+    .height(Length::Fill)
+    .into()
+}
+
+/// Agents panel content for task queue window
+fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message> {
+    let colors = &state.colors;
+    
+    // TODO: Integrate with actual agent tracking from task queue widget
+    // For now, show a placeholder with the agent monitoring concept
+    
+    let header = text("ACTIVE AGENTS").size(11).color(colors.text_secondary);
+    
+    // Placeholder: Show session agents (main Cursor sessions)
+    let session_agents_section = column![
+        text("Session Agents").size(13).color(colors.text_primary),
+        Space::new().height(4),
+        row![
+            container(text("●").size(10).color(iced::Color::from_rgb(0.3, 0.8, 0.3)))
+                .padding([2, 4]),
+            text("Continuum Studio").size(12).color(colors.text_secondary),
+        ].spacing(6),
+    ]
+    .spacing(4);
+    
+    // Placeholder: Sub-agents section
+    let sub_agents_section = column![
+        Space::new().height(16),
+        text("Sub-Agents").size(13).color(colors.text_primary),
+        Space::new().height(4),
+        text("No active sub-agents")
+            .size(12)
+            .color(colors.text_secondary),
+    ]
+    .spacing(4);
+    
+    // Info text
+    let info_text = text("Agent tracking integrates with Synapsix harness system")
+        .size(10)
+        .color(colors.text_secondary);
+    
+    column![
+        header,
+        Space::new().height(12),
+        session_agents_section,
+        sub_agents_section,
+        Space::new().height(Length::Fill),
+        info_text,
+    ]
+    .spacing(0)
+    .into()
+}
+
+/// History panel content for task queue window
+fn view_task_queue_history_panel(state: &ContinuumStudio) -> Element<'_, Message> {
+    use continuum_studio_iced::task_queue_client::TaskStatus;
+    
+    let colors = &state.colors;
+    
+    // Show completed AND cancelled tasks from the task list
+    let history_tasks: Vec<_> = state.task_queue_tasks.iter()
+        .filter(|t| t.status == TaskStatus::Completed || t.status == TaskStatus::Cancelled)
+        .collect();
+    
+    let completed_count = history_tasks.iter().filter(|t| t.status == TaskStatus::Completed).count();
+    let cancelled_count = history_tasks.iter().filter(|t| t.status == TaskStatus::Cancelled).count();
+    
+    let header_text = format!("HISTORY  ({} completed, {} cancelled)", completed_count, cancelled_count);
+    let header = text(header_text).size(11).color(colors.text_secondary);
+    
+    let bg_color = colors.background;
+    let surface_color = colors.surface;
+    
+    let history_items: Vec<Element<'_, Message>> = history_tasks.iter().map(|task| {
+        let (status_icon, status_color) = match task.status {
+            TaskStatus::Completed => ("✓", colors.success),
+            TaskStatus::Cancelled => ("✗", colors.error),
+            _ => ("?", colors.text_secondary),
+        };
+        
+        let creator_emoji = task.created_by.emoji();
+        
+        // Project badge if present
+        let project_text: String = task.project.clone().unwrap_or_default();
+        let has_project = !project_text.is_empty();
+        
+        // Build the task row
+        let mut task_row = row![
+            text(status_icon).size(12).color(status_color),
+            text(&task.content).size(12).color(colors.text_primary),
+        ].spacing(6).align_y(iced::Alignment::Center);
+        
+        // Add project badge
+        if has_project {
+            task_row = task_row.push(
+                container(
+                    text(format!("[{}]", project_text)).size(9).color(colors.accent)
+                )
+                .padding([1, 4])
+                .style(move |_| container::Style {
+                    background: Some(iced::Background::Color(iced::Color {
+                        a: 0.15,
+                        ..surface_color
+                    })),
+                    border: iced::Border::default().rounded(3),
+                    ..Default::default()
+                })
+            );
+        }
+        
+        // Add creator badge
+        task_row = task_row.push(text(creator_emoji).size(10));
+        
+        // Priority label
+        let priority_line = text(format!("{} priority", task.priority.label()))
+            .size(10)
+            .color(colors.text_secondary);
+        
+        container(
+            column![
+                task_row,
+                priority_line,
+            ]
+            .spacing(2)
+        )
+        .padding([8, 10])
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(bg_color)),
+            border: iced::Border::default().rounded(4),
+            ..Default::default()
+        })
+        .width(Length::Fill)
+        .into()
+    }).collect();
+    
+    let history_section: Element<'_, Message> = if history_items.is_empty() {
+        container(
+            text("No completed or cancelled tasks yet")
+                .size(12)
+                .color(colors.text_secondary)
+        )
+        .padding(20)
+        .center_x(Length::Fill)
+        .into()
+    } else {
+        scrollable(column(history_items).spacing(6))
+            .height(Length::Fill)
+            .into()
+    };
+    
+    // Stats summary from server
+    let stats = &state.task_queue_stats;
+    let stats_text = text(format!(
+        "Total: {} completed, {} cancelled  |  {} active tasks",
+        stats.completed, stats.cancelled, stats.pending + stats.in_progress
+    ))
+        .size(11)
+        .color(colors.text_secondary);
+    
+    column![
+        header,
+        Space::new().height(12),
+        history_section,
+        Space::new().height(8),
+        stats_text,
+    ]
+    .spacing(0)
+    .into()
+}
+
+/// Dialog panel detached window view
+fn view_dialog_panel_window(state: &ContinuumStudio) -> Element<'_, Message> {
+    let colors = &state.colors;
+    
+    // Connection status indicator
+    let (status_icon, status_text, status_color) = if state.dialog_daemon_connected {
+        ("●", "Connected", iced::Color::from_rgb(0.3, 0.8, 0.3))
+    } else {
+        ("○", "Disconnected", iced::Color::from_rgb(0.6, 0.6, 0.6))
+    };
+    
+    // Header with connection status
+    let header = row![
+        text("🔔 Dialog Panel").size(16).color(colors.text_primary),
+        Space::new().width(Length::Fill),
+        text(status_icon).size(10).color(status_color),
+        text(status_text).size(11).color(status_color),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    
+    // Hold mode toggle
+    let hold_mode_btn = button(
+        row![
+            text(if state.dialog_hold_mode { "⏸" } else { "▶" }).size(12),
+            text(if state.dialog_hold_mode { "Hold ON" } else { "Hold OFF" }).size(11),
+        ]
+        .spacing(4)
+    )
+    .on_press(Message::DialogAction(DialogMsg::ToggleHoldMode))
+    .padding([6, 12])
+    .style(move |_theme, status| {
+        let is_held = state.dialog_hold_mode;
+        let bg = match (status, is_held) {
+            (button::Status::Hovered, true) => iced::Color::from_rgb(0.6, 0.3, 0.2),
+            (_, true) => iced::Color::from_rgb(0.5, 0.25, 0.15),
+            (button::Status::Hovered, false) => iced::Color::from_rgb(0.25, 0.25, 0.28),
+            (_, false) => iced::Color::from_rgb(0.18, 0.18, 0.2),
+        };
+        button::Style {
+            background: Some(iced::Background::Color(bg)),
+            text_color: if is_held { iced::Color::WHITE } else { colors.text_secondary },
+            border: iced::Border { radius: 6.0.into(), ..Default::default() },
+            ..Default::default()
+        }
+    });
+    
+    // Content area - show waiting message or current dialog
+    let content_area: Element<'_, Message> = if state.dialog_daemon_connected {
+        column![
+            Space::new().height(Length::Fill),
+            text("Listening for dialog requests...").size(13).color(colors.text_secondary),
+            Space::new().height(8),
+            text("Dialogs from AI agents will appear here").size(11).color(colors.text_secondary),
+            Space::new().height(16),
+            hold_mode_btn,
+            Space::new().height(Length::Fill),
+        ]
+        .spacing(4)
+        .align_x(Alignment::Center)
+        .into()
+    } else {
+        column![
+            Space::new().height(Length::Fill),
+            text("Dialog daemon not connected").size(13).color(colors.text_secondary),
+            Space::new().height(8),
+            text("Run: systemctl --user start synapsix-dialog").size(10).color(colors.text_secondary),
+            Space::new().height(Length::Fill),
+        ]
+        .spacing(4)
+        .align_x(Alignment::Center)
+        .into()
+    };
+    
+    // Footer with instructions
+    let footer = row![
+        text("💡").size(11),
+        text("Use synapsix-dialog-cli to send test dialogs").size(10).color(colors.text_secondary),
+    ]
+    .spacing(6);
+    
+    container(
+        column![
+            header,
+            Space::new().height(12),
+            container(content_area)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill),
+            Space::new().height(8),
+            footer,
+        ]
+        .padding(16)
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(0.1, 0.1, 0.1))),
+        ..Default::default()
+    })
+    .into()
+}
+
+/// Tiled panel window view (Task Queue + Dialog side by side)
+fn view_tiled_panel_window(state: &ContinuumStudio, vertical_split: bool, split_ratio: f32) -> Element<'_, Message> {
+    let task_queue = view_task_queue_window(state);
+    let dialog_panel = view_dialog_panel_window(state);
+    
+    // Calculate sizes based on split ratio
+    let first_length = Length::FillPortion((split_ratio * 100.0) as u16);
+    let second_length = Length::FillPortion(((1.0 - split_ratio) * 100.0) as u16);
+    
+    let content: Element<'_, Message> = if vertical_split {
+        row![
+            container(task_queue).width(first_length).height(Length::Fill),
+            container(dialog_panel).width(second_length).height(Length::Fill),
+        ]
+        .spacing(2)
+        .into()
+    } else {
+        column![
+            container(task_queue).width(Length::Fill).height(first_length),
+            container(dialog_panel).width(Length::Fill).height(second_length),
+        ]
+        .spacing(2)
+        .into()
+    };
+    
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
 /// Sidebar navigation with COSMIC-inspired styling
-fn sidebar(state: &ContinuumStudio) -> Element<Message> {
+fn sidebar(state: &ContinuumStudio) -> Element<'_, Message> {
     let current = state.current_view;
 
     let (status_text, status_color) = match state.connection_state {
@@ -1602,7 +3814,7 @@ fn nav_button(label: &'static str, view: View, current: View) -> Element<'static
 }
 
 /// Dashboard view with cards
-fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
+fn view_dashboard(state: &ContinuumStudio) -> Element<'_, Message> {
     let colors = &state.colors;
     
     // Status card
@@ -1658,6 +3870,9 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
         .spacing(4),
     );
 
+    // Task Queue card
+    let task_queue_card = view_task_queue_card(state);
+
     column![
         text("Dashboard").size(26),
         text("Welcome back to Continuum Studio")
@@ -1665,8 +3880,257 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<Message> {
             .color(colors.text_secondary),
         Space::new().height(24),
         row![status_card, Space::new().width(16), actions_card,],
+        Space::new().height(16),
+        task_queue_card,
     ]
     .spacing(8)
+    .into()
+}
+
+/// Task Queue card for dashboard
+fn view_task_queue_card(state: &ContinuumStudio) -> Element<'_, Message> {
+    use continuum_studio_iced::task_queue_client::{TaskStatus};
+    
+    let colors = &state.colors;
+    let success = colors.success;
+    let text_primary = colors.text_primary;
+    let text_muted = colors.text_muted;
+    let hover = colors.hover;
+    let accent = colors.accent;
+    
+    // Header with connection status and pop-out button
+    let header = row![
+        text("📋 Task Queue").size(14).color(colors.text_secondary),
+        Space::new().width(Length::Fill),
+        // Pop-out button
+        button(text("↗").size(12).color(colors.text_secondary))
+            .on_press(Message::PopOutTaskQueue)
+            .padding([2, 6])
+            .style(move |_theme, status| {
+                let bg = match status {
+                    button::Status::Hovered => hover,
+                    _ => iced::Color::TRANSPARENT,
+                };
+                button::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    text_color: colors.text_secondary,
+                    border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                    ..Default::default()
+                }
+            }),
+        text(if state.task_queue_connected { "●" } else { "○" })
+            .size(10)
+            .color(if state.task_queue_connected { success } else { text_muted }),
+        text(format!("{} pending", state.task_queue_stats.pending))
+            .size(11)
+            .color(colors.text_secondary),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    // Current task section
+    let current_section: Element<'_, Message> = if let Some(task) = &state.task_queue_current {
+        use continuum_studio_iced::Creator;
+        
+        let creator_text: String = match task.created_by {
+            Creator::User => "👤 user".to_string(),
+            Creator::Agent | Creator::Cli => task.agent_id.as_ref()
+                .map(|id| format!("🤖 {}", id))
+                .unwrap_or_else(|| if task.created_by == Creator::Cli { "🤖 cli".to_string() } else { "🤖 agent".to_string() }),
+            Creator::Unknown => "❓ unknown".to_string(),
+        };
+        let content_text = task.content.clone();
+        
+        // Subtask progress for dashboard
+        let subtasks: Vec<_> = state.task_queue_tasks.iter()
+            .filter(|t| t.parent_id.as_deref() == Some(task.id.as_str()))
+            .collect();
+        let total_subtasks = subtasks.len();
+        let completed_subtasks = subtasks.iter()
+            .filter(|t| t.status == TaskStatus::Completed)
+            .count();
+        
+        let progress_elem: Element<'_, Message> = if total_subtasks > 0 {
+            row![
+                text(format!("{}/{}", completed_subtasks, total_subtasks)).size(10).color(success),
+                text("subtasks").size(10).color(colors.text_muted),
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center)
+            .into()
+        } else {
+            Element::from(Space::new().height(0))
+        };
+        
+        column![
+            row![
+                text("▶").size(12).color(accent),
+                text(content_text)
+                    .size(13)
+                    .color(colors.text_primary),
+            ]
+            .spacing(6),
+            row![
+                text(task.priority.emoji()).size(11),
+                text(task.priority.label())
+                    .size(11)
+                    .color(colors.text_secondary),
+                text("·").size(11).color(colors.text_secondary),
+                text(creator_text)
+                    .size(11)
+                    .color(colors.text_secondary),
+            ]
+            .spacing(4),
+            progress_elem,
+            button(text("Complete ✓").size(11))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::CompleteCurrentTask))
+                .padding([4, 8])
+                .style(move |_theme, status| {
+                    let bg = match status {
+                        button::Status::Hovered => iced::Color { r: (success.r * 1.2).min(1.0), g: (success.g * 1.2).min(1.0), b: (success.b * 1.2).min(1.0), a: 1.0 },
+                        _ => success,
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: text_primary,
+                        border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                        ..Default::default()
+                    }
+                }),
+        ]
+        .spacing(6)
+        .into()
+    } else {
+        text("No current task")
+            .size(12)
+            .color(colors.text_muted)
+            .into()
+    };
+
+    // Pending tasks list (max 5)
+    let pending_tasks: Vec<_> = state.task_queue_tasks.iter()
+        .filter(|t| t.status == TaskStatus::Pending || t.status == TaskStatus::Claimed)
+        .take(5)
+        .collect();
+
+    let pending_section: Element<'_, Message> = if pending_tasks.is_empty() {
+        text("No pending tasks 🎉")
+            .size(12)
+            .color(colors.text_secondary)
+            .into()
+    } else {
+        let items: Vec<Element<'_, Message>> = pending_tasks.iter().map(|task| {
+            let task_id = task.id.clone();
+            
+            row![
+                // Priority emoji
+                text(task.priority.emoji()).size(11),
+                // Task content
+                button(
+                    text(truncate(&task.content, 40))
+                        .size(12)
+                        .color(colors.text_primary)
+                )
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::StartTask(task_id)))
+                .padding([4, 6])
+                .width(Length::Fill)
+                .style(move |_theme, status| {
+                    let bg = match status {
+                        button::Status::Hovered => hover,
+                        _ => iced::Color::TRANSPARENT,
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: text_primary,
+                        border: iced::Border { radius: 3.0.into(), ..Default::default() },
+                        ..Default::default()
+                    }
+                }),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+        }).collect();
+        
+        column(items).spacing(4).into()
+    };
+
+    // View All button - switch to task queue view
+    let view_all_btn = button(
+        row![
+            text("View All Tasks →").size(11).color(colors.text_secondary),
+        ].align_y(Alignment::Center)
+    )
+    .on_press(Message::PopOutTaskQueue)
+    .padding([6, 10])
+    .width(Length::Fill)
+    .style(move |_theme, status| {
+        let bg = match status {
+            button::Status::Hovered => hover,
+            _ => iced::Color::TRANSPARENT,
+        };
+        button::Style {
+            background: Some(iced::Background::Color(bg)),
+            text_color: text_primary,
+            border: iced::Border { 
+                radius: 4.0.into(), 
+                width: 1.0, 
+                color: iced::Color { r: hover.r, g: hover.g, b: hover.b, a: 0.5 },
+            },
+            ..Default::default()
+        }
+    });
+
+    // Stats footer
+    let stats = &state.task_queue_stats;
+    let stats_footer = row![
+        text(format!("📊 {} total", stats.total))
+            .size(10)
+            .color(colors.text_secondary),
+        text("·").size(10).color(colors.text_secondary),
+        text(format!("{} in progress", stats.in_progress))
+            .size(10)
+            .color(colors.text_secondary),
+        text("·").size(10).color(colors.text_secondary),
+        text(format!("{} completed", stats.completed))
+            .size(10)
+            .color(colors.text_secondary),
+    ]
+    .spacing(4);
+
+    // Build the card
+    container(
+        column![
+            header,
+            Space::new().height(8),
+            current_section,
+            Space::new().height(12),
+            text("PENDING").size(10).color(colors.text_secondary),
+            Space::new().height(4),
+            pending_section,
+            Space::new().height(12),
+            view_all_btn,
+            Space::new().height(8),
+            stats_footer,
+        ]
+        .spacing(0)
+        .padding(16)
+    )
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.15))),
+        border: iced::Border {
+            radius: 12.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.22, 0.22, 0.22),
+        },
+        shadow: iced::Shadow {
+            color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.2),
+            offset: iced::Vector::new(0.0, 2.0),
+            blur_radius: 8.0,
+        },
+        ..container::Style::default()
+    })
     .into()
 }
 
@@ -1749,7 +4213,7 @@ fn styled_button(label: &'static str, is_primary: bool) -> button::Button<'stati
 }
 
 /// Unified Cursor view with tabbed navigation
-fn view_cursor(state: &ContinuumStudio) -> Element<Message> {
+fn view_cursor(state: &ContinuumStudio) -> Element<'_, Message> {
     let current_tab = state.cursor_tab;
     
     // Tab bar
@@ -1829,7 +4293,7 @@ fn view_cursor(state: &ContinuumStudio) -> Element<Message> {
 }
 
 /// Cursor version management view with improved organization
-fn view_cursor_versions(state: &ContinuumStudio) -> Element<Message> {
+fn view_cursor_versions(state: &ContinuumStudio) -> Element<'_, Message> {
     // Count versions by category
     let total = state.versions.len();
     let installed_count = state.versions.iter().filter(|v| v.installed).count();
@@ -2455,7 +4919,7 @@ fn tiny_button(icon: &'static str) -> button::Button<'static, Message> {
 }
 
 /// Workspaces view with tracked projects
-fn view_workspaces(state: &ContinuumStudio) -> Element<Message> {
+fn view_workspaces(state: &ContinuumStudio) -> Element<'_, Message> {
     let workspace_rows: Vec<Element<Message>> = state
         .workspaces
         .iter()
@@ -2668,7 +5132,7 @@ fn workspace_file_row(ws: &CodeWorkspaceFile) -> Element<'static, Message> {
 }
 
 /// Create a workspace row with git info
-fn workspace_row(workspace: &Workspace) -> Element<Message> {
+fn workspace_row(workspace: &Workspace) -> Element<'_, Message> {
     let id = workspace.id.clone();
     let id2 = workspace.id.clone();
     let name = workspace.name.clone();
@@ -2773,7 +5237,7 @@ fn workspace_row(workspace: &Workspace) -> Element<Message> {
 }
 
 /// Auth Management view - profiles and version auth status
-fn view_auth(state: &ContinuumStudio) -> Element<Message> {
+fn view_auth(state: &ContinuumStudio) -> Element<'_, Message> {
     // Header with title and refresh button
     let header = row![
         text("🔑 Auth Management").size(24),
@@ -3026,7 +5490,7 @@ fn view_auth(state: &ContinuumStudio) -> Element<Message> {
 }
 
 /// Sessions view with detected running Cursor instances and real-time monitoring
-fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
+fn view_sessions(state: &ContinuumStudio) -> Element<'_, Message> {
     // Header card with stats and controls
     let header_card = container(
         row![
@@ -3350,7 +5814,7 @@ fn view_sessions(state: &ContinuumStudio) -> Element<Message> {
 }
 
 /// Services view - manage backend services
-fn view_services(state: &ContinuumStudio) -> Element<Message> {
+fn view_services(state: &ContinuumStudio) -> Element<'_, Message> {
     // Header card
     let header_card = container(
         row![
@@ -3716,7 +6180,7 @@ fn dual_command_row<'a>(label: &'a str, bash_cmd: &'a str, nu_cmd: &'a str) -> E
 }
 
 /// Storage management view - shows disk usage and cleanup options for Cursor versions
-fn view_storage(state: &ContinuumStudio) -> Element<Message> {
+fn view_storage(state: &ContinuumStudio) -> Element<'_, Message> {
     let install_type = InstallationType::detect();
 
     // Header card
@@ -4068,7 +6532,7 @@ fn view_storage(state: &ContinuumStudio) -> Element<Message> {
 }
 
 /// Logs view for in-app debugging
-fn view_logs(state: &ContinuumStudio) -> Element<Message> {
+fn view_logs(state: &ContinuumStudio) -> Element<'_, Message> {
     let entries = state.log_buffer.entries_filtered(state.log_filter);
     
     let log_rows: Vec<Element<Message>> = entries
@@ -4216,7 +6680,7 @@ fn log_filter_button(label: &'static str, level: log::Level, current: log::Level
 }
 
 /// Settings view with polished card-based layout
-fn view_settings(state: &ContinuumStudio) -> Element<Message> {
+fn view_settings(state: &ContinuumStudio) -> Element<'_, Message> {
     // Header
     let header = column![
         text("Settings").size(26),
@@ -4908,7 +7372,7 @@ fn handle_chat_pipeline_message(state: &mut ContinuumStudio, msg: ChatPipelineMs
 // Chat Pipeline View
 // ---------------------------------------------------------------------------
 
-fn view_chat_pipeline(state: &ContinuumStudio) -> Element<Message> {
+fn view_chat_pipeline(state: &ContinuumStudio) -> Element<'_, Message> {
     let cp = &state.chat_pipeline;
 
     // Sub-navigation tabs
@@ -6071,8 +8535,456 @@ fn handle_subagent_message(state: &mut ContinuumStudio, msg: SubagentMessage) ->
     }
 }
 
+// ============================================================================
+// Multi-Window Helpers
+// ============================================================================
+
+/// Handle opening a new window
+fn handle_open_window(_state: &mut ContinuumStudio, window_type: WindowType) -> Task<Message> {
+    let size = match window_type {
+        WindowType::Main => iced::Size::new(1280.0, 800.0),
+        WindowType::TaskQueue => iced::Size::new(400.0, 600.0),
+        WindowType::DialogPanel => iced::Size::new(500.0, 400.0),
+        WindowType::TiledPanel => iced::Size::new(800.0, 600.0),
+    };
+    
+    let settings = window::Settings {
+        size,
+        resizable: true,
+        decorations: true,
+        ..Default::default()
+    };
+    
+    let (id, open_task) = window::open(settings);
+    
+    Task::batch([
+        open_task.discard(),
+        Task::done(Message::WindowOpened(id, window_type)),
+    ])
+}
+
+/// Handle task queue messages
+fn handle_task_queue_message(state: &mut ContinuumStudio, msg: TaskQueueMsg) -> Task<Message> {
+    use continuum_studio_iced::task_queue_client::Priority;
+    
+    match msg {
+        TaskQueueMsg::Connected => {
+            state.task_queue_connected = true;
+            log::info!("Task queue WebSocket connected");
+            Task::none()
+        }
+        TaskQueueMsg::Disconnected => {
+            state.task_queue_connected = false;
+            log::warn!("Task queue WebSocket disconnected");
+            Task::none()
+        }
+        TaskQueueMsg::InitialState { tasks, stats, current_task } => {
+            let total = tasks.len();
+            let completed = tasks.iter().filter(|t| t.status == continuum_studio_iced::task_queue_client::TaskStatus::Completed).count();
+            let cancelled = tasks.iter().filter(|t| t.status == continuum_studio_iced::task_queue_client::TaskStatus::Cancelled).count();
+            let active = total - completed - cancelled;
+            eprintln!("[task_queue_update] InitialState: {} total ({} active, {} completed, {} cancelled)", total, active, completed, cancelled);
+            log::info!("Task queue loaded: {} total ({} active, {} completed, {} cancelled)", total, active, completed, cancelled);
+            state.task_queue_tasks = tasks;
+            state.task_queue_stats = stats;
+            state.task_queue_current = current_task;
+            Task::none()
+        }
+        TaskQueueMsg::TaskAdded(task) => {
+            state.task_queue_tasks.push(task);
+            update_task_queue_stats(state);
+            Task::none()
+        }
+        TaskQueueMsg::TaskUpdated(task) => {
+            if let Some(existing) = state.task_queue_tasks.iter_mut().find(|t| t.id == task.id) {
+                *existing = task.clone();
+            }
+            // Update current task if it was the updated one
+            if state.task_queue_current.as_ref().map(|t| &t.id) == Some(&task.id) {
+                state.task_queue_current = Some(task);
+            }
+            update_task_queue_stats(state);
+            Task::none()
+        }
+        TaskQueueMsg::TaskStarted(task) => {
+            if let Some(existing) = state.task_queue_tasks.iter_mut().find(|t| t.id == task.id) {
+                *existing = task.clone();
+            }
+            state.task_queue_current = Some(task);
+            update_task_queue_stats(state);
+            Task::none()
+        }
+        TaskQueueMsg::TaskCompleted(task) => {
+            if let Some(existing) = state.task_queue_tasks.iter_mut().find(|t| t.id == task.id) {
+                *existing = task.clone();
+            }
+            if state.task_queue_current.as_ref().map(|t| &t.id) == Some(&task.id) {
+                state.task_queue_current = None;
+            }
+            update_task_queue_stats(state);
+            Task::none()
+        }
+        TaskQueueMsg::TaskRemoved(id) => {
+            state.task_queue_tasks.retain(|t| t.id != id);
+            if state.task_queue_current.as_ref().map(|t| &t.id) == Some(&id) {
+                state.task_queue_current = None;
+            }
+            update_task_queue_stats(state);
+            Task::none()
+        }
+        TaskQueueMsg::Error(e) => {
+            log::error!("Task queue error: {}", e);
+            Task::none()
+        }
+        TaskQueueMsg::QuickAddChanged(text) => {
+            state.task_queue_input = text;
+            Task::none()
+        }
+        TaskQueueMsg::QuickAddSubmit => {
+            if state.task_queue_input.trim().is_empty() {
+                return Task::none();
+            }
+            let content = state.task_queue_input.clone();
+            state.task_queue_input.clear();
+            let http = state.task_queue_http.clone();
+            
+            Task::perform(
+                async move {
+                    http.add_task(&content, Priority::Medium, None).await
+                },
+                |result| Message::TaskQueueAction(TaskQueueMsg::ApiResult(result))
+            )
+        }
+        TaskQueueMsg::StartTask(task_id) => {
+            let http = state.task_queue_http.clone();
+            let agent_id = "continuum-studio".to_string();
+            
+            Task::perform(
+                async move {
+                    http.start_task(&task_id, &agent_id).await
+                },
+                |result| Message::TaskQueueAction(TaskQueueMsg::ApiResult(result))
+            )
+        }
+        TaskQueueMsg::CompleteCurrentTask => {
+            if let Some(current) = &state.task_queue_current {
+                let task_id = current.id.clone();
+                let http = state.task_queue_http.clone();
+                
+                Task::perform(
+                    async move {
+                        http.complete_task(&task_id, None).await
+                    },
+                    |result| Message::TaskQueueAction(TaskQueueMsg::ApiResult(result))
+                )
+            } else {
+                Task::none()
+            }
+        }
+        TaskQueueMsg::ChangePriority(task_id, priority) => {
+            let http = state.task_queue_http.clone();
+
+            Task::perform(
+                async move {
+                    http.update_priority(&task_id, priority).await
+                },
+                |result| Message::TaskQueueAction(TaskQueueMsg::ApiResult(result))
+            )
+        }
+        TaskQueueMsg::DeleteTask(task_id) => {
+            let http = state.task_queue_http.clone();
+            let task_id_owned = task_id.clone();
+
+            Task::perform(
+                async move {
+                    http.delete_task(&task_id).await
+                },
+                move |result| {
+                    match result {
+                        Ok(()) => Message::TaskQueueAction(TaskQueueMsg::TaskDeleted(task_id_owned)),
+                        Err(e) => Message::TaskQueueAction(TaskQueueMsg::ApiResult(Err(e))),
+                    }
+                }
+            )
+        }
+        TaskQueueMsg::CancelTask(task_id) => {
+            let http = state.task_queue_http.clone();
+
+            Task::perform(
+                async move {
+                    http.cancel_task(&task_id, Some("Cancelled from UI")).await
+                },
+                |result| Message::TaskQueueAction(TaskQueueMsg::ApiResult(result))
+            )
+        }
+        TaskQueueMsg::ToggleTaskDetail(task_id) => {
+            if state.task_queue_selected.as_ref() == Some(&task_id) {
+                state.task_queue_selected = None;
+            } else {
+                state.task_queue_selected = Some(task_id);
+            }
+            state.task_queue_editing = None;
+            state.task_queue_subtask_input.clear();
+            Task::none()
+        }
+        TaskQueueMsg::ToggleEditMode(task_id) => {
+            if state.task_queue_editing.as_ref() == Some(&task_id) {
+                state.task_queue_editing = None;
+            } else {
+                state.task_queue_editing = Some(task_id);
+            }
+            Task::none()
+        }
+        TaskQueueMsg::SubtaskInputChanged(text) => {
+            state.task_queue_subtask_input = text;
+            Task::none()
+        }
+        TaskQueueMsg::SubmitSubtask(parent_id) => {
+            let content = state.task_queue_subtask_input.clone();
+            if content.trim().is_empty() {
+                return Task::none();
+            }
+            state.task_queue_subtask_input.clear();
+            let http = state.task_queue_http.clone();
+            Task::perform(
+                async move {
+                    http.add_subtask(&parent_id, &content, continuum_studio_iced::task_queue_client::Priority::Medium).await
+                },
+                |result| Message::TaskQueueAction(TaskQueueMsg::SubtaskAdded(result))
+            )
+        }
+        TaskQueueMsg::SubtaskAdded(result) => {
+            match result {
+                Ok(_task) => {
+                    // Task will come through WebSocket, no need to manually add
+                }
+                Err(e) => {
+                    log::error!("Failed to add subtask: {}", e);
+                }
+            }
+            Task::none()
+        }
+        TaskQueueMsg::NewTaskContentChanged(text) => {
+            state.new_task_content = text;
+            Task::none()
+        }
+        TaskQueueMsg::NewTaskPriorityChanged(priority) => {
+            state.new_task_priority = priority;
+            Task::none()
+        }
+        TaskQueueMsg::NewTaskProjectChanged(text) => {
+            state.new_task_project = text;
+            Task::none()
+        }
+        TaskQueueMsg::NewTaskNotesChanged(text) => {
+            state.new_task_notes = text;
+            Task::none()
+        }
+        TaskQueueMsg::NewTaskSubtaskInputChanged(text) => {
+            state.new_task_subtask_input = text;
+            Task::none()
+        }
+        TaskQueueMsg::NewTaskAddSubtask => {
+            let text = state.new_task_subtask_input.trim().to_string();
+            if !text.is_empty() {
+                state.new_task_subtasks.push(text);
+                state.new_task_subtask_input.clear();
+            }
+            Task::none()
+        }
+        TaskQueueMsg::NewTaskRemoveSubtask(index) => {
+            if index < state.new_task_subtasks.len() {
+                state.new_task_subtasks.remove(index);
+            }
+            Task::none()
+        }
+        TaskQueueMsg::NewTaskTogglePrereq(task_id) => {
+            if let Some(pos) = state.new_task_prereqs.iter().position(|id| id == &task_id) {
+                state.new_task_prereqs.remove(pos);
+            } else {
+                state.new_task_prereqs.push(task_id);
+            }
+            Task::none()
+        }
+        TaskQueueMsg::SubmitNewTask => {
+            let content = state.new_task_content.trim().to_string();
+            if content.is_empty() {
+                return Task::none();
+            }
+            let priority = state.new_task_priority;
+            let project = if state.new_task_project.trim().is_empty() { None } else { Some(state.new_task_project.clone()) };
+            let notes = state.new_task_notes.clone();
+            let subtasks = state.new_task_subtasks.clone();
+            let prereqs = state.new_task_prereqs.clone();
+            
+            // Clear the form
+            state.new_task_content.clear();
+            state.new_task_priority = continuum_studio_iced::task_queue_client::Priority::Medium;
+            state.new_task_project.clear();
+            state.new_task_notes.clear();
+            state.new_task_subtasks.clear();
+            state.new_task_subtask_input.clear();
+            state.new_task_prereqs.clear();
+            
+            // Switch back to tasks panel
+            state.task_queue_panel = TaskQueuePanel::Tasks;
+            
+            let http = state.task_queue_http.clone();
+            
+            Task::perform(
+                async move {
+                    // Create the main task
+                    let task = http.add_task(&content, priority, project.as_deref()).await?;
+                    
+                    // Update notes if provided
+                    if !notes.trim().is_empty() {
+                        let _ = http.update_notes(&task.id, &notes).await;
+                    }
+                    
+                    // Add subtasks
+                    for subtask_content in &subtasks {
+                        let _ = http.add_subtask(&task.id, subtask_content, continuum_studio_iced::task_queue_client::Priority::Medium).await;
+                    }
+                    
+                    // Add prereqs/blockers
+                    for prereq_id in &prereqs {
+                        let _ = http.add_blocker(&task.id, prereq_id).await;
+                    }
+                    
+                    Ok(task)
+                },
+                |result| Message::TaskQueueAction(TaskQueueMsg::NewTaskCreated(result))
+            )
+        }
+        TaskQueueMsg::NewTaskCreated(result) => {
+            match result {
+                Ok(task) => {
+                    log::info!("New task created: {} - {}", task.id, task.content);
+                }
+                Err(e) => {
+                    log::error!("Failed to create task: {}", e);
+                }
+            }
+            Task::none()
+        }
+        TaskQueueMsg::TaskDeleted(task_id) => {
+            state.task_queue_tasks.retain(|t| t.id != task_id);
+            if state.task_queue_current.as_ref().map(|t| &t.id) == Some(&task_id) {
+                state.task_queue_current = None;
+            }
+            update_task_queue_stats(state);
+            Task::none()
+        }
+        TaskQueueMsg::ApiResult(result) => {
+            match result {
+                Ok(task) => {
+                    // Update local state with returned task
+                    if let Some(existing) = state.task_queue_tasks.iter_mut().find(|t| t.id == task.id) {
+                        *existing = task.clone();
+                    } else {
+                        state.task_queue_tasks.push(task.clone());
+                    }
+                    // Update current task if applicable
+                    if task.status == continuum_studio_iced::task_queue_client::TaskStatus::InProgress {
+                        state.task_queue_current = Some(task);
+                    } else if state.task_queue_current.as_ref().map(|t| &t.id) == Some(&task.id) {
+                        state.task_queue_current = None;
+                    }
+                    update_task_queue_stats(state);
+                }
+                Err(e) => {
+                    log::error!("Task queue API error: {}", e);
+                }
+            }
+            Task::none()
+        }
+        TaskQueueMsg::SwitchPanel(panel) => {
+            state.task_queue_panel = panel;
+            log::debug!("Switched task queue panel to {:?}", state.task_queue_panel);
+            Task::none()
+        }
+        TaskQueueMsg::SetLayout(layout) => {
+            state.task_queue_layout = layout;
+            log::debug!("Switched task queue layout to {:?}", state.task_queue_layout);
+            Task::none()
+        }
+        TaskQueueMsg::SetSecondaryPanel(panel) => {
+            state.task_queue_secondary_panel = panel;
+            log::debug!("Set secondary panel to {:?}", state.task_queue_secondary_panel);
+            Task::none()
+        }
+    }
+}
+
+/// Update task queue stats from current tasks
+fn update_task_queue_stats(state: &mut ContinuumStudio) {
+    use continuum_studio_iced::task_queue_client::TaskStatus;
+    
+    state.task_queue_stats.total = state.task_queue_tasks.len();
+    state.task_queue_stats.pending = state.task_queue_tasks.iter()
+        .filter(|t| t.status == TaskStatus::Pending || t.status == TaskStatus::Claimed)
+        .count();
+    state.task_queue_stats.in_progress = state.task_queue_tasks.iter()
+        .filter(|t| t.status == TaskStatus::InProgress)
+        .count();
+    state.task_queue_stats.completed = state.task_queue_tasks.iter()
+        .filter(|t| t.status == TaskStatus::Completed)
+        .count();
+}
+
+/// Handle dialog daemon messages
+fn handle_dialog_message(state: &mut ContinuumStudio, msg: DialogMsg) -> Task<Message> {
+    match msg {
+        DialogMsg::DaemonConnected(connected) => {
+            state.dialog_daemon_connected = connected;
+            if connected {
+                log::info!("Dialog daemon connected");
+            } else {
+                log::warn!("Dialog daemon disconnected");
+            }
+            Task::none()
+        }
+        DialogMsg::HoldModeChanged(enabled) => {
+            state.dialog_hold_mode = enabled;
+            log::info!("Dialog hold mode: {}", enabled);
+            Task::none()
+        }
+        DialogMsg::ToggleHoldMode => {
+            // Fire-and-forget async toggle
+            Task::perform(
+                async {
+                    use continuum_studio_iced::dialog_client::DialogClient;
+                    let mut client = DialogClient::new();
+                    if client.connect().await.is_ok() {
+                        match client.toggle_hold_mode().await {
+                            Ok(new_state) => Some(new_state),
+                            Err(e) => {
+                                log::error!("Failed to toggle hold mode: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                },
+                |result| {
+                    if let Some(enabled) = result {
+                        Message::DialogAction(DialogMsg::HoldModeChanged(enabled))
+                    } else {
+                        Message::DialogAction(DialogMsg::Error("Failed to toggle hold mode".into()))
+                    }
+                }
+            )
+        }
+        DialogMsg::Error(e) => {
+            log::error!("Dialog daemon error: {}", e);
+            Task::none()
+        }
+    }
+}
+
 /// View for sub-agent monitoring panel
-fn view_subagents(state: &ContinuumStudio) -> Element<Message> {
+fn view_subagents(state: &ContinuumStudio) -> Element<'_, Message> {
     let subagent = &state.subagent_state;
     
     // Header
@@ -6367,4 +9279,753 @@ fn subagent_command_row(cmd: &CommandRecord) -> Element<'static, Message> {
 /// Create a command row widget that always shows the codename (for sub-agent sections)
 fn subagent_command_row_with_codename(cmd: &CommandRecord) -> Element<'static, Message> {
     subagent_command_row_impl(cmd, true)
+}
+
+// ============================================================================
+// Activity Feed Handler & View
+// ============================================================================
+
+fn handle_activity_feed_message(state: &mut ContinuumStudio, msg: ActivityFeedMsg) -> Task<Message> {
+    match msg {
+        ActivityFeedMsg::Connected => {
+            state.activity_feed_connected = true;
+            log::info!("Activity feed connected");
+            Task::none()
+        }
+        ActivityFeedMsg::Disconnected => {
+            state.activity_feed_connected = false;
+            log::warn!("Activity feed disconnected");
+            Task::none()
+        }
+        ActivityFeedMsg::InitialState { entries, stats } => {
+            state.activity_feed_entries = entries;
+            state.activity_feed_stats = stats;
+            Task::none()
+        }
+        ActivityFeedMsg::EntryAdded(entry) => {
+            // Insert at front (most recent first)
+            state.activity_feed_entries.insert(0, entry);
+            // Cap at 200 entries in the UI
+            if state.activity_feed_entries.len() > 200 {
+                state.activity_feed_entries.truncate(200);
+            }
+            Task::none()
+        }
+        ActivityFeedMsg::Error(e) => {
+            log::error!("Activity feed error: {}", e);
+            Task::none()
+        }
+        ActivityFeedMsg::ToggleEntry(id) => {
+            if state.activity_feed_expanded.as_deref() == Some(&id) {
+                state.activity_feed_expanded = None;
+            } else {
+                state.activity_feed_expanded = Some(id);
+            }
+            Task::none()
+        }
+        ActivityFeedMsg::SetSourceFilter(filter) => {
+            state.activity_feed_source_filter = filter;
+            Task::none()
+        }
+        ActivityFeedMsg::TriggerGitPoll => {
+            let http = state.activity_feed_http.clone();
+            Task::perform(
+                async move { http.trigger_git_poll().await },
+                |result| Message::ActivityFeedAction(ActivityFeedMsg::GitPollDone(result)),
+            )
+        }
+        ActivityFeedMsg::GitPollDone(_result) => {
+            Task::none()
+        }
+        ActivityFeedMsg::StatsRefreshed(result) => {
+            if let Ok(stats) = result {
+                state.activity_feed_stats = stats;
+            }
+            Task::none()
+        }
+    }
+}
+
+/// View: Activity Feed panel - NL timeline of all system activity
+fn view_activity_feed_panel(state: &ContinuumStudio) -> Element<'_, Message> {
+    let colors = &state.colors;
+    
+    // Header with connection status and filter controls
+    let conn_indicator = if state.activity_feed_connected {
+        text("● Connected").size(11).color(colors.success)
+    } else {
+        text("○ Disconnected").size(11).color(colors.text_muted)
+    };
+    
+    let stats_text = text(format!(
+        "{} entries", state.activity_feed_entries.len()
+    ))
+    .size(11)
+    .color(colors.text_secondary);
+    
+    // Source filter buttons
+    let filter_label = match &state.activity_feed_source_filter {
+        None => "All".to_string(),
+        Some(s) => format!("{} {}", s.icon(), s.label()),
+    };
+    
+    let active_filter = state.activity_feed_source_filter.clone();
+    let all_bg = if active_filter.is_none() { colors.accent } else { colors.surface };
+    let git_bg = if active_filter == Some(FeedSource::Git) { colors.accent } else { colors.surface };
+    let agent_bg = if active_filter == Some(FeedSource::Agent) { colors.accent } else { colors.surface };
+    let task_bg = if active_filter == Some(FeedSource::TaskQueue) { colors.accent } else { colors.surface };
+    let nesy_bg = if active_filter == Some(FeedSource::Nesy) { colors.accent } else { colors.surface };
+    
+    let filter_row = row![
+        button(text("All").size(10).color(colors.text_primary))
+            .on_press(Message::ActivityFeedAction(ActivityFeedMsg::SetSourceFilter(None)))
+            .padding([3, 8])
+            .style(move |_theme, _status| button::Style {
+                background: Some(iced::Background::Color(all_bg)),
+                text_color: colors.text_primary,
+                border: iced::Border::default().rounded(3),
+                ..Default::default()
+            }),
+        button(text("🔀 Git").size(10).color(colors.text_primary))
+            .on_press(Message::ActivityFeedAction(ActivityFeedMsg::SetSourceFilter(Some(FeedSource::Git))))
+            .padding([3, 8])
+            .style(move |_theme, _status| button::Style {
+                background: Some(iced::Background::Color(git_bg)),
+                text_color: colors.text_primary,
+                border: iced::Border::default().rounded(3),
+                ..Default::default()
+            }),
+        button(text("🤖 Agent").size(10).color(colors.text_primary))
+            .on_press(Message::ActivityFeedAction(ActivityFeedMsg::SetSourceFilter(Some(FeedSource::Agent))))
+            .padding([3, 8])
+            .style(move |_theme, _status| button::Style {
+                background: Some(iced::Background::Color(agent_bg)),
+                text_color: colors.text_primary,
+                border: iced::Border::default().rounded(3),
+                ..Default::default()
+            }),
+        button(text("📋 Task").size(10).color(colors.text_primary))
+            .on_press(Message::ActivityFeedAction(ActivityFeedMsg::SetSourceFilter(Some(FeedSource::TaskQueue))))
+            .padding([3, 8])
+            .style(move |_theme, _status| button::Style {
+                background: Some(iced::Background::Color(task_bg)),
+                text_color: colors.text_primary,
+                border: iced::Border::default().rounded(3),
+                ..Default::default()
+            }),
+        button(text("🧮 NeSy").size(10).color(colors.text_primary))
+            .on_press(Message::ActivityFeedAction(ActivityFeedMsg::SetSourceFilter(Some(FeedSource::Nesy))))
+            .padding([3, 8])
+            .style(move |_theme, _status| button::Style {
+                background: Some(iced::Background::Color(nesy_bg)),
+                text_color: colors.text_primary,
+                border: iced::Border::default().rounded(3),
+                ..Default::default()
+            }),
+    ]
+    .spacing(3);
+    
+    let header = column![
+        row![
+            text("Activity Feed").size(14).color(colors.text_primary),
+            Space::new().width(Length::Fill),
+            stats_text,
+            Space::new().width(8),
+            conn_indicator,
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        filter_row,
+    ]
+    .spacing(6);
+    
+    // Filter entries by source
+    let filtered_entries: Vec<&FeedEntry> = state.activity_feed_entries.iter()
+        .filter(|e| {
+            match &state.activity_feed_source_filter {
+                None => true,
+                Some(filter) => &e.source == filter,
+            }
+        })
+        .take(100) // Limit rendered entries
+        .collect();
+    
+    // Build timeline entries
+    let timeline: Element<'_, Message> = if filtered_entries.is_empty() {
+        container(
+            text(if state.activity_feed_connected {
+                "No activity yet. Events will appear as agents work."
+            } else {
+                "Connecting to Activity Feed..."
+            })
+            .size(12)
+            .color(colors.text_muted),
+        )
+        .padding(20)
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .into()
+    } else {
+        let mut entries_col = column![].spacing(2);
+        
+        for entry in &filtered_entries {
+            let is_expanded = state.activity_feed_expanded.as_deref() == Some(&entry.id);
+            let entry_id = entry.id.clone();
+            
+            // Source icon + timestamp
+            let ts_display = format_feed_timestamp(&entry.timestamp);
+            
+            let source_color = match entry.source {
+                FeedSource::Git => iced::Color::from_rgb(0.4, 0.8, 0.4),
+                FeedSource::Agent => iced::Color::from_rgb(0.4, 0.6, 1.0),
+                FeedSource::TaskQueue => iced::Color::from_rgb(1.0, 0.7, 0.3),
+                FeedSource::Nesy => iced::Color::from_rgb(0.8, 0.4, 1.0),
+                FeedSource::System => colors.text_secondary,
+                FeedSource::FileChange => iced::Color::from_rgb(0.6, 0.8, 0.6),
+                FeedSource::Unknown => colors.text_muted,
+            };
+            
+            let header_row = row![
+                text(entry.source.icon()).size(12),
+                text(ts_display).size(10).color(colors.text_muted),
+                text(entry.title.clone()).size(11).color(source_color),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center);
+            
+            let mut entry_content = column![header_row].spacing(2);
+            
+            // Show body when expanded
+            if is_expanded {
+                if let Some(body) = &entry.body {
+                    entry_content = entry_content.push(
+                        container(
+                            text(body).size(11).color(colors.text_secondary)
+                        )
+                        .padding(iced::Padding { top: 2.0, right: 0.0, bottom: 2.0, left: 22.0 })
+                    );
+                }
+                
+                // Show links
+                if !entry.links.is_empty() {
+                    let links_text: String = entry.links.iter()
+                        .map(|l| format!("[{}]", l.label))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    entry_content = entry_content.push(
+                        text(links_text).size(10).color(colors.accent)
+                    );
+                }
+                
+                // Show tags
+                if !entry.tags.is_empty() {
+                    let tags_text = entry.tags.iter()
+                        .map(|t| format!("#{}", t))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    entry_content = entry_content.push(
+                        container(
+                            text(tags_text).size(9).color(colors.text_muted)
+                        )
+                        .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 22.0 })
+                    );
+                }
+                
+                // Show agent_id and project if present
+                let mut meta_parts = Vec::new();
+                if let Some(agent) = &entry.agent_id {
+                    meta_parts.push(format!("agent: {}", agent));
+                }
+                if let Some(project) = &entry.project {
+                    meta_parts.push(format!("project: {}", project));
+                }
+                if let Some(repo) = &entry.repo {
+                    meta_parts.push(format!("repo: {}", repo));
+                }
+                if !meta_parts.is_empty() {
+                    entry_content = entry_content.push(
+                        container(
+                            text(meta_parts.join(" | ")).size(9).color(colors.text_muted)
+                        )
+                        .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 22.0 })
+                    );
+                }
+            }
+            
+            let entry_border = if is_expanded { source_color } else { colors.border_subtle };
+            
+            let entry_widget = button(
+                container(entry_content)
+                    .padding([4, 8])
+                    .width(Length::Fill)
+                    .style(move |_theme| container::Style {
+                        background: Some(iced::Background::Color(if is_expanded {
+                            iced::Color::from_rgba(source_color.r, source_color.g, source_color.b, 0.05)
+                        } else {
+                            iced::Color::TRANSPARENT
+                        })),
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            width: if is_expanded { 1.0 } else { 0.0 },
+                            color: entry_border,
+                        },
+                        ..container::Style::default()
+                    })
+            )
+            .on_press(Message::ActivityFeedAction(ActivityFeedMsg::ToggleEntry(entry_id)))
+            .padding(0)
+            .width(Length::Fill)
+            .style(move |_theme, _status| button::Style {
+                background: None,
+                text_color: iced::Color::WHITE,
+                border: iced::Border::default(),
+                shadow: iced::Shadow::default(),
+                snap: false,
+            });
+            
+            entries_col = entries_col.push(entry_widget);
+        }
+        
+        scrollable(entries_col)
+            .height(Length::Fill)
+            .into()
+    };
+    
+    // Git poll button
+    let git_poll_btn = button(
+        text("🔄 Poll Git").size(11).color(colors.text_primary)
+    )
+    .on_press(Message::ActivityFeedAction(ActivityFeedMsg::TriggerGitPoll))
+    .padding([4, 10])
+    .style(move |_theme, _status| button::Style {
+        background: Some(iced::Background::Color(colors.surface)),
+        text_color: colors.text_primary,
+        border: iced::Border::default().rounded(4),
+        ..Default::default()
+    });
+    
+    let footer = row![
+        git_poll_btn,
+        Space::new().width(Length::Fill),
+        text(format!("Filter: {}", filter_label)).size(10).color(colors.text_muted),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    
+    column![
+        header,
+        timeline,
+        footer,
+    ]
+    .spacing(8)
+    .padding(8)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
+/// Helper: Format a feed timestamp for display
+fn format_feed_timestamp(ts: &str) -> String {
+    // Try to parse ISO 8601 and show relative/short time
+    // For now, just show the time portion
+    if let Some(t_pos) = ts.find('T') {
+        let time_part = &ts[t_pos + 1..];
+        if let Some(dot_pos) = time_part.find('.') {
+            return time_part[..dot_pos].to_string();
+        }
+        if let Some(z_pos) = time_part.find('Z') {
+            return time_part[..z_pos].to_string();
+        }
+        return time_part.to_string();
+    }
+    ts.to_string()
+}
+
+// ============================================================================
+// Zone Manager Handler
+// ============================================================================
+
+fn apply_zone_layout(state: &ContinuumStudio) -> Task<Message> {
+    let layout = state.zone_manager.calculate_layout();
+    let mut tasks: Vec<Task<Message>> = Vec::new();
+    
+    if let Some(main_id) = state.main_window_id {
+        tasks.push(window::move_to::<Message>(
+            main_id,
+            iced::Point::new(layout.main.x as f32, layout.main.y as f32),
+        ));
+        tasks.push(window::resize::<Message>(
+            main_id,
+            iced::Size::new(layout.main.width as f32, layout.main.height as f32),
+        ));
+    }
+    
+    // Find task queue window
+    if let Some((&tq_id, _)) = state.windows.iter()
+        .find(|(_, ws)| ws.window_type == WindowType::TaskQueue)
+    {
+        tasks.push(window::move_to::<Message>(
+            tq_id,
+            iced::Point::new(layout.side_panel.x as f32, layout.side_panel.y as f32),
+        ));
+        tasks.push(window::resize::<Message>(
+            tq_id,
+            iced::Size::new(layout.side_panel.width as f32, layout.side_panel.height as f32),
+        ));
+    }
+    
+    Task::batch(tasks)
+}
+
+fn handle_zone_message(state: &mut ContinuumStudio, msg: ZoneMsg) -> Task<Message> {
+    match msg {
+        ZoneMsg::SetLayout(layout) => {
+            state.zone_manager.set_layout(layout);
+            // Export snapshot for Phosphor
+            state.zone_manager.export_snapshot();
+            // Immediately apply the new layout
+            apply_zone_layout(state)
+        }
+        ZoneMsg::ApplyLayout => {
+            // Export snapshot for Phosphor
+            state.zone_manager.export_snapshot();
+            apply_zone_layout(state)
+        }
+    }
+}
+
+// ============================================================================
+// Agent Coordinator Handler & View
+// ============================================================================
+
+fn handle_coordinator_message(state: &mut ContinuumStudio, msg: CoordinatorMsg) -> Task<Message> {
+    match msg {
+        CoordinatorMsg::AgentsLoaded(result) => {
+            match result {
+                Ok(agents) => {
+                    state.coordinator_agents = agents;
+                }
+                Err(e) => {
+                    // Silently handle - coordinator might not be running
+                    log::debug!("Coordinator agents poll: {}", e);
+                }
+            }
+            Task::none()
+        }
+        CoordinatorMsg::ConflictsLoaded(result) => {
+            match result {
+                Ok(conflicts) => {
+                    state.coordinator_conflicts = conflicts;
+                }
+                Err(e) => {
+                    log::debug!("Coordinator conflicts poll: {}", e);
+                }
+            }
+            Task::none()
+        }
+        CoordinatorMsg::SelectAgent(id) => {
+            state.coordinator_selected = Some(id);
+            Task::none()
+        }
+        CoordinatorMsg::DeselectAgent => {
+            state.coordinator_selected = None;
+            Task::none()
+        }
+        CoordinatorMsg::Refresh => {
+            let http = state.coordinator_http.clone();
+            Task::batch([
+                Task::perform(
+                    {
+                        let http = http.clone();
+                        async move { http.list_agents().await }
+                    },
+                    |result| Message::CoordinatorAction(CoordinatorMsg::AgentsLoaded(result)),
+                ),
+                Task::perform(
+                    async move { http.get_conflicts().await },
+                    |result| Message::CoordinatorAction(CoordinatorMsg::ConflictsLoaded(result)),
+                ),
+            ])
+        }
+        CoordinatorMsg::ResolveConflict(conflict_id) => {
+            let http = state.coordinator_http.clone();
+            Task::perform(
+                async move {
+                    http.resolve_conflict(&conflict_id, "Resolved via UI").await
+                },
+                |result| Message::CoordinatorAction(CoordinatorMsg::ConflictResolved(result)),
+            )
+        }
+        CoordinatorMsg::ConflictResolved(result) => {
+            if let Err(e) = result {
+                log::error!("Failed to resolve conflict: {}", e);
+            }
+            // Trigger refresh
+            handle_coordinator_message(state, CoordinatorMsg::Refresh)
+        }
+        CoordinatorMsg::Error(e) => {
+            log::error!("Coordinator error: {}", e);
+            Task::none()
+        }
+    }
+}
+
+/// View: Agent Coordinator panel - shows registered agents, conflicts, and coordination status
+fn view_coordinator_panel(state: &ContinuumStudio) -> Element<'_, Message> {
+    let colors = &state.colors;
+    
+    let active_count = state.coordinator_agents.iter()
+        .filter(|a| matches!(a.status, CoordAgentStatus::Active))
+        .count();
+    let total_count = state.coordinator_agents.len();
+    let conflict_count = state.coordinator_conflicts.iter()
+        .filter(|c| !c.resolved)
+        .count();
+    
+    // Header with summary stats
+    let header = row![
+        text("Agent Coordinator").size(14).color(colors.text_primary),
+        Space::new().width(Length::Fill),
+        text(format!("{}/{} active", active_count, total_count))
+            .size(11)
+            .color(if active_count > 0 { colors.success } else { colors.text_muted }),
+        Space::new().width(8),
+        text(format!("{} conflicts", conflict_count))
+            .size(11)
+            .color(if conflict_count > 0 { colors.warning } else { colors.text_muted }),
+        Space::new().width(8),
+        button(text("🔄").size(12))
+            .on_press(Message::CoordinatorAction(CoordinatorMsg::Refresh))
+            .padding([2, 6])
+            .style(move |_theme, _status| button::Style {
+                background: Some(iced::Background::Color(colors.surface)),
+                text_color: colors.text_primary,
+                border: iced::Border::default().rounded(4),
+                ..Default::default()
+            }),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    
+    // Conflicts section (shown first if any unresolved)
+    let conflicts_section: Element<'_, Message> = if conflict_count > 0 {
+        let mut conflict_col = column![
+            text("⚠️ Active Conflicts").size(12).color(colors.warning),
+        ]
+        .spacing(4);
+        
+        for conflict in state.coordinator_conflicts.iter().filter(|c| !c.resolved) {
+            let conflict_id = conflict.id.clone();
+            let conflict_row = row![
+                text(format!("⚡ {}", conflict.conflict_type)).size(11).color(colors.warning),
+                text(format!("on: {}", conflict.resource)).size(10).color(colors.text_secondary),
+                text(format!("agents: {}", conflict.agents.join(", "))).size(10).color(colors.text_muted),
+                Space::new().width(Length::Fill),
+                button(text("Resolve").size(10).color(colors.text_primary))
+                    .on_press(Message::CoordinatorAction(CoordinatorMsg::ResolveConflict(conflict_id)))
+                    .padding([2, 8])
+                    .style(move |_theme, _status| button::Style {
+                        background: Some(iced::Background::Color(colors.warning)),
+                        text_color: colors.text_primary,
+                        border: iced::Border::default().rounded(3),
+                        ..Default::default()
+                    }),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center);
+            
+            conflict_col = conflict_col.push(
+                container(conflict_row)
+                    .padding([4, 8])
+                    .width(Length::Fill)
+                    .style(move |_theme| container::Style {
+                        background: Some(iced::Background::Color(
+                            iced::Color::from_rgba(1.0, 0.8, 0.0, 0.05)
+                        )),
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            width: 1.0,
+                            color: iced::Color::from_rgba(1.0, 0.8, 0.0, 0.2),
+                        },
+                        ..container::Style::default()
+                    })
+            );
+        }
+        
+        conflict_col.into()
+    } else {
+        Space::new().height(0).into()
+    };
+    
+    // Agents list
+    let agents_section: Element<'_, Message> = if state.coordinator_agents.is_empty() {
+        container(
+            text("No agents registered. Agents will appear when they connect.")
+                .size(12)
+                .color(colors.text_muted),
+        )
+        .padding(20)
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .into()
+    } else {
+        let mut agents_col = column![
+            text("Registered Agents").size(12).color(colors.text_secondary),
+        ]
+        .spacing(3);
+        
+        for agent in &state.coordinator_agents {
+            let is_selected = state.coordinator_selected.as_deref() == Some(&agent.id);
+            let agent_id = agent.id.clone();
+            
+            let status_color = match agent.status {
+                CoordAgentStatus::Active => colors.success,
+                CoordAgentStatus::Idle => iced::Color::from_rgb(0.9, 0.8, 0.2),
+                CoordAgentStatus::Waiting => iced::Color::from_rgb(0.3, 0.5, 1.0),
+                CoordAgentStatus::Completed => colors.text_muted,
+                CoordAgentStatus::Disconnected => colors.error,
+                CoordAgentStatus::Unknown => colors.text_muted,
+            };
+            
+            // Agent summary row
+            let mut agent_row = row![
+                text(agent.status.icon()).size(12),
+                text(agent.agent_type.icon()).size(12),
+                text(&agent.id).size(11).color(colors.text_primary),
+                text(format!("({})", agent.status.label())).size(10).color(status_color),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center);
+            
+            // Show focus area if set
+            if let Some(desc) = &agent.focus.description {
+                agent_row = agent_row.push(
+                    text(format!("→ {}", desc)).size(10).color(colors.text_secondary)
+                );
+            }
+            
+            // Show current task if any
+            if let Some(task_id) = &agent.current_task_id {
+                agent_row = agent_row.push(
+                    text(format!("📋 {}", task_id)).size(10).color(colors.accent)
+                );
+            }
+            
+            let mut agent_content = column![agent_row].spacing(2);
+            
+            // Show details when selected
+            if is_selected {
+                // File claims
+                if !agent.file_claims.is_empty() {
+                    let claims_text = agent.file_claims.iter()
+                        .take(5)
+                        .map(|f| format!("  📄 {}", f))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let remaining = agent.file_claims.len().saturating_sub(5);
+                    let claims_display = if remaining > 0 {
+                        format!("{}\n  ... +{} more", claims_text, remaining)
+                    } else {
+                        claims_text
+                    };
+                    agent_content = agent_content.push(
+                        container(
+                            text(format!("File claims:\n{}", claims_display))
+                                .size(10)
+                                .color(colors.text_secondary)
+                        )
+                        .padding(iced::Padding { top: 2.0, right: 0.0, bottom: 2.0, left: 22.0 })
+                    );
+                }
+                
+                // Focus repos/files
+                if !agent.focus.repos.is_empty() {
+                    agent_content = agent_content.push(
+                        container(
+                            text(format!("Repos: {}", agent.focus.repos.join(", ")))
+                                .size(10)
+                                .color(colors.text_secondary)
+                        )
+                        .padding(iced::Padding { top: 2.0, right: 0.0, bottom: 0.0, left: 22.0 })
+                    );
+                }
+                if !agent.focus.files.is_empty() {
+                    let files_display: Vec<_> = agent.focus.files.iter().take(5).collect();
+                    agent_content = agent_content.push(
+                        container(
+                            text(format!("Files: {}", files_display.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(", ")))
+                                .size(10)
+                                .color(colors.text_secondary)
+                        )
+                        .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 22.0 })
+                    );
+                }
+                
+                // Capabilities
+                if !agent.capabilities.is_empty() {
+                    agent_content = agent_content.push(
+                        container(
+                            text(format!("Capabilities: {}", agent.capabilities.join(", ")))
+                                .size(10)
+                                .color(colors.text_muted)
+                        )
+                        .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 2.0, left: 22.0 })
+                    );
+                }
+            }
+            
+            let sel_bg = if is_selected {
+                iced::Color::from_rgba(status_color.r, status_color.g, status_color.b, 0.06)
+            } else {
+                iced::Color::TRANSPARENT
+            };
+            let sel_border = if is_selected { status_color } else { colors.border_subtle };
+            
+            let agent_widget = button(
+                container(agent_content)
+                    .padding([4, 8])
+                    .width(Length::Fill)
+                    .style(move |_theme| container::Style {
+                        background: Some(iced::Background::Color(sel_bg)),
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            width: if is_selected { 1.0 } else { 0.0 },
+                            color: sel_border,
+                        },
+                        ..container::Style::default()
+                    })
+            )
+            .on_press(if is_selected {
+                Message::CoordinatorAction(CoordinatorMsg::DeselectAgent)
+            } else {
+                Message::CoordinatorAction(CoordinatorMsg::SelectAgent(agent_id))
+            })
+            .padding(0)
+            .width(Length::Fill)
+            .style(move |_theme, _status| button::Style {
+                background: None,
+                text_color: iced::Color::WHITE,
+                border: iced::Border::default(),
+                shadow: iced::Shadow::default(),
+                snap: false,
+            });
+            
+            agents_col = agents_col.push(agent_widget);
+        }
+        
+        scrollable(agents_col)
+            .height(Length::Fill)
+            .into()
+    };
+    
+    column![
+        header,
+        conflicts_section,
+        agents_section,
+    ]
+    .spacing(8)
+    .padding(8)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }

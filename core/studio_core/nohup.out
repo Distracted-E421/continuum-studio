@@ -1,55 +1,22 @@
-=CRASH REPORT==== 6-Feb-2026::10:08:01.392156 ===
-  crasher:
-    initial call: prim_tty:reader/1
-    pid: <0.69.0>
-    registered_name: user_drv_reader
-    exception error: no case clause matching {error,{read,ebadf}}
-      in function  prim_tty:reader_loop/6 (prim_tty.erl, line 531)
-    ancestors: [user_drv,<0.65.0>,kernel_sup,<0.47.0>]
-    message_queue_len: 0
-    messages: []
-    links: [<0.66.0>]
-    dictionary: []
-    trap_exit: false
-    status: running
-    heap_size: 233
-    stack_size: 29
-    reductions: 47
-  neighbours:
 
-=ERROR REPORT==== 6-Feb-2026::10:08:01.401539 ===
-Reader crashed ({{case_clause,{error,{read,ebadf}}},
-                 [{prim_tty,reader_loop,6,[{file,"prim_tty.erl"},{line,531}]},
-                  {proc_lib,init_p_do_apply,3,
-                            [{file,"proc_lib.erl"},{line,329}]}]})
-Failed to write log message to stdout, trying stderr
-=CRASH REPORT==== 6-Feb-2026::10:08:01.392156 ===
-  crasher:
-    initial call: prim_tty:reader/1
-    pid: <0.69.0>
-    registered_name: user_drv_reader
-    exception error: no case clause matching {error,{read,ebadf}}
-      in function  prim_tty:reader_loop/6 (prim_tty.erl, line 531)
-    ancestors: [user_drv,<0.65.0>,kernel_sup,<0.47.0>]
-    message_queue_len: 0
-    messages: []
-    links: [<0.66.0>]
-    dictionary: []
-    trap_exit: false
-    status: running
-    heap_size: 233
-    stack_size: 29
-    reductions: 47
-  neighbours:
+11:50:04.304 [info] Starting Continuum Studio Core v0.1.0
 
-Failed to write log message to stdout, trying stderr
-=ERROR REPORT==== 6-Feb-2026::10:08:01.401539 ===
-Reader crashed ({{case_clause,{error,{read,ebadf}}},
-                 [{prim_tty,reader_loop,6,[{file,"prim_tty.erl"},{line,531}]},
-                  {proc_lib,init_p_do_apply,3,
-                            [{file,"proc_lib.erl"},{line,329}]}]})
-Failed to write log message to stdout, trying stderr
-=INFO REPORT==== 6-Feb-2026::14:39:07.172558 ===
-SIGTERM received - shutting down
+11:50:04.322 [info] State manager initialized
 
-{exit,{shutdown,{gen_server,call,[application_controller,{start_application,elixir,temporary},infinity]}},[{gen_server,call,3,[{file,"gen_server.erl"},{line,1222}]},{application_controller,call,2,[{file,"application_controller.erl"},{line,509}]},{application,enqueue_or_start_app,6,[{file,"application.erl"},{line,419}]},{application,enqueue_or_start,6,[{file,"application.erl"},{line,384}]},{application,ensure_all_started,3,[{file,"application.erl"},{line,359}]},{elixir,start_cli,0,[{file,"elixir.erl"},{line,195}]},{init,start_it,1,[]},{init,start_em,1,[]}]}
+11:50:04.322 [info] Event bus initialized
+
+11:50:04.322 [info] Harness registry initialized
+
+11:50:04.334 [debug] Loaded versions from: /home/e421/continuum-studio/core/studio_core/_build/prod/lib/studio_core/priv/cursor-versions.json
+
+11:50:04.337 [info] VersionRegistry started: 106 versions, platform: linux-x64
+
+11:50:04.338 [info] AuthManager started
+
+11:50:04.350 [info] WorkspaceTracker started: 0 workspaces
+
+11:50:04.353 [info] Socket acceptor listening on /tmp/continuum-studio.sock
+
+11:50:04.356 [debug] No state snapshot found (first run or clean start)
+
+11:50:04.356 [debug] Clean start (no snapshot to restore)

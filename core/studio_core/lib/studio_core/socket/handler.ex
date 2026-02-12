@@ -26,11 +26,15 @@ defmodule StudioCore.Socket.Handler do
   require Logger
 
   # All known commands - ensures atoms exist at compile time
+  # IMPORTANT: Every handle_command/3 clause must have its command listed here
   @known_commands ~w(
-    ping harness_start harness_stop state_set state_get agent_message
-    versions_list versions_download versions_run versions_refresh
-    versions_uninstall versions_batch_uninstall versions_disk_usage versions_disk_usage_all
-    workspaces_list workspaces_refresh
+    ping subscribe harness_start harness_stop state_set state_get agent_message
+    versions_list versions_installed versions_download versions_run versions_refresh
+    versions_stats versions_uninstall versions_batch_uninstall
+    versions_disk_usage versions_disk_usage_all
+    workspaces_list workspaces_register workspaces_get workspaces_refresh
+    workspaces_record_version workspaces_toggle_pinned workspaces_refresh_git
+    workspaces_delete
     auth_version_status auth_list_statuses auth_all_statuses
     auth_extract auth_apply auth_list_profiles
   )a
@@ -73,6 +77,34 @@ defmodule StudioCore.Socket.Handler do
     
     {:noreply, new_state}
   end
+
+  @impl true
+  def handle_info({:tcp_closed, _socket}, state) do
+    Logger.debug("Client closed connection")
+    {:stop, :normal, state}
+  end
+
+  @impl true
+  def handle_info({:tcp_error, _socket, reason}, state) do
+    Logger.warning("Socket error: #{inspect(reason)}")
+    {:stop, reason, state}
+  end
+
+  @impl true
+  def handle_info({:event, event}, state) do
+    # Forward events from EventBus to the UI
+    send_event(state.socket, event)
+    {:noreply, state}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    StudioCore.EventBus.unsubscribe()
+    if state.socket, do: :gen_tcp.close(state.socket)
+    :ok
+  end
+
+  # Private helpers for TCP message processing
   
   # Split buffer into complete lines and remaining partial
   defp split_lines(buffer) do
@@ -158,32 +190,6 @@ defmodule StudioCore.Socket.Handler do
   defp atomize_keys(list) when is_list(list), do: Enum.map(list, &atomize_keys/1)
   defp atomize_keys(value), do: value
 
-  @impl true
-  def handle_info({:tcp_closed, _socket}, state) do
-    Logger.debug("Client closed connection")
-    {:stop, :normal, state}
-  end
-
-  @impl true
-  def handle_info({:tcp_error, _socket, reason}, state) do
-    Logger.warning("Socket error: #{inspect(reason)}")
-    {:stop, reason, state}
-  end
-
-  @impl true
-  def handle_info({:event, event}, state) do
-    # Forward events from EventBus to the UI
-    send_event(state.socket, event)
-    {:noreply, state}
-  end
-
-  @impl true
-  def terminate(_reason, state) do
-    StudioCore.EventBus.unsubscribe()
-    if state.socket, do: :gen_tcp.close(state.socket)
-    :ok
-  end
-
   # Command handlers
 
   defp handle_command(:harness_start, %{type: type}, state) do
@@ -217,7 +223,7 @@ defmodule StudioCore.Socket.Handler do
     {:noreply, state}
   end
 
-  defp handle_command(:agent_message, %{text: text, provider: provider}, state) do
+  defp handle_command(:agent_message, %{text: text, provider: _provider}, state) do
     Logger.info("Agent message from UI: #{String.slice(text, 0, 50)}...")
 
     # This would forward to the agent bridge
