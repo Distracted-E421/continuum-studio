@@ -1681,13 +1681,55 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                         |_| Message::CursorAction(CursorMessage::RefreshVersions),
                     );
                 } else {
-                    // Core not connected: fallback to cursor-versions CLI (same as "our versions cli")
-                    log::warn!("Core not connected; launching Cursor via cursor-versions CLI");
-                    if let Err(e) = std::process::Command::new("cursor-versions")
-                        .args(["run", &version])
-                        .spawn()
-                    {
-                        log::error!("Failed to launch via CLI: {}", e);
+                    // Core not connected: fallback to direct AppImage launch
+                    log::warn!("Core not connected; launching Cursor directly");
+                    
+                    // Try to find the AppImage for this version
+                    let versions_dir = dirs::home_dir()
+                        .map(|h| h.join(".cursor-versions"))
+                        .unwrap_or_default();
+                    
+                    // Find matching AppImage (or latest if version is "latest")
+                    let appimage = if version == "latest" {
+                        // Find newest AppImage by file modification time
+                        std::fs::read_dir(&versions_dir)
+                            .ok()
+                            .and_then(|entries| {
+                                entries
+                                    .filter_map(|e| e.ok())
+                                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "AppImage"))
+                                    .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
+                                    .map(|e| e.path())
+                            })
+                    } else {
+                        // Look for specific version
+                        let pattern = format!("Cursor-{}-x86_64.AppImage", version);
+                        std::fs::read_dir(&versions_dir)
+                            .ok()
+                            .and_then(|entries| {
+                                entries
+                                    .filter_map(|e| e.ok())
+                                    .find(|e| e.file_name().to_string_lossy().contains(&version))
+                                    .map(|e| e.path())
+                            })
+                    };
+                    
+                    if let Some(appimage_path) = appimage {
+                        log::info!("Launching: {}", appimage_path.display());
+                        if let Err(e) = std::process::Command::new(&appimage_path)
+                            .spawn()
+                        {
+                            log::error!("Failed to launch AppImage: {}", e);
+                        }
+                    } else {
+                        // Fallback to cursor-versions CLI
+                        log::warn!("AppImage not found, trying cursor-versions CLI");
+                        if let Err(e) = std::process::Command::new("cursor-versions")
+                            .args(["run", &version])
+                            .spawn()
+                        {
+                            log::error!("Failed to launch via CLI: {}", e);
+                        }
                     }
                 }
             }
@@ -1799,10 +1841,41 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                             |_| Message::WorkspaceAction(WorkspaceMessage::RefreshWorkspaces),
                         );
                     } else {
-                        // Core not connected: fallback to cursor-versions CLI
-                        let _ = std::process::Command::new("cursor-versions")
-                            .args(["run", &version, &folder])
-                            .spawn();
+                        // Core not connected: fallback to direct AppImage launch
+                        let versions_dir = dirs::home_dir()
+                            .map(|h| h.join(".cursor-versions"))
+                            .unwrap_or_default();
+                        
+                        let appimage = if version == "latest" {
+                            std::fs::read_dir(&versions_dir)
+                                .ok()
+                                .and_then(|entries| {
+                                    entries
+                                        .filter_map(|e| e.ok())
+                                        .filter(|e| e.path().extension().map_or(false, |ext| ext == "AppImage"))
+                                        .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
+                                        .map(|e| e.path())
+                                })
+                        } else {
+                            std::fs::read_dir(&versions_dir)
+                                .ok()
+                                .and_then(|entries| {
+                                    entries
+                                        .filter_map(|e| e.ok())
+                                        .find(|e| e.file_name().to_string_lossy().contains(&version))
+                                        .map(|e| e.path())
+                                })
+                        };
+                        
+                        if let Some(appimage_path) = appimage {
+                            let _ = std::process::Command::new(&appimage_path)
+                                .arg(&folder)
+                                .spawn();
+                        } else {
+                            let _ = std::process::Command::new("cursor-versions")
+                                .args(["run", &version, &folder])
+                                .spawn();
+                        }
                     }
                 }
             }

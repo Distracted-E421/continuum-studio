@@ -4,6 +4,10 @@ android/build/
 android/.gradle/
 .gradle/
 
+# Runtime artifacts
+nohup.out
+**/nohup.out
+
 # IDE files
 *.iml
 .idea/
