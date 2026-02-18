@@ -1702,33 +1702,54 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                                     .map(|e| e.path())
                             })
                     } else {
-                        // Look for specific version
-                        let pattern = format!("Cursor-{}-x86_64.AppImage", version);
+                        // Look for specific version pattern
+                        let expected_pattern = format!("Cursor-{}", version);
                         std::fs::read_dir(&versions_dir)
                             .ok()
                             .and_then(|entries| {
                                 entries
                                     .filter_map(|e| e.ok())
-                                    .find(|e| e.file_name().to_string_lossy().contains(&version))
+                                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "AppImage"))
+                                    .find(|e| e.file_name().to_string_lossy().contains(&expected_pattern))
                                     .map(|e| e.path())
                             })
                     };
                     
                     if let Some(appimage_path) = appimage {
-                        log::info!("Launching: {}", appimage_path.display());
-                        if let Err(e) = std::process::Command::new(&appimage_path)
+                        log::info!("Launching AppImage: {}", appimage_path.display());
+                        
+                        // On NixOS, use appimage-run wrapper if available
+                        // This handles FUSE mounting and library paths correctly
+                        let launch_result = std::process::Command::new("appimage-run")
+                            .arg(&appimage_path)
                             .spawn()
-                        {
-                            log::error!("Failed to launch AppImage: {}", e);
+                            .or_else(|_| {
+                                // Fallback to direct execution if appimage-run not available
+                                log::info!("appimage-run not found, trying direct execution");
+                                std::process::Command::new(&appimage_path).spawn()
+                            });
+                        
+                        match launch_result {
+                            Ok(child) => {
+                                log::info!("Launched Cursor (PID: {})", child.id());
+                            }
+                            Err(e) => {
+                                log::error!("Failed to launch AppImage: {}", e);
+                            }
                         }
                     } else {
                         // Fallback to cursor-versions CLI
-                        log::warn!("AppImage not found, trying cursor-versions CLI");
-                        if let Err(e) = std::process::Command::new("cursor-versions")
+                        log::warn!("AppImage not found in {}, trying cursor-versions CLI", versions_dir.display());
+                        match std::process::Command::new("cursor-versions")
                             .args(["run", &version])
                             .spawn()
                         {
-                            log::error!("Failed to launch via CLI: {}", e);
+                            Ok(child) => {
+                                log::info!("Launched via CLI (PID: {})", child.id());
+                            }
+                            Err(e) => {
+                                log::error!("Failed to launch via CLI: {}", e);
+                            }
                         }
                     }
                 }
