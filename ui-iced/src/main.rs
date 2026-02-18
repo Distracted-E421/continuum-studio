@@ -3193,6 +3193,33 @@ fn view_task_queue_tasks_panel(state: &ContinuumStudio) -> Element<'_, Message> 
         text(format!("{} done", stats.completed)).size(11).color(colors.text_secondary),
     ].spacing(4);
     
+    // Quick-add input row
+    let quick_add_row = row![
+        text_input("Quick add task...", &state.task_queue_input)
+            .on_input(|s| Message::TaskQueueAction(TaskQueueMsg::QuickAddChanged(s)))
+            .on_submit(Message::TaskQueueAction(TaskQueueMsg::QuickAddSubmit))
+            .padding(8)
+            .size(12)
+            .width(Length::Fill),
+        button(text("+").size(14).color(colors.text_primary))
+            .on_press(Message::TaskQueueAction(TaskQueueMsg::QuickAddSubmit))
+            .padding([8, 14])
+            .style(|_theme, status| {
+                let bg = match status {
+                    button::Status::Hovered => colors.success,
+                    _ => colors.success,
+                };
+                button::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    text_color: colors.text_primary,
+                    border: iced::Border { radius: 4.0.into(), ..Default::default() },
+                    ..Default::default()
+                }
+            }),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+
     column![
         current_section,
         Space::new().height(16),
@@ -3202,6 +3229,8 @@ fn view_task_queue_tasks_panel(state: &ContinuumStudio) -> Element<'_, Message> 
         Space::new().height(4),
         pending_section,
         Space::new().height(12),
+        quick_add_row,
+        Space::new().height(8),
         new_task_button,
         Space::new().height(8),
         stats_row,
