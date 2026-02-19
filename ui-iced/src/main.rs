@@ -1018,6 +1018,8 @@ enum ActivityFeedMsg {
     TriggerGitPoll,
     /// Git poll completed
     GitPollDone(Result<(), String>),
+    /// Trigger stats refresh
+    RefreshStats,
     /// Stats refreshed
     StatsRefreshed(Result<FeedStats, String>),
 }
@@ -2420,6 +2422,42 @@ fn view_task_queue_window(state: &ContinuumStudio) -> Element<'_, Message> {
         Space::new().height(0).into()
     };
     
+    // Secondary panel picker (only for SideBySide/Stacked layouts)
+    let show_secondary_picker = matches!(state.task_queue_layout, TaskQueueLayout::SideBySide | TaskQueueLayout::Stacked);
+    let secondary_picker: Element<'_, Message> = if show_secondary_picker {
+        let secondary = state.task_queue_secondary_panel;
+        let make_sec_btn = |panel: TaskQueuePanel, label: &'static str| {
+            let is_active = secondary == panel;
+            let bg = if is_active {
+                iced::Color::from_rgb(0.2, 0.5, 0.3)
+            } else {
+                iced::Color::from_rgb(0.15, 0.15, 0.15)
+            };
+            button(text(label).size(10).color(colors.text_primary))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::SetSecondaryPanel(panel)))
+                .padding([4, 8])
+                .style(move |_theme, _status| button::Style {
+                    background: Some(iced::Background::Color(bg)),
+                    text_color: colors.text_primary,
+                    border: iced::Border::default().rounded(3),
+                    ..Default::default()
+                })
+        };
+        row![
+            text("2nd:").size(10).color(colors.text_muted),
+            make_sec_btn(TaskQueuePanel::Tasks, "Tasks"),
+            make_sec_btn(TaskQueuePanel::Agents, "Agents"),
+            make_sec_btn(TaskQueuePanel::Feed, "Feed"),
+            make_sec_btn(TaskQueuePanel::History, "History"),
+            make_sec_btn(TaskQueuePanel::Coordination, "Coord"),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        Space::new().height(0).into()
+    };
+    
     // Render content based on layout mode
     let panel_content: Element<'_, Message> = match state.task_queue_layout {
         TaskQueueLayout::Single => {
@@ -2464,7 +2502,9 @@ fn view_task_queue_window(state: &ContinuumStudio) -> Element<'_, Message> {
             header,
             Space::new().height(8),
             panel_tabs,
-            Space::new().height(if show_tabs { 12 } else { 0 }),
+            Space::new().height(if show_tabs { 12 } else { 4 }),
+            secondary_picker,
+            Space::new().height(if show_secondary_picker { 8 } else { 0 }),
             panel_content,
         ]
         .spacing(0)
@@ -2495,7 +2535,9 @@ fn view_layout_buttons(state: &ContinuumStudio) -> Element<'_, Message> {
             iced::Color::from_rgb(0.15, 0.15, 0.15)
         };
         
-        button(text(layout.icon()).size(14).color(colors.text_primary))
+        // Use both icon and label for accessibility (label shown as tooltip text)
+        let label_text = format!("{} {}", layout.icon(), layout.label());
+        button(text(label_text).size(10).color(colors.text_primary))
             .on_press(Message::TaskQueueAction(TaskQueueMsg::SetLayout(layout)))
             .padding([4, 8])
             .style(move |_theme, _status| button::Style {
@@ -3842,7 +3884,7 @@ fn sidebar(state: &ContinuumStudio) -> Element<'_, Message> {
             .size(10)
             .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
         Space::new().height(8),
-        nav_button("🏠  Dashboard", View::Dashboard, current),
+        nav_button("📊  Dashboard", View::Dashboard, current),
         nav_button("🖥️  Cursor", View::Cursor, current),
         nav_button("🧠  Chats", View::ChatPipeline, current),
         nav_button("🔧  Services", View::Services, current),
@@ -7019,6 +7061,37 @@ fn view_settings(state: &ContinuumStudio) -> Element<'_, Message> {
         .spacing(4),
     );
 
+    // Zone Layout card for window arrangement
+    use continuum_studio_iced::zones::ZoneLayout;
+    let current_zone = state.zone_manager.layout();
+    let zone_card = settings_card(
+        "Window Zones",
+        column![
+            settings_row(
+                "Zone Layout",
+                row![
+                    zone_pill("Main+Panel", current_zone == ZoneLayout::MainWithSidePanel, ZoneLayout::MainWithSidePanel),
+                    zone_pill("Split H", current_zone == ZoneLayout::SplitHorizontal, ZoneLayout::SplitHorizontal),
+                    zone_pill("Split V", current_zone == ZoneLayout::SplitVertical, ZoneLayout::SplitVertical),
+                    zone_pill("3-Col", current_zone == ZoneLayout::ThreeColumn, ZoneLayout::ThreeColumn),
+                    zone_pill("Free", current_zone == ZoneLayout::FreeForm, ZoneLayout::FreeForm),
+                ]
+                .spacing(4)
+            ),
+            Space::new().height(8),
+            settings_row(
+                "Apply Layout",
+                styled_button("Apply Now", false)
+                    .on_press(Message::ZoneAction(ZoneMsg::ApplyLayout))
+            ),
+            Space::new().height(4),
+            text("Arranges windows according to selected zone layout")
+                .size(11)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        ]
+        .spacing(4),
+    );
+
     // Save button
     let save_section: Element<Message> = if state.settings_dirty {
         styled_button("Save Settings", true)
@@ -7048,6 +7121,8 @@ fn view_settings(state: &ContinuumStudio) -> Element<'_, Message> {
         updates_card,
         Space::new().height(12),
         dialog_card,
+        Space::new().height(12),
+        zone_card,
         Space::new().height(24),
         save_section,
         Space::new().height(16),
@@ -7137,6 +7212,19 @@ fn theme_pill(
     button(text(label).size(11))
         .padding([6, 12])
         .on_press(Message::ThemePreferenceChanged(pref))
+        .style(move |_theme, status| pill_style(is_active, status))
+        .into()
+}
+
+/// Zone layout pill button
+fn zone_pill(
+    label: &'static str,
+    is_active: bool,
+    layout: continuum_studio_iced::zones::ZoneLayout,
+) -> Element<'static, Message> {
+    button(text(label).size(10))
+        .padding([4, 8])
+        .on_press(Message::ZoneAction(ZoneMsg::SetLayout(layout)))
         .style(move |_theme, status| pill_style(is_active, status))
         .into()
 }
@@ -9460,6 +9548,13 @@ fn handle_activity_feed_message(state: &mut ContinuumStudio, msg: ActivityFeedMs
         ActivityFeedMsg::GitPollDone(_result) => {
             Task::none()
         }
+        ActivityFeedMsg::RefreshStats => {
+            let http = state.activity_feed_http.clone();
+            Task::perform(
+                async move { http.get_stats().await },
+                |result| Message::ActivityFeedAction(ActivityFeedMsg::StatsRefreshed(result)),
+            )
+        }
         ActivityFeedMsg::StatsRefreshed(result) => {
             if let Ok(stats) = result {
                 state.activity_feed_stats = stats;
@@ -9548,12 +9643,24 @@ fn view_activity_feed_panel(state: &ContinuumStudio) -> Element<'_, Message> {
     ]
     .spacing(3);
     
+    let refresh_btn = button(text("🔄").size(10).color(colors.text_primary))
+        .on_press(Message::ActivityFeedAction(ActivityFeedMsg::RefreshStats))
+        .padding([3, 6])
+        .style(move |_theme, _status| button::Style {
+            background: Some(iced::Background::Color(colors.surface)),
+            text_color: colors.text_primary,
+            border: iced::Border::default().rounded(3),
+            ..Default::default()
+        });
+    
     let header = column![
         row![
             text("Activity Feed").size(14).color(colors.text_primary),
             Space::new().width(Length::Fill),
             stats_text,
             Space::new().width(8),
+            refresh_btn,
+            Space::new().width(4),
             conn_indicator,
         ]
         .spacing(8)
@@ -9880,11 +9987,19 @@ fn handle_coordinator_message(state: &mut ContinuumStudio, msg: CoordinatorMsg) 
             )
         }
         CoordinatorMsg::ConflictResolved(result) => {
-            if let Err(e) = result {
-                log::error!("Failed to resolve conflict: {}", e);
+            match result {
+                Ok(()) => {
+                    // Success - trigger refresh
+                    handle_coordinator_message(state, CoordinatorMsg::Refresh)
+                }
+                Err(e) => {
+                    // Emit error and then refresh
+                    Task::batch([
+                        Task::done(Message::CoordinatorAction(CoordinatorMsg::Error(e))),
+                        handle_coordinator_message(state, CoordinatorMsg::Refresh),
+                    ])
+                }
             }
-            // Trigger refresh
-            handle_coordinator_message(state, CoordinatorMsg::Refresh)
         }
         CoordinatorMsg::Error(e) => {
             log::error!("Coordinator error: {}", e);
