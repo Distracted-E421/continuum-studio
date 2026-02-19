@@ -28,6 +28,10 @@ Thumbs.db
 # Logs
 *.log
 
+# BEAM crash dumps
+erl_crash.dump
+**/erl_crash.dump
+
 ui/target
 # Rust build artifacts
 target/
