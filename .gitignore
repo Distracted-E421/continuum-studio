@@ -32,10 +32,8 @@ Thumbs.db
 erl_crash.dump
 **/erl_crash.dump
 
-ui/target
-# Rust build artifacts
-target/
-ui/target/
+# Rust build artifacts (ALL target directories)
+**/target/
 
 # Elixir build artifacts
 _build/
