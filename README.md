@@ -1,5 +1,7 @@
 # Continuum Studio
 
+[![License](https://img.shields.io/badge/license-SSPL--1.0-blue.svg)](LICENSE)
+
 **AI Orchestration Platform** for multi-agent control, monitoring, and verification.
 
 ![Continuum Studio](continuum-studio.png)
