@@ -330,7 +330,7 @@ impl SessionMonitor {
             if total_delta > 0 {
                 let percent = (proc_delta as f64 / total_delta as f64 * 100.0) as f32;
                 self.prev_cpu_ticks.insert(pid, (current_ticks, current_total));
-                return percent.min(100.0).max(0.0);
+                return percent.clamp(0.0, 100.0);
             }
         }
 

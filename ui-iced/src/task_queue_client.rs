@@ -400,7 +400,7 @@ impl TaskQueueHttpClient {
         });
 
         let resp = self.client
-            .patch(&format!("{}/{}", self.base_url, task_id))
+            .patch(format!("{}/{}", self.base_url, task_id))
             .json(&body)
             .send()
             .await
@@ -421,7 +421,7 @@ impl TaskQueueHttpClient {
         });
 
         let resp = self.client
-            .post(&format!("{}/{}/start", self.base_url, task_id))
+            .post(format!("{}/{}/start", self.base_url, task_id))
             .json(&body)
             .send()
             .await
@@ -444,7 +444,7 @@ impl TaskQueueHttpClient {
         };
 
         let resp = self.client
-            .post(&format!("{}/{}/complete", self.base_url, task_id))
+            .post(format!("{}/{}/complete", self.base_url, task_id))
             .json(&body)
             .send()
             .await
@@ -467,7 +467,7 @@ impl TaskQueueHttpClient {
         };
 
         let resp = self.client
-            .post(&format!("{}/{}/cancel", self.base_url, task_id))
+            .post(format!("{}/{}/cancel", self.base_url, task_id))
             .json(&body)
             .send()
             .await
@@ -484,7 +484,7 @@ impl TaskQueueHttpClient {
     /// Delete a task
     pub async fn delete_task(&self, task_id: &str) -> Result<(), String> {
         let resp = self.client
-            .delete(&format!("{}/{}", self.base_url, task_id))
+            .delete(format!("{}/{}", self.base_url, task_id))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -500,7 +500,7 @@ impl TaskQueueHttpClient {
     /// Get subtasks for a task
     pub async fn get_subtasks(&self, task_id: &str) -> Result<Vec<Task>, String> {
         let resp = self.client
-            .get(&format!("{}/{}/subtasks", self.base_url, task_id))
+            .get(format!("{}/{}/subtasks", self.base_url, task_id))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -520,7 +520,7 @@ impl TaskQueueHttpClient {
         });
 
         let resp = self.client
-            .post(&format!("{}/{}/subtasks", self.base_url, parent_id))
+            .post(format!("{}/{}/subtasks", self.base_url, parent_id))
             .json(&body)
             .send()
             .await
@@ -539,7 +539,7 @@ impl TaskQueueHttpClient {
         let body = serde_json::json!({ "blocker_id": blocker_id });
 
         let resp = self.client
-            .post(&format!("{}/{}/block", self.base_url, task_id))
+            .post(format!("{}/{}/block", self.base_url, task_id))
             .json(&body)
             .send()
             .await
@@ -556,7 +556,7 @@ impl TaskQueueHttpClient {
     /// Remove a blocker from a task
     pub async fn remove_blocker(&self, task_id: &str, blocker_id: &str) -> Result<(), String> {
         let resp = self.client
-            .delete(&format!("{}/{}/block/{}", self.base_url, task_id, blocker_id))
+            .delete(format!("{}/{}/block/{}", self.base_url, task_id, blocker_id))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -571,7 +571,7 @@ impl TaskQueueHttpClient {
     /// Get blockers (prerequisites) for a task
     pub async fn get_blockers(&self, task_id: &str) -> Result<Vec<Task>, String> {
         let resp = self.client
-            .get(&format!("{}/{}/blockers", self.base_url, task_id))
+            .get(format!("{}/{}/blockers", self.base_url, task_id))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -588,7 +588,7 @@ impl TaskQueueHttpClient {
         let body = serde_json::json!({ "notes": notes });
 
         let resp = self.client
-            .patch(&format!("{}/{}", self.base_url, task_id))
+            .patch(format!("{}/{}", self.base_url, task_id))
             .json(&body)
             .send()
             .await
@@ -711,7 +711,7 @@ async fn connect_and_handle(
                         WsServerMessage::Heartbeat { .. } => {
                             // Respond with ping to keep alive
                             let ping = serde_json::to_string(&WsClientMessage::Ping).unwrap();
-                            let _ = write.send(WsMessage::Text(ping.into())).await;
+                            let _ = write.send(WsMessage::Text(ping)).await;
                         }
                         WsServerMessage::Pong { .. } => {
                             // Ignore pong

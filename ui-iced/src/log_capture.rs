@@ -101,6 +101,11 @@ impl LogBuffer {
         self.entries.lock().unwrap().len()
     }
     
+    /// Check if buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.entries.lock().unwrap().is_empty()
+    }
+    
     /// Format all entries as a string for copying
     pub fn format_all(&self) -> String {
         self.entries

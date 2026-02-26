@@ -32,8 +32,10 @@ use std::collections::BTreeMap;
 
 /// Zone layout presets
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ZoneLayout {
     /// Main window fills most of the screen, side panels on the right
+    #[default]
     MainWithSidePanel,
     /// Two equal columns
     SplitHorizontal,
@@ -47,11 +49,6 @@ pub enum ZoneLayout {
     Dashboard,
 }
 
-impl Default for ZoneLayout {
-    fn default() -> Self {
-        Self::MainWithSidePanel
-    }
-}
 
 /// A zone definition (logical screen region)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,7 +294,7 @@ impl ZoneSnapshot {
     /// Write snapshot to the well-known file path
     pub fn write_to_file(&self) -> Result<(), std::io::Error> {
         let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         std::fs::write(ZONE_SNAPSHOT_PATH, json)
     }
 }

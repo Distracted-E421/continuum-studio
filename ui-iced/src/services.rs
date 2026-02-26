@@ -233,7 +233,7 @@ impl ServiceManager {
         // Start Core in background
         let result = AsyncCommand::new("sh")
             .arg("-c")
-            .arg(&self.core_start_command_background())
+            .arg(self.core_start_command_background())
             .spawn();
 
         match result {

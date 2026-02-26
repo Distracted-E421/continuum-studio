@@ -815,7 +815,7 @@ pub struct SharedCursorSettings {
 
 impl SharedCursorSettings {
     /// Apply these settings to a Cursor data directory
-    pub fn apply_to_data_dir(&self, data_dir: &PathBuf) -> Result<(), String> {
+    pub fn apply_to_data_dir(&self, data_dir: &std::path::Path) -> Result<(), String> {
         let settings_path = data_dir.join("User").join("settings.json");
 
         // Read existing settings if they exist

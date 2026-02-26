@@ -1117,7 +1117,7 @@ impl TaskQueueWidget {
         };
 
         let duration_text = entry.duration_secs
-            .map(|s| format_duration(s))
+            .map(format_duration)
             .unwrap_or_default();
 
         container(

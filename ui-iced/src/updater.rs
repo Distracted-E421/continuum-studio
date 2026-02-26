@@ -366,6 +366,12 @@ pub struct GitHubProvider {
     user_agent: String,
 }
 
+impl Default for GitHubProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitHubProvider {
     pub fn new() -> Self {
         Self {
@@ -413,6 +419,12 @@ impl ReleaseProvider for GitHubProvider {
 /// Fetches releases from Forgejo-compatible forges (Codeberg, Gitea, self-hosted).
 pub struct ForgejoProvider {
     user_agent: String,
+}
+
+impl Default for ForgejoProvider {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ForgejoProvider {
@@ -463,6 +475,12 @@ impl ReleaseProvider for ForgejoProvider {
 
 /// Reads builds produced by the build-watcher from ~/.continuum/builds/.
 pub struct LocalBuildProvider;
+
+impl Default for LocalBuildProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl LocalBuildProvider {
     pub fn new() -> Self {
@@ -795,7 +813,7 @@ fn classify_channel(prerelease: bool, tag: &str) -> UpdateChannel {
 /// Compare version strings (simple semver comparison)
 pub fn is_newer_version(new: &str, current: &str) -> bool {
     let parse_version = |s: &str| -> Vec<u32> {
-        s.split(|c: char| c == '.' || c == '-')
+        s.split(['.', '-'])
             .filter_map(|part| part.parse().ok())
             .collect()
     };

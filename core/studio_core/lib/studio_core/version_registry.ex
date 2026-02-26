@@ -30,7 +30,7 @@ defmodule StudioCore.VersionRegistry do
   require Logger
 
   @versions_file "cursor-versions.json"
-  @download_dir Path.expand("~/.cursor-versions")
+  @download_dir Path.expand("~/.cursor-versions/downloads")
   @cache_dir Path.expand("~/.cursor-versions/.cache")
 
   # Platform detection
@@ -228,6 +228,7 @@ defmodule StudioCore.VersionRegistry do
       |> Enum.map(fn v ->
         path = appimage_path(v["version"])
         size = get_file_size(path)
+
         %{
           version: v["version"],
           path: path,
@@ -265,9 +266,11 @@ defmodule StudioCore.VersionRegistry do
   end
 
   def handle_call({:batch_uninstall, versions, opts}, _from, state) do
-    results = Enum.map(versions, fn version ->
-      {version, do_uninstall(version, opts)}
-    end)
+    results =
+      Enum.map(versions, fn version ->
+        {version, do_uninstall(version, opts)}
+      end)
+
     {:reply, {:ok, results}, state}
   end
 
@@ -281,11 +284,12 @@ defmodule StudioCore.VersionRegistry do
       state.versions
       |> Enum.filter(fn v -> version_installed?(v["version"]) end)
       |> Enum.map(fn v -> do_disk_usage_detailed(v["version"]) end)
-      |> Enum.sort_by(fn r -> -(r.total_size) end)
+      |> Enum.sort_by(fn r -> -r.total_size end)
 
     total = Enum.reduce(results, 0, fn r, acc -> acc + r.total_size end)
 
-    {:reply, {:ok, %{versions: results, total_size: total, total_size_human: format_bytes(total)}}, state}
+    {:reply,
+     {:ok, %{versions: results, total_size: total, total_size_human: format_bytes(total)}}, state}
   end
 
   def handle_call({:last_used, version}, _from, state) do
@@ -297,6 +301,7 @@ defmodule StudioCore.VersionRegistry do
     case Enum.find(state.versions, &(&1["version"] == version)) do
       nil ->
         {:reply, {:error, :not_found}, state}
+
       v ->
         url = get_platform_url(v, state.platform)
         {:reply, {:ok, url}, state}
@@ -305,6 +310,7 @@ defmodule StudioCore.VersionRegistry do
 
   def handle_call(:stats, _from, state) do
     installed_count = Enum.count(state.versions, fn v -> version_installed?(v["version"]) end)
+
     total_size =
       state.versions
       |> Enum.filter(fn v -> version_installed?(v["version"]) end)
@@ -339,7 +345,9 @@ defmodule StudioCore.VersionRegistry do
     ]
 
     case find_and_read_versions(paths) do
-      {:ok, versions} -> versions
+      {:ok, versions} ->
+        versions
+
       :not_found ->
         Logger.warning("Could not find versions file in: #{inspect(paths)}")
         []
@@ -351,23 +359,27 @@ defmodule StudioCore.VersionRegistry do
       {:error, _} ->
         # Fallback for escripts - try relative path
         Path.join([File.cwd!(), "priv"])
+
       dir when is_list(dir) ->
         List.to_string(dir)
     end
   end
 
   defp find_and_read_versions([]), do: :not_found
+
   defp find_and_read_versions([path | rest]) do
     case File.read(path) do
       {:ok, content} ->
         case Jason.decode(content) do
-          {:ok, %{"versions" => versions}} -> 
+          {:ok, %{"versions" => versions}} ->
             Logger.debug("Loaded versions from: #{path}")
             {:ok, versions}
+
           _ ->
             Logger.error("Invalid versions JSON format in: #{path}")
             find_and_read_versions(rest)
         end
+
       {:error, _} ->
         find_and_read_versions(rest)
     end
@@ -387,12 +399,14 @@ defmodule StudioCore.VersionRegistry do
           {"aarch64\n", 0} -> @linux_arm64
           _ -> @linux_x64
         end
+
       {:unix, :darwin} ->
         case System.cmd("uname", ["-m"]) do
           {"arm64\n", 0} -> @darwin_arm64
           {"x86_64\n", 0} -> @darwin_x64
           _ -> @darwin_universal
         end
+
       _ ->
         @linux_x64
     end
@@ -406,14 +420,17 @@ defmodule StudioCore.VersionRegistry do
   end
 
   defp filter_by_era(versions, nil), do: versions
+
   defp filter_by_era(versions, :latest) do
     Enum.filter(versions, fn v ->
       version = v["version"]
+
       String.starts_with?(version, "2.4.") or
-      String.starts_with?(version, "2.3.") or
-      String.starts_with?(version, "2.2.")
+        String.starts_with?(version, "2.3.") or
+        String.starts_with?(version, "2.2.")
     end)
   end
+
   defp filter_by_era(versions, :custom_modes) do
     # 2.0.x and 2.1.x had custom modes
     Enum.filter(versions, fn v ->
@@ -421,6 +438,7 @@ defmodule StudioCore.VersionRegistry do
       String.starts_with?(version, "2.0.") or String.starts_with?(version, "2.1.")
     end)
   end
+
   defp filter_by_era(versions, :classic) do
     Enum.filter(versions, fn v ->
       version = v["version"]
@@ -430,6 +448,7 @@ defmodule StudioCore.VersionRegistry do
 
   defp filter_installed_only(versions, nil), do: versions
   defp filter_installed_only(versions, false), do: versions
+
   defp filter_installed_only(versions, true) do
     Enum.filter(versions, fn v -> version_installed?(v["version"]) end)
   end
@@ -482,7 +501,7 @@ defmodule StudioCore.VersionRegistry do
   end
 
   defp appimage_path(version) do
-    Path.join(@download_dir, "Cursor-#{version}-x86_64.AppImage")
+    Path.join(@download_dir, "cursor-#{version}-linux-x64.AppImage")
   end
 
   defp get_file_size(path) do
@@ -494,7 +513,10 @@ defmodule StudioCore.VersionRegistry do
 
   defp format_bytes(bytes) when bytes < 1024, do: "#{bytes} B"
   defp format_bytes(bytes) when bytes < 1024 * 1024, do: "#{Float.round(bytes / 1024, 1)} KB"
-  defp format_bytes(bytes) when bytes < 1024 * 1024 * 1024, do: "#{Float.round(bytes / (1024 * 1024), 1)} MB"
+
+  defp format_bytes(bytes) when bytes < 1024 * 1024 * 1024,
+    do: "#{Float.round(bytes / (1024 * 1024), 1)} MB"
+
   defp format_bytes(bytes), do: "#{Float.round(bytes / (1024 * 1024 * 1024), 1)} GB"
 
   defp do_download(version, state, opts) do
@@ -504,8 +526,10 @@ defmodule StudioCore.VersionRegistry do
       case Enum.find(state.versions, &(&1["version"] == version)) do
         nil ->
           {:error, :version_not_found}
+
         v ->
           url = get_platform_url(v, state.platform)
+
           if url do
             download_file(url, version, opts)
           else
@@ -517,7 +541,7 @@ defmodule StudioCore.VersionRegistry do
 
   defp download_file(url, version, _opts) do
     dest = appimage_path(version)
-    cache_file = Path.join(@cache_dir, "Cursor-#{version}.AppImage.partial")
+    cache_file = Path.join(@cache_dir, "cursor-#{version}-linux-x64.AppImage.partial")
 
     Logger.info("Downloading Cursor #{version} from #{url}")
 
@@ -535,10 +559,12 @@ defmodule StudioCore.VersionRegistry do
             File.chmod!(dest, 0o755)
             Logger.info("Installed Cursor #{version} (#{format_bytes(size)})")
             {:ok, dest}
+
           _ ->
             File.rm(cache_file)
             {:error, :invalid_download}
         end
+
       {output, code} ->
         Logger.error("Download failed (code #{code}): #{output}")
         {:error, {:download_failed, code}}
@@ -555,32 +581,52 @@ defmodule StudioCore.VersionRegistry do
       # Ensure data directory exists
       File.mkdir_p!(data_dir)
 
-      # Build arguments
-      args = [
+      # Build arguments for Cursor
+      cursor_args = [
         "--user-data-dir=#{data_dir}",
         "--extensions-dir=#{Path.join(data_dir, "extensions")}"
       ]
 
       # Add folder if specified
-      args = if folder = opts[:folder] do
-        # Resolve to absolute path
-        abs_folder = Path.expand(folder)
-        args ++ ["--folder", abs_folder]
-      else
-        args
-      end
+      cursor_args =
+        if folder = opts[:folder] do
+          # Resolve to absolute path
+          abs_folder = Path.expand(folder)
+          cursor_args ++ ["--folder", abs_folder]
+        else
+          cursor_args
+        end
 
       # Add any extra args
-      args = args ++ (opts[:args] || [])
+      cursor_args = cursor_args ++ (opts[:args] || [])
 
       Logger.info("Running Cursor #{version} with data dir #{data_dir}")
 
+      # On NixOS, AppImages need appimage-run wrapper to work properly
+      # Try appimage-run first, fall back to direct execution
+      {cmd, args} =
+        if appimage_run_available?() do
+          Logger.info("Using appimage-run wrapper for NixOS")
+          {"appimage-run", [appimage | cursor_args]}
+        else
+          Logger.info("Running AppImage directly")
+          {appimage, cursor_args}
+        end
+
       # Spawn the process (detached)
       spawn(fn ->
-        System.cmd(appimage, args, [])
+        System.cmd(cmd, args, [])
       end)
 
       {:ok, %{version: version, data_dir: data_dir}}
+    end
+  end
+
+  # Check if appimage-run is available (NixOS)
+  defp appimage_run_available? do
+    case System.cmd("which", ["appimage-run"], stderr_to_stdout: true) do
+      {_, 0} -> true
+      _ -> false
     end
   end
 
@@ -613,6 +659,7 @@ defmodule StudioCore.VersionRegistry do
       # Optionally remove data directory
       if remove_data do
         data_dir = data_dir_path(version)
+
         if File.exists?(data_dir) do
           Logger.info("Removing data directory: #{data_dir}")
           File.rm_rf!(data_dir)
@@ -677,7 +724,9 @@ defmodule StudioCore.VersionRegistry do
             # Convert Erlang datetime to ISO 8601
             NaiveDateTime.from_erl!(mtime)
             |> NaiveDateTime.to_iso8601()
-          _ -> nil
+
+          _ ->
+            nil
         end
 
       File.exists?(data_dir) ->
@@ -685,10 +734,13 @@ defmodule StudioCore.VersionRegistry do
           {:ok, %{mtime: mtime}} ->
             NaiveDateTime.from_erl!(mtime)
             |> NaiveDateTime.to_iso8601()
-          _ -> nil
+
+          _ ->
+            nil
         end
 
-      true -> nil
+      true ->
+        nil
     end
   end
 
@@ -697,6 +749,7 @@ defmodule StudioCore.VersionRegistry do
     if File.exists?(path) and File.dir?(path) do
       try do
         {output, 0} = System.cmd("du", ["-sb", path], stderr_to_stdout: true)
+
         output
         |> String.split("\t")
         |> List.first()

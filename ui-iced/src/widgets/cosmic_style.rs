@@ -46,7 +46,7 @@ impl button::Catalog for CosmicButton {
     type Class<'a> = ();
 
     fn default<'a>() -> Self::Class<'a> {
-        ()
+        
     }
 
     fn style(&self, _class: &Self::Class<'_>, status: button::Status) -> button::Style {
@@ -174,7 +174,7 @@ impl container::Catalog for CosmicContainer {
     type Class<'a> = ();
 
     fn default<'a>() -> Self::Class<'a> {
-        ()
+        
     }
 
     fn style(&self, _class: &Self::Class<'_>) -> container::Style {
