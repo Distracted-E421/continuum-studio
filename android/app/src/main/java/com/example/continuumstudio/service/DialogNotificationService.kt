@@ -22,16 +22,23 @@ class DialogNotificationService : Service() {
     companion object {
         const val CHANNEL_ID = "dialog_notifications"
         const val CHANNEL_NAME = "Dialog Notifications"
+        const val CONNECTION_CHANNEL_ID = "connection_status"
+        const val CONNECTION_CHANNEL_NAME = "Connection Status"
         const val SERVICE_NOTIFICATION_ID = 1
         const val DIALOG_NOTIFICATION_ID = 2
+        const val CONNECTION_NOTIFICATION_ID = 3
         
         const val ACTION_START = "com.example.continuumstudio.START_SERVICE"
         const val ACTION_STOP = "com.example.continuumstudio.STOP_SERVICE"
         const val ACTION_NEW_DIALOG = "com.example.continuumstudio.NEW_DIALOG"
+        const val ACTION_DISMISS_DIALOG = "com.example.continuumstudio.DISMISS_DIALOG"
+        const val ACTION_CONNECTION_LOST = "com.example.continuumstudio.CONNECTION_LOST"
+        const val ACTION_CONNECTION_RESTORED = "com.example.continuumstudio.CONNECTION_RESTORED"
         
         const val EXTRA_DIALOG_ID = "dialog_id"
         const val EXTRA_DIALOG_TITLE = "dialog_title"
         const val EXTRA_DIALOG_PROMPT = "dialog_prompt"
+        const val EXTRA_DIALOG_TYPE = "dialog_type"
         
         fun startService(context: Context) {
             val intent = Intent(context, DialogNotificationService::class.java).apply {
@@ -55,13 +62,36 @@ class DialogNotificationService : Service() {
             context: Context,
             dialogId: String,
             title: String,
-            prompt: String
+            prompt: String,
+            dialogType: String = "choice"
         ) {
             val intent = Intent(context, DialogNotificationService::class.java).apply {
                 action = ACTION_NEW_DIALOG
                 putExtra(EXTRA_DIALOG_ID, dialogId)
                 putExtra(EXTRA_DIALOG_TITLE, title)
                 putExtra(EXTRA_DIALOG_PROMPT, prompt)
+                putExtra(EXTRA_DIALOG_TYPE, dialogType)
+            }
+            context.startService(intent)
+        }
+        
+        fun notifyConnectionLost(context: Context) {
+            val intent = Intent(context, DialogNotificationService::class.java).apply {
+                action = ACTION_CONNECTION_LOST
+            }
+            context.startService(intent)
+        }
+        
+        fun notifyConnectionRestored(context: Context) {
+            val intent = Intent(context, DialogNotificationService::class.java).apply {
+                action = ACTION_CONNECTION_RESTORED
+            }
+            context.startService(intent)
+        }
+        
+        fun dismissDialogNotification(context: Context) {
+            val intent = Intent(context, DialogNotificationService::class.java).apply {
+                action = ACTION_DISMISS_DIALOG
             }
             context.startService(intent)
         }
@@ -88,7 +118,17 @@ class DialogNotificationService : Service() {
                 val dialogId = intent.getStringExtra(EXTRA_DIALOG_ID) ?: return START_STICKY
                 val title = intent.getStringExtra(EXTRA_DIALOG_TITLE) ?: "New Dialog"
                 val prompt = intent.getStringExtra(EXTRA_DIALOG_PROMPT) ?: ""
-                showDialogNotification(dialogId, title, prompt)
+                val dialogType = intent.getStringExtra(EXTRA_DIALOG_TYPE) ?: "choice"
+                showDialogNotification(dialogId, title, prompt, dialogType)
+            }
+            ACTION_DISMISS_DIALOG -> {
+                notificationManager.cancel(DIALOG_NOTIFICATION_ID)
+            }
+            ACTION_CONNECTION_LOST -> {
+                showConnectionLostNotification()
+            }
+            ACTION_CONNECTION_RESTORED -> {
+                notificationManager.cancel(CONNECTION_NOTIFICATION_ID)
             }
         }
         return START_STICKY
@@ -98,7 +138,8 @@ class DialogNotificationService : Service() {
     
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            // High priority channel for dialogs
+            val dialogChannel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
                 NotificationManager.IMPORTANCE_HIGH
@@ -107,7 +148,18 @@ class DialogNotificationService : Service() {
                 enableVibration(true)
                 enableLights(true)
             }
-            notificationManager.createNotificationChannel(channel)
+            notificationManager.createNotificationChannel(dialogChannel)
+            
+            // Lower priority channel for connection status
+            val connectionChannel = NotificationChannel(
+                CONNECTION_CHANNEL_ID,
+                CONNECTION_CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Connection status updates"
+                enableVibration(false)
+            }
+            notificationManager.createNotificationChannel(connectionChannel)
         }
     }
     
@@ -129,8 +181,8 @@ class DialogNotificationService : Service() {
             .build()
     }
     
-    private fun showDialogNotification(dialogId: String, title: String, prompt: String) {
-        val pendingIntent = PendingIntent.getActivity(
+    private fun showDialogNotification(dialogId: String, title: String, prompt: String, dialogType: String) {
+        val openIntent = PendingIntent.getActivity(
             this,
             dialogId.hashCode(),
             Intent(this, MainActivity::class.java).apply {
@@ -140,20 +192,71 @@ class DialogNotificationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
+        val dismissIntent = PendingIntent.getService(
+            this,
+            dialogId.hashCode() + 1,
+            Intent(this, DialogNotificationService::class.java).apply {
+                action = ACTION_DISMISS_DIALOG
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        // Choose icon based on dialog type
+        val typeIcon = when (dialogType.lowercase()) {
+            "choice" -> "📝"
+            "text" -> "✏️"
+            "confirm" -> "❓"
+            "slider" -> "🎚️"
+            else -> "🤖"
+        }
+        
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("🤖 $title")
+            .setContentTitle("$typeIcon $title")
             .setContentText(prompt.take(100))
             .setStyle(NotificationCompat.BigTextStyle().bigText(prompt))
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(openIntent)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .addAction(
+                android.R.drawable.ic_menu_view,
+                "Open",
+                openIntent
+            )
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Dismiss",
+                dismissIntent
+            )
             .build()
         
         notificationManager.notify(DIALOG_NOTIFICATION_ID, notification)
+    }
+    
+    private fun showConnectionLostNotification() {
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            CONNECTION_NOTIFICATION_ID,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val notification = NotificationCompat.Builder(this, CONNECTION_CHANNEL_ID)
+            .setContentTitle("⚠️ Connection Lost")
+            .setContentText("Tap to reconnect to the dialog server")
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .build()
+        
+        notificationManager.notify(CONNECTION_NOTIFICATION_ID, notification)
     }
 }
 
