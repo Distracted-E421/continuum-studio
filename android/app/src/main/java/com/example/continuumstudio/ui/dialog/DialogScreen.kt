@@ -63,6 +63,7 @@ fun DialogScreen(
     onFetchHistory: () -> Unit = {},
     onReinvokeDialog: (HistoryItem) -> Unit = {},
     onSnackbarDismiss: () -> Unit = {},
+    onTestNotification: () -> Unit = {},
 ) {
     var serverUrlInput by remember { mutableStateOf(connectionState.serverUrl.ifBlank { "dialog.datapunk.dev" }) }
     var showSettings by remember { mutableStateOf(false) }
@@ -234,6 +235,8 @@ fun DialogScreen(
                                 queueCount = dialogState.queueCount,
                                 holdMode = dialogState.holdMode,
                                 latency = latency,
+                                isOnline = isOnline,
+                                onTestNotification = onTestNotification,
                             )
                         }
                     }
@@ -553,6 +556,8 @@ fun DashboardCard(
     queueCount: Int,
     holdMode: Boolean,
     latency: Long? = null,
+    isOnline: Boolean = true,
+    onTestNotification: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -590,20 +595,51 @@ fun DashboardCard(
             )
         }
         
-        // Latency indicator
-        if (latency != null) {
-            Spacer(modifier = Modifier.height(8.dp))
-            val latencyColor = when {
-                latency < 100 -> Color(0xFF4CAF50)
-                latency < 300 -> Color(0xFFFF9800)
-                else -> Color(0xFFF44336)
-            }
+        // Network and Latency indicators
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            // Network status
             StatusChip(
-                icon = Icons.Default.Speed,
-                label = "Latency: ${latency}ms",
-                color = latencyColor
+                icon = if (isOnline) Icons.Default.Wifi else Icons.Default.WifiOff,
+                label = if (isOnline) "Online" else "Offline",
+                color = if (isOnline) Color(0xFF4CAF50) else Color(0xFFF44336)
             )
+            
+            // Latency indicator
+            if (latency != null) {
+                val latencyColor = when {
+                    latency < 100 -> Color(0xFF4CAF50)
+                    latency < 300 -> Color(0xFFFF9800)
+                    else -> Color(0xFFF44336)
+                }
+                StatusChip(
+                    icon = Icons.Default.Speed,
+                    label = "${latency}ms",
+                    color = latencyColor
+                )
+            }
         }
+        
+        // Test notification button
+        Spacer(modifier = Modifier.height(24.dp))
+        OutlinedButton(
+            onClick = onTestNotification,
+            modifier = Modifier.padding(8.dp)
+        ) {
+            Icon(
+                Icons.Default.Notifications,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Test Notification")
+        }
+        
+        Text(
+            "Send a test notification to verify notifications work",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -697,6 +733,45 @@ fun ActiveDialogCard(
             text = dialog.prompt,
             modifier = Modifier.fillMaxWidth()
         )
+
+        // Context data section (collapsible)
+        if (dialog.context != null) {
+            var showContext by remember { mutableStateOf(false) }
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showContext = !showContext }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    if (showContext) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (showContext) "Hide context" else "Show context",
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    "Context Data",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            
+            if (showContext) {
+                Spacer(modifier = Modifier.height(4.dp))
+                val contextText = dialog.context.toString()
+                    .let { if (it.startsWith("\"") && it.endsWith("\"")) it.drop(1).dropLast(1) else it }
+                
+                CodeBlock(
+                    code = contextText,
+                    language = "json"
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 

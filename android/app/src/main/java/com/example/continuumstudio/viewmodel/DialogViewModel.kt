@@ -221,6 +221,14 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         wsClient.sendPing()
     }
 
+    /**
+     * Send a test notification to verify notifications work
+     */
+    fun testNotification() {
+        showToast("Test notification sent!")
+        // This will be implemented in MainActivity to call the notification service
+    }
+
     override fun onCleared() {
         super.onCleared()
         wsClient.disconnect()

@@ -79,6 +79,7 @@ data class DialogDetails(
     @SerialName("timeout_ms") val timeoutMs: Int? = null,
     @SerialName("time_remaining_ratio") val timeRemainingRatio: Float = 1.0f,
     @SerialName("is_paused") val isPaused: Boolean = false,
+    val context: JsonElement? = null,
 )
 
 @Serializable

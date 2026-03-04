@@ -250,6 +250,15 @@ class MainActivity : ComponentActivity() {
                                 onFetchHistory = dialogViewModel::fetchHistory,
                                 onReinvokeDialog = dialogViewModel::reinvokeDialog,
                                 onSnackbarDismiss = dialogViewModel::dismissToast,
+                                onTestNotification = {
+                                    DialogNotificationService.notifyNewDialog(
+                                        this@MainActivity,
+                                        "test-${System.currentTimeMillis()}",
+                                        "Test Notification",
+                                        "This is a test notification from Continuum Studio. If you see this, notifications are working correctly!"
+                                    )
+                                    dialogViewModel.showToast("Test notification sent!")
+                                },
                             )
                         }
                     }
