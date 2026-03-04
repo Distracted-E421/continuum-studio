@@ -301,7 +301,9 @@ fun LatencyBadge(latency: Long) {
 
 /**
  * History view showing past dialogs with reinvoke option
+ * Supports pull-to-refresh gesture
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryView(
     history: List<HistoryItem>,
@@ -309,58 +311,153 @@ fun HistoryView(
     onRefresh: () -> Unit,
     onReinvoke: (HistoryItem) -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Header with refresh
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "Dialog History",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+    val pullToRefreshState = rememberPullToRefreshState()
+    
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pullToRefresh(
+                state = pullToRefreshState,
+                isRefreshing = isLoading,
+                onRefresh = onRefresh
             )
-            IconButton(onClick = onRefresh, enabled = !isLoading) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Header with refresh button
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Dialog History",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Show history count
+                    if (history.isNotEmpty()) {
+                        Text(
+                            "${history.size} items",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    
+                    IconButton(onClick = onRefresh, enabled = !isLoading) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                        }
+                    }
+                }
+            }
+            
+            if (history.isEmpty() && !isLoading) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            Icons.Default.History,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = Color.Gray
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "No history yet",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.Gray
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Pull down to refresh",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(history, key = { it.id }) { item ->
+                        HistoryItemCard(
+                            item = item,
+                            onReinvoke = { onReinvoke(item) }
+                        )
+                    }
                 }
             }
         }
         
-        if (history.isEmpty() && !isLoading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "No history yet",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.Gray
-                )
+        // Pull-to-refresh indicator
+        PullToRefreshDefaults.Indicator(
+            state = pullToRefreshState,
+            isRefreshing = isLoading,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
+    }
+}
+
+/**
+ * Format ISO timestamp to human-readable format
+ */
+private fun formatTimestamp(isoTimestamp: String?): String {
+    if (isoTimestamp == null) return ""
+    return try {
+        // Parse ISO 8601 format (e.g., "2026-03-04T10:30:00Z" or "2026-03-04T10:30:00.123456789Z")
+        val parts = isoTimestamp.replace("Z", "").split("T")
+        if (parts.size == 2) {
+            val datePart = parts[0]
+            val timePart = parts[1].split(".")[0] // Remove nanoseconds
+            val timeComponents = timePart.split(":")
+            if (timeComponents.size >= 2) {
+                "${timeComponents[0]}:${timeComponents[1]}"
+            } else {
+                timePart
             }
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(history, key = { it.id }) { item ->
-                    HistoryItemCard(
-                        item = item,
-                        onReinvoke = { onReinvoke(item) }
-                    )
-                }
-            }
+            isoTimestamp.take(16)
         }
+    } catch (_: Exception) {
+        isoTimestamp.take(16)
     }
+}
+
+/**
+ * Get dialog type icon
+ */
+@Composable
+private fun DialogTypeIcon(dialogType: String) {
+    val icon = when (dialogType.lowercase()) {
+        "choice" -> Icons.Default.List
+        "text" -> Icons.Default.Edit
+        "confirm" -> Icons.Default.Check
+        "slider" -> Icons.Default.LinearScale
+        else -> Icons.Default.QuestionAnswer
+    }
+    Icon(
+        icon,
+        contentDescription = dialogType,
+        modifier = Modifier.size(14.dp),
+        tint = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 /**
@@ -371,8 +468,12 @@ fun HistoryItemCard(
     item: HistoryItem,
     onReinvoke: () -> Unit,
 ) {
+    var expanded by remember { mutableStateOf(false) }
+    
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded },
         colors = CardDefaults.cardColors(
             containerColor = if (item.cancelled) 
                 MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
@@ -391,14 +492,27 @@ fun HistoryItemCard(
                         item.title,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        maxLines = 1,
+                        maxLines = if (expanded) Int.MAX_VALUE else 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        item.dialogType,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        DialogTypeIcon(item.dialogType)
+                        Text(
+                            item.dialogType,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        item.completedAt?.let { timestamp ->
+                            Text(
+                                " • ${formatTimestamp(timestamp)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
                 }
                 
                 // Status + Reinvoke
@@ -433,10 +547,11 @@ fun HistoryItemCard(
             
             Spacer(modifier = Modifier.height(4.dp))
             
+            // Prompt - expandable
             Text(
                 item.prompt,
                 style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
+                maxLines = if (expanded) Int.MAX_VALUE else 2,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -444,11 +559,38 @@ fun HistoryItemCard(
             // Show selection if present
             item.selection?.let { selection ->
                 Spacer(modifier = Modifier.height(4.dp))
+                val selectionText = selection.toString()
+                    .let { if (it.startsWith("\"") && it.endsWith("\"")) it.drop(1).dropLast(1) else it }
                 Text(
-                    "Answer: ${selection.toString().take(50)}${if (selection.toString().length > 50) "..." else ""}",
+                    "Answer: ${if (expanded) selectionText else selectionText.take(50) + if (selectionText.length > 50) "..." else ""}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
+                    fontStyle = FontStyle.Italic,
+                    maxLines = if (expanded) Int.MAX_VALUE else 1
+                )
+            }
+            
+            // Show comment if present and expanded
+            if (expanded && !item.comment.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Comment: ${item.comment}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
                     fontStyle = FontStyle.Italic
+                )
+            }
+            
+            // Expand/collapse indicator
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Show less" else "Show more",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                 )
             }
         }
