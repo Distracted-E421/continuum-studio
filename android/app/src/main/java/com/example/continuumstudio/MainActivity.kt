@@ -99,10 +99,16 @@ class MainActivity : ComponentActivity() {
                                 // Fetch widget data on connection
                                 widgetBayViewModel.refreshAll(connectionState.serverUrl)
                                 dialogViewModel.showToast("Connected to server")
+                                // Clear any connection lost notification
+                                DialogNotificationService.notifyConnectionRestored(this@MainActivity)
                             }
                             is DialogEvent.Disconnected -> {
                                 if (event.reason.isNotBlank()) {
                                     dialogViewModel.showToast("Disconnected: ${event.reason}")
+                                }
+                                // Show connection lost notification if app is in background
+                                if (!isInForeground) {
+                                    DialogNotificationService.notifyConnectionLost(this@MainActivity)
                                 }
                             }
                             is DialogEvent.Reconnecting -> {
@@ -122,7 +128,8 @@ class MainActivity : ComponentActivity() {
                                         this@MainActivity,
                                         event.id,
                                         event.title,
-                                        event.prompt
+                                        event.prompt,
+                                        event.dialogType
                                     )
                                 }
                                 // Auto-navigate to dialog screen when new dialog arrives
@@ -133,6 +140,8 @@ class MainActivity : ComponentActivity() {
                             is DialogEvent.DialogCompleted -> {
                                 // Dialog was completed (by us or desktop)
                                 dialogViewModel.showToast("Dialog completed")
+                                // Dismiss any dialog notification
+                                DialogNotificationService.dismissDialogNotification(this@MainActivity)
                             }
                         }
                     }

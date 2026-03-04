@@ -417,7 +417,7 @@ class DialogWebSocketClient(
                 }
                 "NewDialog" -> {
                     val newDialog = json.decodeFromString<ServerMessage.NewDialog>(text)
-                    _events.send(DialogEvent.NewDialog(newDialog.id, newDialog.title, newDialog.prompt))
+                    _events.send(DialogEvent.NewDialog(newDialog.id, newDialog.title, newDialog.prompt, newDialog.dialogType))
                     // Fetch full dialog details
                     fetchCurrentDialog(_connectionState.value.serverUrl)
                 }
@@ -555,7 +555,7 @@ sealed class DialogEvent {
     data class Disconnected(val reason: String) : DialogEvent()
     data class Reconnecting(val attempt: Int, val delayMs: Long) : DialogEvent()
     data class Error(val message: String) : DialogEvent()
-    data class NewDialog(val id: String, val title: String, val prompt: String = "") : DialogEvent()
+    data class NewDialog(val id: String, val title: String, val prompt: String = "", val dialogType: String = "choice") : DialogEvent()
     data class DialogCompleted(val id: String) : DialogEvent()
 }
 
