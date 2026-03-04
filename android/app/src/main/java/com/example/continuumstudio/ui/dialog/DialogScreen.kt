@@ -38,7 +38,7 @@ import com.example.continuumstudio.data.*
  * Tab options for main navigation
  */
 private enum class MainTab {
-    DIALOG, HISTORY
+    DIALOG, HISTORY, SETTINGS
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -187,6 +187,12 @@ fun DialogScreen(
                             text = { Text("History") },
                             icon = { Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(18.dp)) }
                         )
+                        Tab(
+                            selected = selectedTab == MainTab.SETTINGS,
+                            onClick = { selectedTab = MainTab.SETTINGS },
+                            text = { Text("Settings") },
+                            icon = { Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                        )
                     }
                 }
             }
@@ -212,58 +218,90 @@ fun DialogScreen(
                 )
             }
 
-            // Main content
-            if (connectionState.isConnected) {
-                when (selectedTab) {
-                    MainTab.DIALOG -> {
-                        if (dialogState.activeDialog != null) {
-                            ActiveDialogCard(
-                                dialog = dialogState.activeDialog,
-                                selectedValue = dialogState.selectedValue,
-                                selectedOptions = dialogState.selectedOptions,
-                                sliderValue = dialogState.sliderValue,
-                                comment = dialogState.comment,
-                                holdMode = dialogState.holdMode,
-                                onSelectOption = onSelectOption,
-                                onToggleOption = onToggleOption,
-                                onTextChange = onTextChange,
-                                onCommentChange = onCommentChange,
-                                onSliderChange = onSliderChange,
-                                onConfirm = onConfirm,
-                                onSubmit = onSubmit,
-                            )
-                        } else {
-                            // No active dialog - show dashboard
-                            DashboardCard(
-                                queueCount = dialogState.queueCount,
-                                holdMode = dialogState.holdMode,
-                                latency = latency,
-                                isOnline = isOnline,
-                                onTestNotification = onTestNotification,
-                            )
+            // Main content - Settings tab is always accessible
+            when (selectedTab) {
+                MainTab.SETTINGS -> {
+                    SettingsView(
+                        serverUrl = serverUrlInput,
+                        onServerUrlChange = { serverUrlInput = it },
+                        onConnect = { onConnect(serverUrlInput) },
+                        onDisconnect = onDisconnect,
+                        isConnected = connectionState.isConnected,
+                        onTestNotification = onTestNotification,
+                    )
+                }
+                else -> {
+                    if (connectionState.isConnected) {
+                        when (selectedTab) {
+                            MainTab.DIALOG -> {
+                                if (dialogState.activeDialog != null) {
+                                    ActiveDialogCard(
+                                        dialog = dialogState.activeDialog,
+                                        selectedValue = dialogState.selectedValue,
+                                        selectedOptions = dialogState.selectedOptions,
+                                        sliderValue = dialogState.sliderValue,
+                                        comment = dialogState.comment,
+                                        holdMode = dialogState.holdMode,
+                                        onSelectOption = onSelectOption,
+                                        onToggleOption = onToggleOption,
+                                        onTextChange = onTextChange,
+                                        onCommentChange = onCommentChange,
+                                        onSliderChange = onSliderChange,
+                                        onConfirm = onConfirm,
+                                        onSubmit = onSubmit,
+                                    )
+                                } else {
+                                    // No active dialog - show dashboard
+                                    DashboardCard(
+                                        queueCount = dialogState.queueCount,
+                                        holdMode = dialogState.holdMode,
+                                        latency = latency,
+                                        isOnline = isOnline,
+                                        onTestNotification = onTestNotification,
+                                    )
+                                }
+                            }
+                            MainTab.HISTORY -> {
+                                HistoryView(
+                                    history = history,
+                                    isLoading = historyLoading,
+                                    onRefresh = onFetchHistory,
+                                    onReinvoke = onReinvokeDialog,
+                                    onCopy = onCopyToClipboard,
+                                )
+                            }
+                            MainTab.SETTINGS -> { /* Handled above */ }
+                        }
+                    } else if (!connectionState.isConnecting) {
+                        // Not connected prompt
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.WifiOff,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(48.dp),
+                                    tint = Color.Gray
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    "Not Connected",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.Gray
+                                )
+                                Text(
+                                    "Go to Settings tab to configure and connect",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.Gray.copy(alpha = 0.7f)
+                                )
+                            }
                         }
                     }
-                    MainTab.HISTORY -> {
-                        HistoryView(
-                            history = history,
-                            isLoading = historyLoading,
-                            onRefresh = onFetchHistory,
-                            onReinvoke = onReinvokeDialog,
-                            onCopy = onCopyToClipboard,
-                        )
-                    }
-                }
-            } else if (!connectionState.isConnecting) {
-                // Not connected prompt
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "Enter server URL and tap Connect",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = Color.Gray
-                    )
                 }
             }
         }
@@ -418,6 +456,314 @@ fun HistoryView(
             isRefreshing = isLoading,
             modifier = Modifier.align(Alignment.TopCenter)
         )
+    }
+}
+
+/**
+ * Settings view with connection configuration, notification preferences,
+ * and app information
+ */
+@Composable
+fun SettingsView(
+    serverUrl: String,
+    onServerUrlChange: (String) -> Unit,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    isConnected: Boolean,
+    onTestNotification: () -> Unit,
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+    
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Connection Settings Section
+        item {
+            SettingsSectionHeader(title = "Connection")
+        }
+        
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Server URL input
+                    OutlinedTextField(
+                        value = serverUrl,
+                        onValueChange = onServerUrlChange,
+                        label = { Text("Server URL") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        leadingIcon = { 
+                            Icon(Icons.Default.Link, contentDescription = null) 
+                        },
+                        trailingIcon = {
+                            if (isConnected) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = "Connected",
+                                    tint = Color(0xFF4CAF50)
+                                )
+                            }
+                        }
+                    )
+                    
+                    // Connection status
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val statusColor = if (isConnected) Color(0xFF4CAF50) else Color(0xFFFF9800)
+                        val statusText = if (isConnected) "Connected" else "Disconnected"
+                        
+                        Surface(
+                            color = statusColor.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                statusText,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = statusColor
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.weight(1f))
+                        
+                        if (isConnected) {
+                            OutlinedButton(
+                                onClick = {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onDisconnect()
+                                }
+                            ) {
+                                Text("Disconnect")
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onConnect()
+                                }
+                            ) {
+                                Text("Connect")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Notifications Section
+        item {
+            SettingsSectionHeader(title = "Notifications")
+        }
+        
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Test notification button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Test Notifications",
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Text(
+                                "Send a test notification to verify they're working",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onTestNotification()
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.Notifications,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Test")
+                        }
+                    }
+                    
+                    HorizontalDivider()
+                    
+                    // Info about notification settings
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Notification permissions are managed in system settings",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+        
+        // About Section
+        item {
+            SettingsSectionHeader(title = "About")
+        }
+        
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AboutRow(label = "App Name", value = "Continuum Studio")
+                    HorizontalDivider()
+                    AboutRow(label = "Version", value = "1.0.0")
+                    HorizontalDivider()
+                    AboutRow(label = "Server Protocol", value = "WebSocket + HTTP")
+                    HorizontalDivider()
+                    AboutRow(
+                        label = "Description",
+                        value = "Android companion app for Synapsix Dialog daemon"
+                    )
+                }
+            }
+        }
+        
+        // Quick Links Section
+        item {
+            SettingsSectionHeader(title = "Quick Links")
+        }
+        
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(8.dp)
+                ) {
+                    QuickLinkRow(
+                        icon = Icons.Default.Web,
+                        title = "Web Interface",
+                        subtitle = "Open dialog.datapunk.dev in browser"
+                    )
+                    HorizontalDivider()
+                    QuickLinkRow(
+                        icon = Icons.Default.Code,
+                        title = "Source Code",
+                        subtitle = "View on Codeberg"
+                    )
+                    HorizontalDivider()
+                    QuickLinkRow(
+                        icon = Icons.Default.Help,
+                        title = "Documentation",
+                        subtitle = "Usage guide and FAQ"
+                    )
+                }
+            }
+        }
+        
+        // Footer spacing
+        item {
+            Spacer(modifier = Modifier.height(32.dp))
+        }
+    }
+}
+
+@Composable
+private fun SettingsSectionHeader(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(vertical = 4.dp)
+    )
+}
+
+@Composable
+private fun AboutRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun QuickLinkRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { /* TODO: Handle link click */ }
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
