@@ -17,7 +17,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -93,6 +93,14 @@ class MainActivity : ComponentActivity() {
                 val services by widgetBayViewModel.services.collectAsState()
                 val isLoadingHarnesses by widgetBayViewModel.isLoadingHarnesses.collectAsState()
                 val isLoadingServices by widgetBayViewModel.isLoadingServices.collectAsState()
+                
+                // Settings states
+                val savedServerUrl by dialogViewModel.savedServerUrl.collectAsState()
+                val autoReconnect by dialogViewModel.autoReconnect.collectAsState()
+                val notificationsEnabled by dialogViewModel.notificationsEnabled.collectAsState()
+                val vibrationEnabled by dialogViewModel.vibrationEnabled.collectAsState()
+                val cfAccessClientId by dialogViewModel.cfAccessClientId.collectAsState()
+                val cfAccessClientSecret by dialogViewModel.cfAccessClientSecret.collectAsState()
                 
                 // Handle events - show toasts and notifications
                 LaunchedEffect(Unit) {
@@ -182,7 +190,7 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                     ) {
-                                        Icon(Icons.Default.List, contentDescription = "Dialog")
+                                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Dialog")
                                     }
                                 },
                                 label = { Text("Dialog") },
@@ -248,6 +256,10 @@ class MainActivity : ComponentActivity() {
                                 latency = latency,
                                 snackbarMessage = snackbarMessage,
                                 isOnline = isOnline,
+                                savedServerUrl = savedServerUrl,
+                                autoReconnect = autoReconnect,
+                                notificationsEnabled = notificationsEnabled,
+                                vibrationEnabled = vibrationEnabled,
                                 onConnect = dialogViewModel::connect,
                                 onDisconnect = dialogViewModel::disconnect,
                                 onRefresh = dialogViewModel::refreshDialog,
@@ -262,6 +274,13 @@ class MainActivity : ComponentActivity() {
                                 onFetchHistory = dialogViewModel::fetchHistory,
                                 onReinvokeDialog = dialogViewModel::reinvokeDialog,
                                 onSnackbarDismiss = dialogViewModel::dismissToast,
+                                onAutoReconnectChange = dialogViewModel::setAutoReconnect,
+                                onNotificationsEnabledChange = dialogViewModel::setNotificationsEnabled,
+                                onVibrationEnabledChange = dialogViewModel::setVibrationEnabled,
+                                cfAccessClientId = cfAccessClientId,
+                                cfAccessClientSecret = cfAccessClientSecret,
+                                onCfAccessClientIdChange = dialogViewModel::setCfAccessClientId,
+                                onCfAccessClientSecretChange = dialogViewModel::setCfAccessClientSecret,
                                 onTestNotification = {
                                     DialogNotificationService.notifyNewDialog(
                                         this@MainActivity,

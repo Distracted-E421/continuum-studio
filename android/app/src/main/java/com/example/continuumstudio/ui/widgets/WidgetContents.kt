@@ -6,12 +6,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -396,7 +396,7 @@ fun QuickActionsWidget(onAction: (String) -> Unit) {
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
         QuickActionButton(
-            icon = Icons.Default.Send,
+            icon = Icons.AutoMirrored.Filled.Send,
             label = "Cursor",
             onClick = { onAction("start_cursor") }
         )
@@ -461,7 +461,7 @@ fun AgentStreamWidget() {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                Icons.Default.Send,
+                Icons.AutoMirrored.Filled.Send,
                 contentDescription = null,
                 modifier = Modifier.size(32.dp),
                 tint = Color.Gray

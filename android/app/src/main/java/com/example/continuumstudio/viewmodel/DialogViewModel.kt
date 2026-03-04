@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -58,12 +59,41 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     // Settings keys
     private object PrefsKeys {
         val SERVER_URL = stringPreferencesKey("server_url")
+        val AUTO_RECONNECT = booleanPreferencesKey("auto_reconnect")
+        val NOTIFICATIONS_ENABLED = booleanPreferencesKey("notifications_enabled")
+        val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
+        val CF_ACCESS_CLIENT_ID = stringPreferencesKey("cf_access_client_id")
+        val CF_ACCESS_CLIENT_SECRET = stringPreferencesKey("cf_access_client_secret")
     }
 
     // Saved server URL - defaults to public Cloudflare tunnel for mobile access
-    val savedServerUrl: Flow<String> = dataStore.data.map { prefs ->
+    val savedServerUrl: StateFlow<String> = dataStore.data.map { prefs ->
         prefs[PrefsKeys.SERVER_URL] ?: "dialog.datapunk.dev"
-    }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, "dialog.datapunk.dev")
+
+    // Auto-reconnect setting
+    val autoReconnect: StateFlow<Boolean> = dataStore.data.map { prefs ->
+        prefs[PrefsKeys.AUTO_RECONNECT] ?: true
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    // Notifications enabled setting
+    val notificationsEnabled: StateFlow<Boolean> = dataStore.data.map { prefs ->
+        prefs[PrefsKeys.NOTIFICATIONS_ENABLED] ?: true
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    // Vibration (haptic feedback) enabled setting
+    val vibrationEnabled: StateFlow<Boolean> = dataStore.data.map { prefs ->
+        prefs[PrefsKeys.VIBRATION_ENABLED] ?: true
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    // Cloudflare Access Service Token credentials
+    val cfAccessClientId: StateFlow<String> = dataStore.data.map { prefs ->
+        prefs[PrefsKeys.CF_ACCESS_CLIENT_ID] ?: ""
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    val cfAccessClientSecret: StateFlow<String> = dataStore.data.map { prefs ->
+        prefs[PrefsKeys.CF_ACCESS_CLIENT_SECRET] ?: ""
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     init {
         // Auto-connect on startup if we have a saved URL
@@ -72,6 +102,30 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                 if (url.isNotBlank()) {
                     connect(url)
                 }
+            }
+        }
+
+        // Watch for network recovery and auto-reconnect
+        // Only reconnects if we were previously connected and lost connection
+        viewModelScope.launch {
+            var wasOffline = false
+            isOnline.collect { online ->
+                if (online && wasOffline) {
+                    // Network recovered - check if auto-reconnect is enabled
+                    // Also check isReconnecting to avoid duplicate attempts
+                    val state = connectionState.value
+                    if (autoReconnect.value && 
+                        !state.isConnected && 
+                        !state.isConnecting && 
+                        !state.isReconnecting) {
+                        val url = savedServerUrl.value
+                        if (url.isNotBlank()) {
+                            showToast("Network restored, reconnecting...")
+                            connect(url)
+                        }
+                    }
+                }
+                wasOffline = !online
             }
         }
     }
@@ -85,7 +139,10 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
             dataStore.edit { prefs ->
                 prefs[PrefsKeys.SERVER_URL] = serverUrl
             }
-            wsClient.connect(serverUrl)
+            // Pass CF Access credentials if available
+            val clientId = cfAccessClientId.value
+            val clientSecret = cfAccessClientSecret.value
+            wsClient.connect(serverUrl, clientId, clientSecret)
         }
     }
 
@@ -94,6 +151,61 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun disconnect() {
         wsClient.disconnect()
+    }
+
+    /**
+     * Update auto-reconnect setting
+     */
+    fun setAutoReconnect(enabled: Boolean) {
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.AUTO_RECONNECT] = enabled
+            }
+        }
+    }
+
+    /**
+     * Update notifications enabled setting
+     */
+    fun setNotificationsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.NOTIFICATIONS_ENABLED] = enabled
+            }
+        }
+    }
+
+    /**
+     * Update vibration (haptic feedback) enabled setting
+     */
+    fun setVibrationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.VIBRATION_ENABLED] = enabled
+            }
+        }
+    }
+
+    /**
+     * Update Cloudflare Access Service Token Client ID
+     */
+    fun setCfAccessClientId(clientId: String) {
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.CF_ACCESS_CLIENT_ID] = clientId
+            }
+        }
+    }
+
+    /**
+     * Update Cloudflare Access Service Token Client Secret
+     */
+    fun setCfAccessClientSecret(clientSecret: String) {
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.CF_ACCESS_CLIENT_SECRET] = clientSecret
+            }
+        }
     }
 
     /**

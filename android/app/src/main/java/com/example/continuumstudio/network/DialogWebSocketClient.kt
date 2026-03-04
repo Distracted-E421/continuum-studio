@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import kotlin.math.pow
@@ -36,7 +37,13 @@ class DialogWebSocketClient(
     // Reconnection state
     private var reconnectAttempts = 0
     private var reconnectJob: Job? = null
-    private var shouldReconnect = true
+    private var shouldReconnect = false
+    private var wasEverConnected = false // Track if we successfully connected before
+    private val maxInitialAttempts = 3 // Max retries for initial connection
+    
+    // Cloudflare Access credentials (stored for reconnection)
+    private var cfAccessClientId: String = ""
+    private var cfAccessClientSecret: String = ""
     
     // Latency tracking
     private var lastPingTime: Long? = null
@@ -134,16 +141,37 @@ class DialogWebSocketClient(
             .removePrefix("wss://").removePrefix("ws://")
         return if (secure) "https://$baseUrl" else "http://$baseUrl"
     }
+    
+    /**
+     * Create a request builder with CF Access headers if credentials are available
+     */
+    private fun buildRequestWithAuth(url: String): Request.Builder {
+        val builder = Request.Builder().url(url)
+        if (cfAccessClientId.isNotBlank() && cfAccessClientSecret.isNotBlank()) {
+            builder.header("CF-Access-Client-Id", cfAccessClientId)
+            builder.header("CF-Access-Client-Secret", cfAccessClientSecret)
+        }
+        return builder
+    }
 
     /**
      * Connect to the dialog daemon
      */
-    fun connect(serverUrl: String) {
-        if (_connectionState.value.isConnected || _connectionState.value.isConnecting) {
+    fun connect(serverUrl: String, clientId: String = "", clientSecret: String = "") {
+        val state = _connectionState.value
+        if (state.isConnected || state.isConnecting) {
             return
         }
         
-        shouldReconnect = true
+        // If we're in a reconnect loop, don't block - let scheduleReconnect manage attempts
+        // But if user manually triggers connect (not in reconnect state), reset counter
+        if (!state.isReconnecting) {
+            reconnectAttempts = 0 // Reset attempt counter for fresh manual connection
+            // Store credentials for reconnection (only update on manual connect)
+            cfAccessClientId = clientId
+            cfAccessClientSecret = clientSecret
+        }
+        
         reconnectJob?.cancel()
 
         _connectionState.update { it.copy(
@@ -154,14 +182,23 @@ class DialogWebSocketClient(
 
         val wsUrl = buildWebSocketUrl(serverUrl)
 
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url("$wsUrl/ws")
-            .build()
+        
+        // Add Cloudflare Access headers if credentials are provided
+        if (cfAccessClientId.isNotBlank() && cfAccessClientSecret.isNotBlank()) {
+            requestBuilder.header("CF-Access-Client-Id", cfAccessClientId)
+            requestBuilder.header("CF-Access-Client-Secret", cfAccessClientSecret)
+        }
+        
+        val request = requestBuilder.build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 scope.launch {
                     reconnectAttempts = 0 // Reset on successful connection
+                    wasEverConnected = true // Mark that we've successfully connected
+                    shouldReconnect = true // Enable auto-reconnect after successful connection
                     _connectionState.update { it.copy(
                         isConnected = true,
                         isConnecting = false,
@@ -219,9 +256,25 @@ class DialogWebSocketClient(
     
     /**
      * Schedule a reconnection attempt with exponential backoff
+     * Only auto-reconnects if:
+     * - We were previously connected (wasEverConnected)
+     * - OR we haven't exceeded max initial attempts
      */
     private fun scheduleReconnect(serverUrl: String) {
-        if (!shouldReconnect) return
+        // For initial connection failures, limit retries
+        if (!wasEverConnected) {
+            if (reconnectAttempts >= maxInitialAttempts) {
+                // Give up on initial connection after max attempts
+                _connectionState.update { it.copy(
+                    isReconnecting = false,
+                    errorMessage = "Could not connect after $maxInitialAttempts attempts. Check server URL and try again."
+                ) }
+                return
+            }
+        }
+        
+        // For reconnection (was connected before), require shouldReconnect flag
+        if (wasEverConnected && !shouldReconnect) return
         
         val delay = getReconnectDelay()
         reconnectAttempts++
@@ -237,9 +290,24 @@ class DialogWebSocketClient(
             _events.send(DialogEvent.Reconnecting(reconnectAttempts, delay))
             
             delay(delay)
-            if (shouldReconnect && !_connectionState.value.isConnected) {
-                _connectionState.update { it.copy(isConnecting = false) } // Reset for retry
-                connect(serverUrl)
+            if (!_connectionState.value.isConnected) {
+                // Only continue if we should (for reconnection) or haven't given up (for initial)
+                if (wasEverConnected && shouldReconnect) {
+                    _connectionState.update { it.copy(isConnecting = false) } // Reset for retry
+                    connect(serverUrl)
+                } else if (!wasEverConnected && reconnectAttempts < maxInitialAttempts) {
+                    _connectionState.update { it.copy(isConnecting = false) } // Reset for retry
+                    connect(serverUrl)
+                } else {
+                    // Gave up - make sure state reflects that we're not reconnecting
+                    _connectionState.update { it.copy(
+                        isReconnecting = false,
+                        errorMessage = if (!wasEverConnected) 
+                            "Could not connect after $reconnectAttempts attempts. Check server URL and try again."
+                        else 
+                            "Connection lost. Auto-reconnect disabled."
+                    ) }
+                }
             }
         }
     }
@@ -271,10 +339,12 @@ class DialogWebSocketClient(
      */
     fun disconnect() {
         shouldReconnect = false
+        wasEverConnected = false // Reset so next connect uses initial retry logic
+        reconnectAttempts = 0
         reconnectJob?.cancel()
         webSocket?.close(1000, "User disconnected")
         webSocket = null
-        _connectionState.update { it.copy(isConnected = false, isConnecting = false) }
+        _connectionState.update { it.copy(isConnected = false, isConnecting = false, isReconnecting = false) }
         _latency.value = null
     }
 
@@ -285,9 +355,7 @@ class DialogWebSocketClient(
         return withContext(Dispatchers.IO) {
             try {
                 val httpUrl = buildHttpUrl(serverUrl)
-                val request = Request.Builder()
-                    .url("$httpUrl/api/current")
-                    .build()
+                val request = buildRequestWithAuth("$httpUrl/api/current").build()
                 
                 val response = client.newCall(request).execute()
                 if (response.isSuccessful) {
@@ -334,12 +402,8 @@ class DialogWebSocketClient(
                     comment?.let { put("comment", it) }
                 }
 
-                val request = Request.Builder()
-                    .url("$httpUrl/api/answer")
-                    .post(RequestBody.create(
-                        "application/json".toMediaType(),
-                        requestBody.toString()
-                    ))
+                val request = buildRequestWithAuth("$httpUrl/api/answer")
+                    .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
                 val response = client.newCall(request).execute()
@@ -369,9 +433,8 @@ class DialogWebSocketClient(
         return withContext(Dispatchers.IO) {
             try {
                 val httpUrl = buildHttpUrl(serverUrl)
-                val request = Request.Builder()
-                    .url("$httpUrl/api/hold")
-                    .post(RequestBody.create(null, ""))
+                val request = buildRequestWithAuth("$httpUrl/api/hold")
+                    .post("".toRequestBody(null))
                     .build()
 
                 val response = client.newCall(request).execute()
@@ -454,9 +517,7 @@ class DialogWebSocketClient(
             _historyLoading.value = true
             try {
                 val httpUrl = buildHttpUrl(serverUrl)
-                val request = Request.Builder()
-                    .url("$httpUrl/api/history?limit=$limit")
-                    .build()
+                val request = buildRequestWithAuth("$httpUrl/api/history?limit=$limit").build()
                 
                 val response = client.newCall(request).execute()
                 if (response.isSuccessful) {
@@ -503,12 +564,8 @@ class DialogWebSocketClient(
                     historyItem.timeout?.let { put("timeout_secs", it) }
                 }
                 
-                val request = Request.Builder()
-                    .url("$httpUrl/api/dialog")
-                    .post(RequestBody.create(
-                        "application/json".toMediaType(),
-                        requestBody.toString()
-                    ))
+                val request = buildRequestWithAuth("$httpUrl/api/dialog")
+                    .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
                 
                 val response = client.newCall(request).execute()

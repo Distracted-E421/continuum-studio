@@ -6,14 +6,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -88,7 +88,7 @@ fun WidgetBayScreen(
                                 }
                             }
                         ) {
-                            Icon(Icons.Default.List, contentDescription = "Dialogs")
+                            Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Dialogs")
                         }
                     }
                 },
@@ -289,11 +289,11 @@ fun AddWidgetDialog(
 
 // Extension to get icon for widget type
 fun WidgetType.icon(): ImageVector = when (this) {
-    WidgetType.DIALOG_QUEUE -> Icons.Default.List
+    WidgetType.DIALOG_QUEUE -> Icons.AutoMirrored.Filled.List
     WidgetType.HARNESS_STATUS -> Icons.Default.Settings
-    WidgetType.SERVICE_DISCOVERY -> Icons.Default.Send
+    WidgetType.SERVICE_DISCOVERY -> Icons.AutoMirrored.Filled.Send
     WidgetType.NODE_HEALTH -> Icons.Default.Check
-    WidgetType.QUICK_ACTIONS -> Icons.Default.Send
+    WidgetType.QUICK_ACTIONS -> Icons.AutoMirrored.Filled.Send
     WidgetType.CONNECTION_STATUS -> Icons.Default.Check
-    WidgetType.AGENT_STREAM -> Icons.Default.List
+    WidgetType.AGENT_STREAM -> Icons.AutoMirrored.Filled.List
 }

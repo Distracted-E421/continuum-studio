@@ -11,32 +11,45 @@
 
 The Continuum Studio Android app connects to the desktop Synapsix/Studio Core system, enabling mobile dialog responses, task management, and agent monitoring.
 
-### Current State (Updated 2026-02-21)
+### Current State (Updated 2026-03-04)
 
 **Android Project** (`/home/e421/continuum-studio/android/`):
 - ✅ Full Gradle project structure (Kotlin-based)
-- ✅ `MainActivity.kt` - Main entry point
-- ✅ `DialogWebSocketClient.kt` - WebSocket networking
-- ✅ `DialogViewModel.kt` - Dialog state management
+- ✅ `MainActivity.kt` - Main entry point with navigation
+- ✅ `DialogWebSocketClient.kt` - WebSocket networking with Cloudflare Access support
+- ✅ `DialogViewModel.kt` - Dialog state management with DataStore persistence
 - ✅ `WidgetBayViewModel.kt` - Widget state
-- ✅ `DialogScreen.kt` - Dialog UI (Compose)
+- ✅ `DialogScreen.kt` - Dialog UI (Compose) with tabs (Dialog, History, Settings)
 - ✅ `WidgetContents.kt`, `WidgetBay.kt` - Widget UI
-- ✅ `DialogNotificationService.kt` - Background service
+- ✅ `DialogNotificationService.kt` - Background service with notification channels
 - ✅ Material You theming (Color.kt, Theme.kt, Type.kt)
 - ✅ Data models (`DialogModels.kt`, `WidgetModels.kt`)
+- ✅ `NetworkMonitor.kt` - Network connectivity monitoring
+
+**Recent Features (2026-03-04):**
+- ✅ **Settings Tab** - Full settings screen with server URL, notifications, about
+- ✅ **Cloudflare Access** - Service token authentication (CF-Access-Client-Id/Secret headers)
+- ✅ **DataStore Persistence** - Settings persist across app restarts
+- ✅ **Pull-to-Refresh** - Refresh dialogs and history by pulling down
+- ✅ **Hold Mode** - Toggle hold mode from dialog or settings
+- ✅ **System Notifications** - Type-specific icons (info, warning, error, question)
+- ✅ **History View** - View past dialog responses with reinvoke
+- ✅ **Reconnection Logic** - Exponential backoff with jitter, max attempts handling
+- ✅ **Deprecation Cleanup** - Updated to AutoMirrored icons, modern RequestBody API
 
 **Phase Status:**
 | Phase | Status |
 |-------|--------|
-| Phase 1: WebSocket Server | ⚠️ Protocol defined, server needs testing |
-| Phase 2: State Sync | ⚠️ Partial implementation |
+| Phase 1: WebSocket Server | ✅ Dialog daemon serves WebSocket + REST on port 8080 |
+| Phase 2: State Sync | ✅ Real-time WebSocket sync with latency tracking |
 | Phase 3: Dialog Bridge | ✅ Core implementation done |
-| Phase 4: Android App | ✅ Functional app with dialogs |
-| Phase 5: Advanced Features | ❌ Pending (push notifications, offline) |
+| Phase 4: Android App | ✅ Feature-complete app matching web interface |
+| Phase 5: Advanced Features | ⚠️ Partial (notifications done, offline/push pending) |
 
 **Synapsix Integration:**
 - ✅ `CoreClient` module exists (305 lines)
-- ⚠️ WebSocket server in Studio Core needs deployment testing
+- ✅ Dialog daemon WebSocket/REST API operational
+- ✅ Cloudflare tunnel route (`dialog.datapunk.dev`) with Access protection
 
 ---
 
@@ -72,9 +85,9 @@ The Continuum Studio Android app connects to the desktop Synapsix/Studio Core sy
 
 ### Success Criteria
 
-- [ ] WebSocket server running on port 4001
-- [ ] Mobile can connect and authenticate
-- [ ] Basic messages exchanged
+- [x] WebSocket server running on port 8080 (dialog daemon)
+- [x] Mobile can connect and authenticate (Cloudflare Access service tokens)
+- [x] Basic messages exchanged (JSON protocol)
 
 ---
 
@@ -111,9 +124,9 @@ The Continuum Studio Android app connects to the desktop Synapsix/Studio Core sy
 
 ### Success Criteria
 
-- [ ] Mobile receives initial state
-- [ ] Updates push in <500ms
-- [ ] State stays synchronized
+- [x] Mobile receives initial state (via REST /api/current + WebSocket events)
+- [x] Updates push in <500ms (WebSocket real-time, latency tracked)
+- [x] State stays synchronized (WebSocket events: new_dialog, dialog_answered, hold_changed)
 
 ---
 
@@ -141,9 +154,9 @@ The Continuum Studio Android app connects to the desktop Synapsix/Studio Core sy
 
 ### Success Criteria
 
-- [ ] Dialogs appear on mobile
-- [ ] Can respond from mobile
-- [ ] Responses work like desktop
+- [x] Dialogs appear on mobile (with full context, Markdown rendering)
+- [x] Can respond from mobile (choice, confirmation, text, slider)
+- [x] Responses work like desktop (via REST /api/answer)
 
 ---
 
@@ -172,9 +185,9 @@ The Continuum Studio Android app connects to the desktop Synapsix/Studio Core sy
 
 ### Success Criteria
 
-- [ ] App builds and runs
-- [ ] Connects to desktop
-- [ ] All core features work
+- [x] App builds and runs (Gradle/Kotlin, Material 3)
+- [x] Connects to desktop (WebSocket + REST to dialog daemon)
+- [x] All core features work (dialogs, history, settings, notifications)
 
 ---
 
@@ -312,4 +325,4 @@ The CoreClient in Synapsix handles the actual connection:
 
 ---
 
-**Last Updated**: 2026-02-21 (Updated to reflect functional Android app after multi-agent review)
+**Last Updated**: 2026-03-04 (Updated after Cloudflare Access integration, settings persistence, and deprecation cleanup)

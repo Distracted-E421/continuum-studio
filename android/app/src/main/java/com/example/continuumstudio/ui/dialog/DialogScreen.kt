@@ -13,8 +13,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.continuumstudio.data.*
@@ -51,6 +57,10 @@ fun DialogScreen(
     latency: Long? = null,
     snackbarMessage: String? = null,
     isOnline: Boolean = true,
+    savedServerUrl: String = "dialog.datapunk.dev",
+    autoReconnect: Boolean = true,
+    notificationsEnabled: Boolean = true,
+    vibrationEnabled: Boolean = true,
     onConnect: (String) -> Unit,
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
@@ -65,12 +75,25 @@ fun DialogScreen(
     onFetchHistory: () -> Unit = {},
     onReinvokeDialog: (HistoryItem) -> Unit = {},
     onSnackbarDismiss: () -> Unit = {},
+    onAutoReconnectChange: (Boolean) -> Unit = {},
+    onNotificationsEnabledChange: (Boolean) -> Unit = {},
+    onVibrationEnabledChange: (Boolean) -> Unit = {},
+    cfAccessClientId: String = "",
+    cfAccessClientSecret: String = "",
+    onCfAccessClientIdChange: (String) -> Unit = {},
+    onCfAccessClientSecretChange: (String) -> Unit = {},
     onTestNotification: () -> Unit = {},
     onCopyToClipboard: (String) -> Unit = {},
 ) {
-    var serverUrlInput by remember { mutableStateOf(connectionState.serverUrl.ifBlank { "dialog.datapunk.dev" }) }
+    // Initialize serverUrlInput from savedServerUrl (persisted in DataStore)
+    var serverUrlInput by remember { mutableStateOf(savedServerUrl) }
     var showSettings by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(MainTab.DIALOG) }
+    
+    // Update serverUrlInput when savedServerUrl changes (e.g., on first load from DataStore)
+    LaunchedEffect(savedServerUrl) {
+        serverUrlInput = savedServerUrl
+    }
     
     // Snackbar state for toast notifications
     val snackbarHostState = remember { SnackbarHostState() }
@@ -127,8 +150,18 @@ fun DialogScreen(
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                         }
                         // Settings
-                        IconButton(onClick = { showSettings = !showSettings }) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        IconButton(onClick = { 
+                            // Toggle to Settings tab
+                            selectedTab = if (selectedTab == MainTab.SETTINGS) MainTab.DIALOG else MainTab.SETTINGS
+                        }) {
+                            Icon(
+                                Icons.Default.Settings, 
+                                contentDescription = "Settings",
+                                tint = if (selectedTab == MainTab.SETTINGS) 
+                                    MaterialTheme.colorScheme.primary 
+                                else 
+                                    MaterialTheme.colorScheme.onSurface
+                            )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -166,12 +199,11 @@ fun DialogScreen(
                     }
                 }
                 
-                // Tab bar (only when connected)
-                if (connectionState.isConnected) {
-                    TabRow(
-                        selectedTabIndex = selectedTab.ordinal,
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    ) {
+                // Tab bar - always visible, but only Dialog/History require connection
+                TabRow(
+                    selectedTabIndex = selectedTab.ordinal,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                ) {
                         Tab(
                             selected = selectedTab == MainTab.DIALOG,
                             onClick = { selectedTab = MainTab.DIALOG },
@@ -185,7 +217,7 @@ fun DialogScreen(
                                 onFetchHistory()
                             },
                             text = { Text("History") },
-                            icon = { Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                            icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(18.dp)) }
                         )
                         Tab(
                             selected = selectedTab == MainTab.SETTINGS,
@@ -194,7 +226,6 @@ fun DialogScreen(
                             icon = { Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp)) }
                         )
                     }
-                }
             }
         }
     ) { padding ->
@@ -227,6 +258,16 @@ fun DialogScreen(
                         onConnect = { onConnect(serverUrlInput) },
                         onDisconnect = onDisconnect,
                         isConnected = connectionState.isConnected,
+                        autoReconnect = autoReconnect,
+                        notificationsEnabled = notificationsEnabled,
+                        vibrationEnabled = vibrationEnabled,
+                        onAutoReconnectChange = onAutoReconnectChange,
+                        onNotificationsEnabledChange = onNotificationsEnabledChange,
+                        onVibrationEnabledChange = onVibrationEnabledChange,
+                        cfAccessClientId = cfAccessClientId,
+                        cfAccessClientSecret = cfAccessClientSecret,
+                        onCfAccessClientIdChange = onCfAccessClientIdChange,
+                        onCfAccessClientSecretChange = onCfAccessClientSecretChange,
                         onTestNotification = onTestNotification,
                     )
                 }
@@ -356,14 +397,11 @@ fun HistoryView(
 ) {
     val pullToRefreshState = rememberPullToRefreshState()
     
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .pullToRefresh(
-                state = pullToRefreshState,
-                isRefreshing = isLoading,
-                onRefresh = onRefresh
-            )
+    PullToRefreshBox(
+        isRefreshing = isLoading,
+        onRefresh = onRefresh,
+        state = pullToRefreshState,
+        modifier = Modifier.fillMaxSize()
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Header with refresh button
@@ -449,13 +487,6 @@ fun HistoryView(
                 }
             }
         }
-        
-        // Pull-to-refresh indicator
-        PullToRefreshDefaults.Indicator(
-            state = pullToRefreshState,
-            isRefreshing = isLoading,
-            modifier = Modifier.align(Alignment.TopCenter)
-        )
     }
 }
 
@@ -470,6 +501,16 @@ fun SettingsView(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     isConnected: Boolean,
+    autoReconnect: Boolean,
+    notificationsEnabled: Boolean,
+    vibrationEnabled: Boolean,
+    onAutoReconnectChange: (Boolean) -> Unit,
+    onNotificationsEnabledChange: (Boolean) -> Unit,
+    onVibrationEnabledChange: (Boolean) -> Unit,
+    cfAccessClientId: String = "",
+    cfAccessClientSecret: String = "",
+    onCfAccessClientIdChange: (String) -> Unit = {},
+    onCfAccessClientSecretChange: (String) -> Unit = {},
     onTestNotification: () -> Unit,
 ) {
     val hapticFeedback = LocalHapticFeedback.current
@@ -542,7 +583,7 @@ fun SettingsView(
                         if (isConnected) {
                             OutlinedButton(
                                 onClick = {
-                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onDisconnect()
                                 }
                             ) {
@@ -551,7 +592,7 @@ fun SettingsView(
                         } else {
                             Button(
                                 onClick = {
-                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onConnect()
                                 }
                             ) {
@@ -559,6 +600,120 @@ fun SettingsView(
                             }
                         }
                     }
+                    
+                    HorizontalDivider()
+                    
+                    // Auto-reconnect toggle
+                    SettingsToggleRow(
+                        title = "Auto-reconnect",
+                        subtitle = "Automatically reconnect when network is restored",
+                        checked = autoReconnect,
+                        onCheckedChange = {
+                            if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onAutoReconnectChange(it)
+                        }
+                    )
+                }
+            }
+        }
+        
+        // Authentication Section (Cloudflare Access)
+        item {
+            SettingsSectionHeader(title = "Authentication")
+        }
+        
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        "Cloudflare Access",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "Required for protected endpoints. Get service token credentials from Cloudflare Zero Trust dashboard.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    // CF Access Client ID
+                    OutlinedTextField(
+                        value = cfAccessClientId,
+                        onValueChange = onCfAccessClientIdChange,
+                        label = { Text("Client ID") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        leadingIcon = { 
+                            Icon(Icons.Default.Key, contentDescription = null) 
+                        },
+                        placeholder = { Text("CF-Access-Client-Id") }
+                    )
+                    
+                    // CF Access Client Secret
+                    OutlinedTextField(
+                        value = cfAccessClientSecret,
+                        onValueChange = onCfAccessClientSecretChange,
+                        label = { Text("Client Secret") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        leadingIcon = { 
+                            Icon(Icons.Default.Lock, contentDescription = null) 
+                        },
+                        placeholder = { Text("CF-Access-Client-Secret") },
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                    
+                    if (cfAccessClientId.isNotBlank() && cfAccessClientSecret.isNotBlank()) {
+                        Surface(
+                            color = Color(0xFF4CAF50).copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                "✓ Service token configured",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Color(0xFF4CAF50)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Behavior Section
+        item {
+            SettingsSectionHeader(title = "Behavior")
+        }
+        
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Vibration/haptic feedback toggle
+                    SettingsToggleRow(
+                        title = "Haptic Feedback",
+                        subtitle = "Vibrate on button presses and interactions",
+                        checked = vibrationEnabled,
+                        onCheckedChange = {
+                            if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onVibrationEnabledChange(it)
+                        }
+                    )
                 }
             }
         }
@@ -579,6 +734,19 @@ fun SettingsView(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // Enable notifications toggle
+                    SettingsToggleRow(
+                        title = "Enable Notifications",
+                        subtitle = "Show notifications for new dialogs and events",
+                        checked = notificationsEnabled,
+                        onCheckedChange = {
+                            if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onNotificationsEnabledChange(it)
+                        }
+                    )
+                    
+                    HorizontalDivider()
+                    
                     // Test notification button
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -598,9 +766,10 @@ fun SettingsView(
                         }
                         OutlinedButton(
                             onClick = {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onTestNotification()
-                            }
+                            },
+                            enabled = notificationsEnabled
                         ) {
                             Icon(
                                 Icons.Default.Notifications,
@@ -693,7 +862,7 @@ fun SettingsView(
                     )
                     HorizontalDivider()
                     QuickLinkRow(
-                        icon = Icons.Default.Help,
+                        icon = Icons.AutoMirrored.Filled.Help,
                         title = "Documentation",
                         subtitle = "Usage guide and FAQ"
                     )
@@ -716,6 +885,36 @@ private fun SettingsSectionHeader(title: String) {
         fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(vertical = 4.dp)
     )
+}
+
+@Composable
+private fun SettingsToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+    }
 }
 
 @Composable
@@ -798,7 +997,7 @@ private fun formatTimestamp(isoTimestamp: String?): String {
 @Composable
 private fun DialogTypeIcon(dialogType: String) {
     val icon = when (dialogType.lowercase()) {
-        "choice" -> Icons.Default.List
+        "choice" -> Icons.AutoMirrored.Filled.List
         "text" -> Icons.Default.Edit
         "confirm" -> Icons.Default.Check
         "slider" -> Icons.Default.LinearScale
@@ -1104,7 +1303,7 @@ fun DashboardCard(
         
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             StatusChip(
-                icon = Icons.Default.List,
+                icon = Icons.AutoMirrored.Filled.List,
                 label = "Queue: $queueCount",
             )
             StatusChip(
@@ -1358,7 +1557,7 @@ fun ActiveDialogCard(
                 else -> true
             }
         ) {
-            Icon(Icons.Default.Send, contentDescription = null)
+            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Submit")
         }

@@ -96,8 +96,13 @@ Legacy implementation with D2 diagram viewer, tab system, and ETF IPC. Being rep
 Features:
 - **Widget Bay** - Customizable grid dashboard for monitoring
 - **Dialog Client** - WebSocket connection to dialog daemon (port 8080)
-- **Notification Service** - Background dialog alerts
-- **Auto-reconnect** - Resilient WebSocket connection
+- **Notification Service** - Background dialog alerts with type-specific icons
+- **Auto-reconnect** - Resilient WebSocket with exponential backoff
+- **Settings Screen** - Server URL, notifications, hold mode, about info
+- **Cloudflare Access** - Service token authentication for tunnel access
+- **History View** - Browse past dialog responses with reinvoke support
+- **Pull-to-Refresh** - Manual refresh for dialogs and history
+- **DataStore Persistence** - Settings survive app restarts
 
 ### Studio Core (`core/studio_core/`)
 
