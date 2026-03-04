@@ -111,6 +111,24 @@ data class QueueItem(
     val type: String,
 )
 
+/**
+ * History item from /api/history endpoint
+ */
+@Serializable
+data class HistoryItem(
+    val id: String,
+    val title: String,
+    val prompt: String,
+    @SerialName("dialog_type") val dialogType: String,
+    val selection: JsonElement? = null,
+    val comment: String? = null,
+    val cancelled: Boolean = false,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("completed_at") val completedAt: String? = null,
+    val timeout: Int? = null,
+    val options: List<ChoiceOption>? = null,
+)
+
 // === Outgoing Messages to Server ===
 
 @Serializable
@@ -125,6 +143,8 @@ data class DialogAnswerRequest(
 data class ConnectionState(
     val isConnected: Boolean = false,
     val isConnecting: Boolean = false,
+    val isReconnecting: Boolean = false,
+    val reconnectAttempts: Int = 0,
     val serverUrl: String = "",
     val errorMessage: String? = null,
 )

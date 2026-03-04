@@ -27,15 +27,32 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     val connectionState = wsClient.connectionState
     val dialogState = wsClient.dialogState
     val events = wsClient.events
+    
+    // History and latency
+    val history = wsClient.history
+    val historyLoading = wsClient.historyLoading
+    val latency = wsClient.latency
+    
+    // Snackbar/Toast message state
+    private val _snackbarMessage = MutableStateFlow<String?>(null)
+    val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
+    
+    fun showToast(message: String) {
+        _snackbarMessage.value = message
+    }
+    
+    fun dismissToast() {
+        _snackbarMessage.value = null
+    }
 
     // Settings keys
     private object PrefsKeys {
         val SERVER_URL = stringPreferencesKey("server_url")
     }
 
-    // Saved server URL
+    // Saved server URL - defaults to public Cloudflare tunnel for mobile access
     val savedServerUrl: Flow<String> = dataStore.data.map { prefs ->
-        prefs[PrefsKeys.SERVER_URL] ?: "obsidian:8080"
+        prefs[PrefsKeys.SERVER_URL] ?: "dialog.datapunk.dev"
     }
 
     init {
@@ -163,6 +180,35 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                 wsClient.toggleHoldMode(it)
             }
         }
+    }
+    
+    /**
+     * Fetch dialog history
+     */
+    fun fetchHistory(limit: Int = 50) {
+        viewModelScope.launch {
+            connectionState.value.serverUrl.takeIf { it.isNotBlank() }?.let {
+                wsClient.fetchHistory(it, limit)
+            }
+        }
+    }
+    
+    /**
+     * Reinvoke a historical dialog
+     */
+    fun reinvokeDialog(historyItem: com.example.continuumstudio.data.HistoryItem) {
+        viewModelScope.launch {
+            connectionState.value.serverUrl.takeIf { it.isNotBlank() }?.let {
+                wsClient.reinvokeDialog(it, historyItem)
+            }
+        }
+    }
+    
+    /**
+     * Manually trigger a ping to measure latency
+     */
+    fun pingServer() {
+        wsClient.sendPing()
     }
 
     override fun onCleared() {

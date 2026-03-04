@@ -80,31 +80,41 @@ class MainActivity : ComponentActivity() {
                 
                 val connectionState by dialogViewModel.connectionState.collectAsState()
                 val dialogState by dialogViewModel.dialogState.collectAsState()
+                val history by dialogViewModel.history.collectAsState()
+                val historyLoading by dialogViewModel.historyLoading.collectAsState()
+                val latency by dialogViewModel.latency.collectAsState()
+                val snackbarMessage by dialogViewModel.snackbarMessage.collectAsState()
                 val bayConfig by widgetBayViewModel.bayConfig.collectAsState()
                 val harnesses by widgetBayViewModel.harnesses.collectAsState()
                 val services by widgetBayViewModel.services.collectAsState()
                 val isLoadingHarnesses by widgetBayViewModel.isLoadingHarnesses.collectAsState()
                 val isLoadingServices by widgetBayViewModel.isLoadingServices.collectAsState()
                 
-                // Handle events
+                // Handle events - show toasts and notifications
                 LaunchedEffect(Unit) {
                     dialogViewModel.events.collect { event ->
                         when (event) {
                             is DialogEvent.Connected -> {
                                 // Fetch widget data on connection
                                 widgetBayViewModel.refreshAll(connectionState.serverUrl)
+                                dialogViewModel.showToast("Connected to server")
                             }
                             is DialogEvent.Disconnected -> {
-                                // Handle disconnection
+                                if (event.reason.isNotBlank()) {
+                                    dialogViewModel.showToast("Disconnected: ${event.reason}")
+                                }
+                            }
+                            is DialogEvent.Reconnecting -> {
+                                val delaySeconds = event.delayMs / 1000
+                                dialogViewModel.showToast("Reconnecting (attempt ${event.attempt}) in ${delaySeconds}s...")
                             }
                             is DialogEvent.Error -> {
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    "Error: ${event.message}",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                dialogViewModel.showToast("Error: ${event.message}")
                             }
                             is DialogEvent.NewDialog -> {
+                                // Show toast
+                                dialogViewModel.showToast("New dialog: ${event.title}")
+                                
                                 // Show notification if app is in background
                                 if (!isInForeground) {
                                     DialogNotificationService.notifyNewDialog(
@@ -121,6 +131,7 @@ class MainActivity : ComponentActivity() {
                             }
                             is DialogEvent.DialogCompleted -> {
                                 // Dialog was completed (by us or desktop)
+                                dialogViewModel.showToast("Dialog completed")
                             }
                         }
                     }
@@ -219,6 +230,10 @@ class MainActivity : ComponentActivity() {
                             DialogScreen(
                                 connectionState = connectionState,
                                 dialogState = dialogState,
+                                history = history,
+                                historyLoading = historyLoading,
+                                latency = latency,
+                                snackbarMessage = snackbarMessage,
                                 onConnect = dialogViewModel::connect,
                                 onDisconnect = dialogViewModel::disconnect,
                                 onRefresh = dialogViewModel::refreshDialog,
@@ -230,6 +245,9 @@ class MainActivity : ComponentActivity() {
                                 onConfirm = dialogViewModel::setConfirmation,
                                 onSubmit = dialogViewModel::submitAnswer,
                                 onToggleHoldMode = dialogViewModel::toggleHoldMode,
+                                onFetchHistory = dialogViewModel::fetchHistory,
+                                onReinvokeDialog = dialogViewModel::reinvokeDialog,
+                                onSnackbarDismiss = dialogViewModel::dismissToast,
                             )
                         }
                     }

@@ -8,9 +8,16 @@ import kotlinx.serialization.json.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
+import kotlin.math.pow
+import kotlin.random.Random
 
 /**
  * WebSocket client for connecting to the Continuum Studio dialog daemon
+ * Features:
+ * - Exponential backoff with jitter for reconnection (mobile-friendly)
+ * - Latency tracking via ping/pong
+ * - History API support
  */
 class DialogWebSocketClient(
     private val scope: CoroutineScope
@@ -26,6 +33,16 @@ class DialogWebSocketClient(
         isLenient = true
     }
 
+    // Reconnection state
+    private var reconnectAttempts = 0
+    private var reconnectJob: Job? = null
+    private var shouldReconnect = true
+    
+    // Latency tracking
+    private var lastPingTime: Long? = null
+    private val _latency = MutableStateFlow<Long?>(null)
+    val latency: StateFlow<Long?> = _latency.asStateFlow()
+
     // Connection state
     private val _connectionState = MutableStateFlow(ConnectionState())
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -33,10 +50,90 @@ class DialogWebSocketClient(
     // Dialog state
     private val _dialogState = MutableStateFlow(DialogUiState())
     val dialogState: StateFlow<DialogUiState> = _dialogState.asStateFlow()
+    
+    // History state
+    private val _history = MutableStateFlow<List<HistoryItem>>(emptyList())
+    val history: StateFlow<List<HistoryItem>> = _history.asStateFlow()
+    
+    private val _historyLoading = MutableStateFlow(false)
+    val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
 
     // Events channel for one-shot events
     private val _events = Channel<DialogEvent>(Channel.BUFFERED)
     val events: Flow<DialogEvent> = _events.receiveAsFlow()
+    
+    /**
+     * Calculate reconnection delay with exponential backoff and jitter
+     * Mobile networks benefit from this approach to avoid thundering herd
+     */
+    private fun getReconnectDelay(): Long {
+        val baseDelay = 1000L // 1 second
+        val maxDelay = 30000L // 30 seconds cap
+        val delay = min(baseDelay * 2.0.pow(reconnectAttempts.toDouble()).toLong(), maxDelay)
+        val jitter = (delay * 0.3 * Random.nextDouble()).toLong() // ±30% jitter
+        return delay + jitter
+    }
+
+    /**
+     * Determine if a URL should use secure protocols (HTTPS/WSS)
+     * - Explicit https:// or wss:// → secure
+     * - Known public domains (no localhost/IP) → secure (assumes Cloudflare tunnel)
+     * - Explicit http:// or ws:// → insecure
+     * - localhost or private IPs → insecure
+     */
+    private fun shouldUseSecure(url: String): Boolean {
+        val lowered = url.lowercase()
+        
+        // Explicit protocol specified
+        if (lowered.startsWith("https://") || lowered.startsWith("wss://")) return true
+        if (lowered.startsWith("http://") || lowered.startsWith("ws://")) return false
+        
+        // Strip any protocol prefix for host analysis
+        val host = lowered
+            .removePrefix("https://").removePrefix("http://")
+            .removePrefix("wss://").removePrefix("ws://")
+            .split("/").first()
+            .split(":").first() // Remove port
+        
+        // Local hosts are insecure
+        if (host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0") return false
+        
+        // Private IP ranges are insecure
+        if (host.startsWith("192.168.") || host.startsWith("10.") || 
+            host.startsWith("172.16.") || host.startsWith("172.17.") ||
+            host.startsWith("172.18.") || host.startsWith("172.19.") ||
+            host.startsWith("172.2") || host.startsWith("172.30.") || host.startsWith("172.31.")) {
+            return false
+        }
+        
+        // Tailscale IPs (100.x.x.x) are treated as local/insecure
+        if (host.startsWith("100.")) return false
+        
+        // Public domain names default to secure (Cloudflare tunnel assumption)
+        return true
+    }
+    
+    /**
+     * Build the WebSocket URL with appropriate protocol
+     */
+    private fun buildWebSocketUrl(serverUrl: String): String {
+        val secure = shouldUseSecure(serverUrl)
+        val baseUrl = serverUrl
+            .removePrefix("https://").removePrefix("http://")
+            .removePrefix("wss://").removePrefix("ws://")
+        return if (secure) "wss://$baseUrl" else "ws://$baseUrl"
+    }
+    
+    /**
+     * Build the HTTP URL with appropriate protocol
+     */
+    private fun buildHttpUrl(serverUrl: String): String {
+        val secure = shouldUseSecure(serverUrl)
+        val baseUrl = serverUrl
+            .removePrefix("https://").removePrefix("http://")
+            .removePrefix("wss://").removePrefix("ws://")
+        return if (secure) "https://$baseUrl" else "http://$baseUrl"
+    }
 
     /**
      * Connect to the dialog daemon
@@ -45,6 +142,9 @@ class DialogWebSocketClient(
         if (_connectionState.value.isConnected || _connectionState.value.isConnecting) {
             return
         }
+        
+        shouldReconnect = true
+        reconnectJob?.cancel()
 
         _connectionState.update { it.copy(
             isConnecting = true,
@@ -52,11 +152,7 @@ class DialogWebSocketClient(
             errorMessage = null
         ) }
 
-        val wsUrl = if (serverUrl.startsWith("ws://") || serverUrl.startsWith("wss://")) {
-            serverUrl
-        } else {
-            "ws://$serverUrl"
-        }
+        val wsUrl = buildWebSocketUrl(serverUrl)
 
         val request = Request.Builder()
             .url("$wsUrl/ws")
@@ -65,12 +161,18 @@ class DialogWebSocketClient(
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 scope.launch {
+                    reconnectAttempts = 0 // Reset on successful connection
                     _connectionState.update { it.copy(
                         isConnected = true,
                         isConnecting = false,
+                        isReconnecting = false,
+                        reconnectAttempts = 0,
                         errorMessage = null
                     ) }
                     _events.send(DialogEvent.Connected)
+                    
+                    // Start latency ping
+                    startLatencyPing()
                 }
             }
 
@@ -90,7 +192,11 @@ class DialogWebSocketClient(
                         isConnected = false,
                         isConnecting = false
                     ) }
+                    _latency.value = null
                     _events.send(DialogEvent.Disconnected(reason))
+                    
+                    // Attempt reconnection with exponential backoff
+                    scheduleReconnect(serverUrl)
                 }
             }
 
@@ -101,19 +207,75 @@ class DialogWebSocketClient(
                         isConnecting = false,
                         errorMessage = t.message ?: "Connection failed"
                     ) }
+                    _latency.value = null
                     _events.send(DialogEvent.Error(t.message ?: "Unknown error"))
+                    
+                    // Attempt reconnection with exponential backoff
+                    scheduleReconnect(serverUrl)
                 }
             }
         })
+    }
+    
+    /**
+     * Schedule a reconnection attempt with exponential backoff
+     */
+    private fun scheduleReconnect(serverUrl: String) {
+        if (!shouldReconnect) return
+        
+        val delay = getReconnectDelay()
+        reconnectAttempts++
+        
+        // Update state to show reconnection in progress
+        _connectionState.update { it.copy(
+            isReconnecting = true,
+            reconnectAttempts = reconnectAttempts
+        ) }
+        
+        reconnectJob = scope.launch {
+            // Emit reconnecting event so UI can show status
+            _events.send(DialogEvent.Reconnecting(reconnectAttempts, delay))
+            
+            delay(delay)
+            if (shouldReconnect && !_connectionState.value.isConnected) {
+                _connectionState.update { it.copy(isConnecting = false) } // Reset for retry
+                connect(serverUrl)
+            }
+        }
+    }
+    
+    /**
+     * Start periodic latency ping (every 30 seconds)
+     */
+    private fun startLatencyPing() {
+        scope.launch {
+            while (_connectionState.value.isConnected) {
+                delay(30_000) // 30 seconds
+                sendPing()
+            }
+        }
+    }
+    
+    /**
+     * Send a ping to measure latency
+     */
+    fun sendPing() {
+        if (webSocket != null && _connectionState.value.isConnected && lastPingTime == null) {
+            lastPingTime = System.currentTimeMillis()
+            webSocket?.send("""{"type":"ping"}""")
+        }
     }
 
     /**
      * Disconnect from the daemon
      */
     fun disconnect() {
+        shouldReconnect = false
+        reconnectJob?.cancel()
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         _connectionState.update { it.copy(isConnected = false, isConnecting = false) }
+        _latency.value = null
     }
 
     /**
@@ -122,7 +284,7 @@ class DialogWebSocketClient(
     suspend fun fetchCurrentDialog(serverUrl: String): DialogDetails? {
         return withContext(Dispatchers.IO) {
             try {
-                val httpUrl = if (serverUrl.startsWith("http")) serverUrl else "http://$serverUrl"
+                val httpUrl = buildHttpUrl(serverUrl)
                 val request = Request.Builder()
                     .url("$httpUrl/api/current")
                     .build()
@@ -154,7 +316,7 @@ class DialogWebSocketClient(
     ): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                val httpUrl = if (serverUrl.startsWith("http")) serverUrl else "http://$serverUrl"
+                val httpUrl = buildHttpUrl(serverUrl)
                 
                 val selectionJson = when (selection) {
                     is String -> JsonPrimitive(selection)
@@ -206,7 +368,7 @@ class DialogWebSocketClient(
     suspend fun toggleHoldMode(serverUrl: String): Boolean? {
         return withContext(Dispatchers.IO) {
             try {
-                val httpUrl = if (serverUrl.startsWith("http")) serverUrl else "http://$serverUrl"
+                val httpUrl = buildHttpUrl(serverUrl)
                 val request = Request.Builder()
                     .url("$httpUrl/api/hold")
                     .post(RequestBody.create(null, ""))
@@ -235,6 +397,13 @@ class DialogWebSocketClient(
             val type = jsonElement.jsonObject["type"]?.jsonPrimitive?.contentOrNull
 
             when (type) {
+                "pong" -> {
+                    // Calculate latency from ping response
+                    lastPingTime?.let { pingTime ->
+                        _latency.value = System.currentTimeMillis() - pingTime
+                        lastPingTime = null
+                    }
+                }
                 "initial" -> {
                     val initial = json.decodeFromString<ServerMessage.Initial>(text)
                     _dialogState.update { it.copy(
@@ -276,6 +445,80 @@ class DialogWebSocketClient(
             e.printStackTrace()
         }
     }
+    
+    /**
+     * Fetch dialog history from REST API
+     */
+    suspend fun fetchHistory(serverUrl: String, limit: Int = 50): List<HistoryItem> {
+        return withContext(Dispatchers.IO) {
+            _historyLoading.value = true
+            try {
+                val httpUrl = buildHttpUrl(serverUrl)
+                val request = Request.Builder()
+                    .url("$httpUrl/api/history?limit=$limit")
+                    .build()
+                
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: return@withContext emptyList()
+                    val apiResponse = json.decodeFromString<ApiResponse<List<HistoryItem>>>(body)
+                    if (apiResponse.success) {
+                        apiResponse.data?.also { items ->
+                            _history.value = items
+                        } ?: emptyList()
+                    } else emptyList()
+                } else emptyList()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                emptyList()
+            } finally {
+                _historyLoading.value = false
+            }
+        }
+    }
+    
+    /**
+     * Reinvoke a historical dialog (send it again)
+     */
+    suspend fun reinvokeDialog(serverUrl: String, historyItem: HistoryItem): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val httpUrl = buildHttpUrl(serverUrl)
+                
+                val requestBody = buildJsonObject {
+                    put("dialog_type", historyItem.dialogType)
+                    put("title", historyItem.title)
+                    put("prompt", historyItem.prompt)
+                    historyItem.options?.let { options ->
+                        put("options", buildJsonArray {
+                            options.forEach { opt ->
+                                add(buildJsonObject {
+                                    put("value", opt.value)
+                                    put("label", opt.label)
+                                    opt.description?.let { put("description", it) }
+                                })
+                            }
+                        })
+                    }
+                    historyItem.timeout?.let { put("timeout_secs", it) }
+                }
+                
+                val request = Request.Builder()
+                    .url("$httpUrl/api/dialog")
+                    .post(RequestBody.create(
+                        "application/json".toMediaType(),
+                        requestBody.toString()
+                    ))
+                    .build()
+                
+                val response = client.newCall(request).execute()
+                response.isSuccessful
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+        }
+    }
 
     // Update UI state methods
     fun updateSelectedValue(value: String) {
@@ -310,6 +553,7 @@ class DialogWebSocketClient(
 sealed class DialogEvent {
     data object Connected : DialogEvent()
     data class Disconnected(val reason: String) : DialogEvent()
+    data class Reconnecting(val attempt: Int, val delayMs: Long) : DialogEvent()
     data class Error(val message: String) : DialogEvent()
     data class NewDialog(val id: String, val title: String, val prompt: String = "") : DialogEvent()
     data class DialogCompleted(val id: String) : DialogEvent()
