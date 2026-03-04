@@ -48,6 +48,7 @@ fun DialogScreen(
     historyLoading: Boolean = false,
     latency: Long? = null,
     snackbarMessage: String? = null,
+    isOnline: Boolean = true,
     onConnect: (String) -> Unit,
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
@@ -130,6 +131,36 @@ fun DialogScreen(
                         containerColor = MaterialTheme.colorScheme.primaryContainer
                     )
                 )
+                
+                // Offline banner
+                if (!isOnline) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFE53935), // Red warning color
+                        tonalElevation = 2.dp
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "No internet connection",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
                 
                 // Tab bar (only when connected)
                 if (connectionState.isConnected) {
@@ -915,77 +946,205 @@ fun SliderContent(
 }
 
 /**
- * Simple markdown text renderer that handles:
+ * Enhanced markdown text renderer that handles:
  * - **bold** and __bold__
  * - *italic* and _italic_
  * - `inline code`
  * - ```code blocks```
- * - # Headers
- * - - Lists
+ * - # ## ### Headers
+ * - - Lists and numbered lists (1.)
+ * - > Block quotes
  * - [links](url) (displayed but not clickable)
+ * - Horizontal rules (---)
  */
 @Composable
 fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
 ) {
-    // Check if there are code blocks
-    if (text.contains("```")) {
-        MarkdownWithCodeBlocks(text = text, modifier = modifier)
-    } else {
+    val lines = text.lines()
+    
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            
+            // Check for code blocks
+            if (line.trim().startsWith("```")) {
+                // Collect code block
+                val codeLines = mutableListOf<String>()
+                val language = line.trim().removePrefix("```").trim()
+                i++
+                while (i < lines.size && !lines[i].trim().startsWith("```")) {
+                    codeLines.add(lines[i])
+                    i++
+                }
+                if (codeLines.isNotEmpty()) {
+                    CodeBlock(code = codeLines.joinToString("\n"), language = language)
+                }
+                i++ // Skip closing ```
+                continue
+            }
+            
+            // Horizontal rule
+            if (line.trim().matches(Regex("^[-*_]{3,}$"))) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+                i++
+                continue
+            }
+            
+            // Headers
+            val headerMatch = Regex("^(#{1,6})\\s+(.+)$").find(line.trim())
+            if (headerMatch != null) {
+                val level = headerMatch.groupValues[1].length
+                val content = headerMatch.groupValues[2]
+                MarkdownHeader(level = level, text = content)
+                i++
+                continue
+            }
+            
+            // Block quotes (can be multi-line)
+            if (line.trim().startsWith(">")) {
+                val quoteLines = mutableListOf<String>()
+                while (i < lines.size && lines[i].trim().startsWith(">")) {
+                    quoteLines.add(lines[i].trim().removePrefix(">").trim())
+                    i++
+                }
+                MarkdownBlockQuote(text = quoteLines.joinToString("\n"))
+                continue
+            }
+            
+            // Unordered lists
+            if (line.trim().matches(Regex("^[-*+]\\s+.+"))) {
+                val listItems = mutableListOf<String>()
+                while (i < lines.size && lines[i].trim().matches(Regex("^[-*+]\\s+.+"))) {
+                    listItems.add(lines[i].trim().replaceFirst(Regex("^[-*+]\\s+"), ""))
+                    i++
+                }
+                MarkdownUnorderedList(items = listItems)
+                continue
+            }
+            
+            // Ordered lists
+            if (line.trim().matches(Regex("^\\d+\\.\\s+.+"))) {
+                val listItems = mutableListOf<String>()
+                while (i < lines.size && lines[i].trim().matches(Regex("^\\d+\\.\\s+.+"))) {
+                    listItems.add(lines[i].trim().replaceFirst(Regex("^\\d+\\.\\s+"), ""))
+                    i++
+                }
+                MarkdownOrderedList(items = listItems)
+                continue
+            }
+            
+            // Regular text (skip empty lines but add some spacing)
+            if (line.isBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+            } else {
+                SelectionContainer {
+                    Text(
+                        text = parseInlineMarkdown(line),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            i++
+        }
+    }
+}
+
+@Composable
+fun MarkdownHeader(level: Int, text: String) {
+    val style = when (level) {
+        1 -> MaterialTheme.typography.headlineLarge
+        2 -> MaterialTheme.typography.headlineMedium
+        3 -> MaterialTheme.typography.headlineSmall
+        4 -> MaterialTheme.typography.titleLarge
+        5 -> MaterialTheme.typography.titleMedium
+        else -> MaterialTheme.typography.titleSmall
+    }
+    Text(
+        text = parseInlineMarkdown(text),
+        style = style,
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.padding(top = if (level <= 2) 8.dp else 4.dp, bottom = 4.dp)
+    )
+}
+
+@Composable
+fun MarkdownBlockQuote(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        // Vertical bar indicator
+        Box(
+            modifier = Modifier
+                .width(4.dp)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+        )
+        Spacer(modifier = Modifier.width(12.dp))
         SelectionContainer {
             Text(
                 text = parseInlineMarkdown(text),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = modifier
+                style = MaterialTheme.typography.bodyLarge.copy(fontStyle = FontStyle.Italic),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
             )
         }
     }
 }
 
-/**
- * Markdown renderer that handles code blocks separately
- */
 @Composable
-fun MarkdownWithCodeBlocks(
-    text: String,
-    modifier: Modifier = Modifier,
-) {
-    val parts = text.split("```")
-    
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        parts.forEachIndexed { index, part ->
-            if (index % 2 == 0) {
-                // Regular text
-                if (part.isNotBlank()) {
-                    SelectionContainer {
-                        Text(
-                            text = parseInlineMarkdown(part.trim()),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else {
-                // Code block
-                val lines = part.lines()
-                val language = lines.firstOrNull()?.takeIf { 
-                    it.isNotBlank() && !it.contains(" ") && it.length < 20 
-                } ?: ""
-                val code = if (language.isNotBlank()) {
-                    lines.drop(1).joinToString("\n")
-                } else {
-                    part
-                }.trim()
-                
-                if (code.isNotBlank()) {
-                    CodeBlock(code = code, language = language)
+fun MarkdownUnorderedList(items: List<String>) {
+    Column(modifier = Modifier.padding(start = 8.dp)) {
+        items.forEach { item ->
+            Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                Text(
+                    text = "•",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.width(16.dp)
+                )
+                SelectionContainer {
+                    Text(
+                        text = parseInlineMarkdown(item),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
     }
 }
+
+@Composable
+fun MarkdownOrderedList(items: List<String>) {
+    Column(modifier = Modifier.padding(start = 8.dp)) {
+        items.forEachIndexed { index, item ->
+            Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                Text(
+                    text = "${index + 1}.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.width(24.dp)
+                )
+                SelectionContainer {
+                    Text(
+                        text = parseInlineMarkdown(item),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
 
 /**
  * Styled code block

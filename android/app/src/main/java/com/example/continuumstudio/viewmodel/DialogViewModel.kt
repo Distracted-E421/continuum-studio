@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.continuumstudio.data.*
 import com.example.continuumstudio.network.DialogEvent
 import com.example.continuumstudio.network.DialogWebSocketClient
+import com.example.continuumstudio.network.NetworkMonitor
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -22,6 +23,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     
     private val dataStore = application.dataStore
     private val wsClient = DialogWebSocketClient(viewModelScope)
+    private val networkMonitor = NetworkMonitor(application)
 
     // Exposed state
     val connectionState = wsClient.connectionState
@@ -32,6 +34,14 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     val history = wsClient.history
     val historyLoading = wsClient.historyLoading
     val latency = wsClient.latency
+    
+    // Network connectivity status
+    val isOnline: StateFlow<Boolean> = networkMonitor.isOnline
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+    
+    // Network type for display
+    val networkType: NetworkMonitor.NetworkType
+        get() = networkMonitor.getNetworkType()
     
     // Snackbar/Toast message state
     private val _snackbarMessage = MutableStateFlow<String?>(null)

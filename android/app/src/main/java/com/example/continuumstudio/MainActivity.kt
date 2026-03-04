@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() {
                 val historyLoading by dialogViewModel.historyLoading.collectAsState()
                 val latency by dialogViewModel.latency.collectAsState()
                 val snackbarMessage by dialogViewModel.snackbarMessage.collectAsState()
+                val isOnline by dialogViewModel.isOnline.collectAsState()
                 val bayConfig by widgetBayViewModel.bayConfig.collectAsState()
                 val harnesses by widgetBayViewModel.harnesses.collectAsState()
                 val services by widgetBayViewModel.services.collectAsState()
@@ -234,6 +235,7 @@ class MainActivity : ComponentActivity() {
                                 historyLoading = historyLoading,
                                 latency = latency,
                                 snackbarMessage = snackbarMessage,
+                                isOnline = isOnline,
                                 onConnect = dialogViewModel::connect,
                                 onDisconnect = dialogViewModel::disconnect,
                                 onRefresh = dialogViewModel::refreshDialog,
