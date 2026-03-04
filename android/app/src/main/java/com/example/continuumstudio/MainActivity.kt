@@ -1,6 +1,9 @@
 package com.example.continuumstudio
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -267,6 +270,12 @@ class MainActivity : ComponentActivity() {
                                         "This is a test notification from Continuum Studio. If you see this, notifications are working correctly!"
                                     )
                                     dialogViewModel.showToast("Test notification sent!")
+                                },
+                                onCopyToClipboard = { text ->
+                                    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    val clip = ClipData.newPlainText("Dialog Response", text)
+                                    clipboard.setPrimaryClip(clip)
+                                    dialogViewModel.showToast("Copied to clipboard!")
                                 },
                             )
                         }

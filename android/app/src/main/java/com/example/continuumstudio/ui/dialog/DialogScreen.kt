@@ -27,6 +27,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,6 +66,7 @@ fun DialogScreen(
     onReinvokeDialog: (HistoryItem) -> Unit = {},
     onSnackbarDismiss: () -> Unit = {},
     onTestNotification: () -> Unit = {},
+    onCopyToClipboard: (String) -> Unit = {},
 ) {
     var serverUrlInput by remember { mutableStateOf(connectionState.serverUrl.ifBlank { "dialog.datapunk.dev" }) }
     var showSettings by remember { mutableStateOf(false) }
@@ -246,6 +249,7 @@ fun DialogScreen(
                             isLoading = historyLoading,
                             onRefresh = onFetchHistory,
                             onReinvoke = onReinvokeDialog,
+                            onCopy = onCopyToClipboard,
                         )
                     }
                 }
@@ -301,7 +305,7 @@ fun LatencyBadge(latency: Long) {
 
 /**
  * History view showing past dialogs with reinvoke option
- * Supports pull-to-refresh gesture
+ * Supports pull-to-refresh gesture and copy to clipboard
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -310,6 +314,7 @@ fun HistoryView(
     isLoading: Boolean,
     onRefresh: () -> Unit,
     onReinvoke: (HistoryItem) -> Unit,
+    onCopy: (String) -> Unit,
 ) {
     val pullToRefreshState = rememberPullToRefreshState()
     
@@ -399,7 +404,8 @@ fun HistoryView(
                     items(history, key = { it.id }) { item ->
                         HistoryItemCard(
                             item = item,
-                            onReinvoke = { onReinvoke(item) }
+                            onReinvoke = { onReinvoke(item) },
+                            onCopy = onCopy
                         )
                     }
                 }
@@ -461,13 +467,15 @@ private fun DialogTypeIcon(dialogType: String) {
 }
 
 /**
- * Card for a single history item
+ * Card for a single history item with haptic feedback
  */
 @Composable
 fun HistoryItemCard(
     item: HistoryItem,
     onReinvoke: () -> Unit,
+    onCopy: (String) -> Unit,
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
     var expanded by remember { mutableStateOf(false) }
     
     Card(
@@ -515,7 +523,7 @@ fun HistoryItemCard(
                     }
                 }
                 
-                // Status + Reinvoke
+                // Status + Copy + Reinvoke
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (item.cancelled) {
                         Text(
@@ -531,9 +539,32 @@ fun HistoryItemCard(
                             tint = Color(0xFF4CAF50)
                         )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    
+                    // Copy button - copies selection/answer
+                    item.selection?.let { selection ->
+                        val selectionText = selection.toString()
+                            .let { if (it.startsWith("\"") && it.endsWith("\"")) it.drop(1).dropLast(1) else it }
+                        IconButton(
+                            onClick = {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onCopy(selectionText)
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = "Copy answer",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    
                     IconButton(
-                        onClick = onReinvoke,
+                        onClick = {
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onReinvoke()
+                        },
                         modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
@@ -820,6 +851,8 @@ fun ActiveDialogCard(
     onConfirm: (Boolean) -> Unit,
     onSubmit: () -> Unit,
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
+    
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -965,7 +998,10 @@ fun ActiveDialogCard(
 
         // Submit button
         Button(
-            onClick = onSubmit,
+            onClick = {
+                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                onSubmit()
+            },
             modifier = Modifier.fillMaxWidth(),
             enabled = when (dialog.dialogType.type) {
                 "choice" -> if (dialog.dialogType.allowMultiple == true) 
@@ -992,6 +1028,8 @@ fun ChoiceContent(
     onSelectOption: (String) -> Unit,
     onToggleOption: (String) -> Unit,
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
+    
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { option ->
             val isSelected = if (allowMultiple) {
@@ -1004,6 +1042,7 @@ fun ChoiceContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                         if (allowMultiple) onToggleOption(option.value)
                         else onSelectOption(option.value)
                     }
@@ -1085,12 +1124,17 @@ fun ConfirmationContent(
     selectedValue: String,
     onConfirm: (Boolean) -> Unit,
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
+    
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Button(
-            onClick = { onConfirm(false) },
+            onClick = {
+                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                onConfirm(false)
+            },
             modifier = Modifier.weight(1f),
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (selectedValue == "false")
@@ -1107,7 +1151,10 @@ fun ConfirmationContent(
         }
         
         Button(
-            onClick = { onConfirm(true) },
+            onClick = {
+                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                onConfirm(true)
+            },
             modifier = Modifier.weight(1f),
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (selectedValue == "true")
