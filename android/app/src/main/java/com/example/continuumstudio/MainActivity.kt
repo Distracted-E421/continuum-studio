@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,9 +32,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.continuumstudio.network.DialogEvent
 import com.example.continuumstudio.service.DialogNotificationService
+import com.example.continuumstudio.ui.coordination.CoordinationDashboard
 import com.example.continuumstudio.ui.dialog.DialogScreen
 import com.example.continuumstudio.ui.theme.ContinuumStudioTheme
 import com.example.continuumstudio.ui.widgets.WidgetBayScreen
+import com.example.continuumstudio.viewmodel.CoordinationViewModel
 import com.example.continuumstudio.viewmodel.DialogViewModel
 import com.example.continuumstudio.viewmodel.WidgetBayViewModel
 
@@ -40,6 +44,7 @@ import com.example.continuumstudio.viewmodel.WidgetBayViewModel
 sealed class Screen(val route: String, val title: String) {
     object Dashboard : Screen("dashboard", "Dashboard")
     object Dialog : Screen("dialog", "Dialog")
+    object Coordination : Screen("coordination", "Coordination")
 }
 
 class MainActivity : ComponentActivity() {
@@ -80,6 +85,7 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val dialogViewModel: DialogViewModel = viewModel()
                 val widgetBayViewModel: WidgetBayViewModel = viewModel()
+                val coordinationViewModel: CoordinationViewModel = viewModel()
                 
                 val connectionState by dialogViewModel.connectionState.collectAsState()
                 val dialogState by dialogViewModel.dialogState.collectAsState()
@@ -166,7 +172,7 @@ class MainActivity : ComponentActivity() {
                     bottomBar = {
                         NavigationBar {
                             NavigationBarItem(
-                                icon = { Icon(Icons.Default.Settings, contentDescription = "Dashboard") },
+                                icon = { Icon(Icons.Default.Home, contentDescription = "Dashboard") },
                                 label = { Text("Dashboard") },
                                 selected = currentRoute == Screen.Dashboard.route,
                                 onClick = {
@@ -197,6 +203,19 @@ class MainActivity : ComponentActivity() {
                                 selected = currentRoute == Screen.Dialog.route,
                                 onClick = {
                                     navController.navigate(Screen.Dialog.route) {
+                                        popUpTo(navController.graph.startDestinationId)
+                                        launchSingleTop = true
+                                    }
+                                }
+                            )
+                            NavigationBarItem(
+                                icon = { 
+                                    Icon(Icons.Default.Groups, contentDescription = "Coordination")
+                                },
+                                label = { Text("Agents") },
+                                selected = currentRoute == Screen.Coordination.route,
+                                onClick = {
+                                    navController.navigate(Screen.Coordination.route) {
                                         popUpTo(navController.graph.startDestinationId)
                                         launchSingleTop = true
                                     }
@@ -296,6 +315,16 @@ class MainActivity : ComponentActivity() {
                                     clipboard.setPrimaryClip(clip)
                                     dialogViewModel.showToast("Copied to clipboard!")
                                 },
+                            )
+                        }
+                        
+                        composable(
+                            Screen.Coordination.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            CoordinationDashboard(
+                                viewModel = coordinationViewModel
                             )
                         }
                     }
