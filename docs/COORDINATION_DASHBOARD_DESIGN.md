@@ -42,20 +42,20 @@ The Coordination Dashboard extends Continuum Studio to provide visibility into m
 
 ### API Integration
 
-The dashboard consumes the CoordinationRouter API exposed at the same endpoint as the dialog daemon (port 8080):
+The dashboard consumes the CoordinationRouter API exposed on the Synapsix ServiceRegistry server (port 4040):
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /coord/` | System overview |
-| `GET /coord/health` | Service health status |
-| `GET /coord/locks` | List all active locks |
-| `GET /coord/locks/agent/:id` | Locks for specific agent |
-| `GET /coord/conflicts` | Active conflicts |
-| `GET /coord/conflicts/:agent_id` | Conflicts for specific agent |
-| `GET /coord/conflicts/stats` | Conflict statistics |
-| `GET /coord/handoffs` | Pending handoffs |
-| `GET /coord/handoffs/history` | Handoff history |
-| `GET /coord/state` | Shared state namespaces |
+| `GET /api/coord/` | System overview |
+| `GET /api/coord/health` | Service health status |
+| `GET /api/coord/locks` | List all active locks |
+| `GET /api/coord/locks/agent/:id` | Locks for specific agent |
+| `GET /api/coord/conflicts` | Active conflicts |
+| `GET /api/coord/conflicts/:agent_id` | Conflicts for specific agent |
+| `GET /api/coord/conflicts/stats` | Conflict statistics |
+| `GET /api/coord/handoffs` | Pending handoffs |
+| `GET /api/coord/handoffs/history` | Handoff history |
+| `GET /api/coord/state` | Shared state namespaces |
 
 ---
 
@@ -332,7 +332,7 @@ data class SharedStateNamespace(
 
 ## API Endpoints Detail
 
-### GET /coord/
+### GET /api/coord/
 
 Returns system overview:
 
@@ -349,7 +349,7 @@ Returns system overview:
 }
 ```
 
-### GET /coord/health
+### GET /api/coord/health
 
 Returns health status:
 
@@ -365,7 +365,7 @@ Returns health status:
 }
 ```
 
-### GET /coord/locks
+### GET /api/coord/locks
 
 Returns all locks:
 
@@ -387,7 +387,7 @@ Returns all locks:
 }
 ```
 
-### GET /coord/conflicts
+### GET /api/coord/conflicts
 
 Returns active conflicts:
 
@@ -408,7 +408,7 @@ Returns active conflicts:
 }
 ```
 
-### GET /coord/handoffs
+### GET /api/coord/handoffs
 
 Returns pending handoffs:
 
@@ -435,21 +435,24 @@ Returns pending handoffs:
 
 ### Mounting the CoordinationRouter
 
-The `CoordinationRouter` needs to be mounted in the Synapsix application. Options:
+**Status**: ✅ Complete
 
-1. **Separate port**: Run on a different port (e.g., 8081)
-2. **Path prefix**: Mount under `/coord/` on the dialog daemon port (8080)
-3. **Integrated**: Add routes directly to dialog daemon's web.rs
+The `CoordinationRouter` is mounted in the Synapsix `ServiceRegistry.Router` at `/api/coord/`:
 
-Recommended: Mount under `/coord/` prefix on port 8080 to reuse existing Cloudflare tunnel and auth.
+- **Port**: 4040 (ServiceRegistry server)
+- **Base path**: `/api/coord/`
+- **File**: `lib/synapsix/service_registry/router.ex`
+
+The router uses `forward "/api/coord", to: Synapsix.AgentCoordinator.CoordinationRouter`.
 
 ### Authentication
 
-Use the same Cloudflare Access service tokens already implemented for the dialog API.
+For production use via Cloudflare tunnel, configure Cloudflare Access service tokens.
+For local development, the API is accessible without authentication on `http://localhost:4040/api/coord/`.
 
 ### Real-time Updates
 
-Consider WebSocket subscription for real-time coordination state updates, similar to the existing dialog WebSocket.
+Consider WebSocket subscription for real-time coordination state updates, similar to the existing dialog WebSocket. A dedicated `/ws/coord` endpoint could be added for live lock/conflict/handoff notifications.
 
 ---
 
