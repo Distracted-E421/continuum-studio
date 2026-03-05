@@ -600,7 +600,170 @@ class DialogWebSocketClient(
     fun updateSliderValue(value: Float) {
         _dialogState.update { it.copy(sliderValue = value) }
     }
+
+    /**
+     * Render a diagram (Mermaid or D2) to SVG
+     * @param serverUrl The dialog daemon URL
+     * @param diagramType "mermaid" or "d2"
+     * @param content The diagram source code
+     * @param theme "dark" or "light"
+     * @return DiagramRenderResult containing SVG or error
+     */
+    suspend fun renderDiagram(
+        serverUrl: String,
+        diagramType: String,
+        content: String,
+        theme: String = "dark"
+    ): DiagramRenderResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                val httpUrl = buildHttpUrl(serverUrl)
+                val requestBody = buildJsonObject {
+                    put("type", diagramType)
+                    put("content", content)
+                    put("theme", theme)
+                }
+
+                val request = buildRequestWithAuth("$httpUrl/api/render-diagram")
+                    .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: return@withContext DiagramRenderResult(
+                        success = false,
+                        error = "Empty response body"
+                    )
+                    val apiResponse = json.decodeFromString<ApiResponse<DiagramRenderResponse>>(body)
+                    if (apiResponse.success && apiResponse.data != null) {
+                        DiagramRenderResult(
+                            success = apiResponse.data.success,
+                            svg = apiResponse.data.svg,
+                            error = apiResponse.data.error
+                        )
+                    } else {
+                        DiagramRenderResult(
+                            success = false,
+                            error = apiResponse.error ?: "Unknown error"
+                        )
+                    }
+                } else {
+                    DiagramRenderResult(
+                        success = false,
+                        error = "HTTP ${response.code}: ${response.message}"
+                    )
+                }
+            } catch (e: Exception) {
+                DiagramRenderResult(
+                    success = false,
+                    error = "Exception: ${e.message}"
+                )
+            }
+        }
+    }
+
+    /**
+     * Execute a quick action on the Synapsix daemon
+     * @param serverUrl The dialog daemon URL
+     * @param action The action name (e.g., "start_cursor", "start_android", "start_godot")
+     * @param args Optional arguments for the action
+     * @return ActionResult containing success status and output
+     */
+    suspend fun executeAction(
+        serverUrl: String,
+        action: String,
+        args: List<String> = emptyList()
+    ): ActionResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                val httpUrl = buildHttpUrl(serverUrl)
+                val requestBody = buildJsonObject {
+                    put("action", action)
+                    put("args", buildJsonArray {
+                        args.forEach { add(JsonPrimitive(it)) }
+                    })
+                }
+
+                val request = buildRequestWithAuth("$httpUrl/api/action")
+                    .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: return@withContext ActionResult(
+                        success = false,
+                        error = "Empty response body"
+                    )
+                    val apiResponse = json.decodeFromString<ApiResponse<ActionResponse>>(body)
+                    if (apiResponse.success && apiResponse.data != null) {
+                        ActionResult(
+                            success = apiResponse.data.success,
+                            output = apiResponse.data.output,
+                            error = apiResponse.data.error,
+                            exitCode = apiResponse.data.exitCode
+                        )
+                    } else {
+                        ActionResult(
+                            success = false,
+                            error = apiResponse.error ?: "Unknown error"
+                        )
+                    }
+                } else {
+                    ActionResult(
+                        success = false,
+                        error = "HTTP ${response.code}: ${response.message}"
+                    )
+                }
+            } catch (e: Exception) {
+                ActionResult(
+                    success = false,
+                    error = "Exception: ${e.message}"
+                )
+            }
+        }
+    }
 }
+
+/**
+ * Response data from the render-diagram API
+ */
+@kotlinx.serialization.Serializable
+data class DiagramRenderResponse(
+    val svg: String = "",
+    val success: Boolean = false,
+    val error: String? = null
+)
+
+/**
+ * Result wrapper for diagram rendering
+ */
+data class DiagramRenderResult(
+    val success: Boolean,
+    val svg: String? = null,
+    val error: String? = null
+)
+
+/**
+ * Response data from the action API
+ */
+@kotlinx.serialization.Serializable
+data class ActionResponse(
+    val success: Boolean = false,
+    val output: String? = null,
+    val error: String? = null,
+    @kotlinx.serialization.SerialName("exit_code")
+    val exitCode: Int? = null
+)
+
+/**
+ * Result wrapper for action execution
+ */
+data class ActionResult(
+    val success: Boolean,
+    val output: String? = null,
+    val error: String? = null,
+    val exitCode: Int? = null
+)
 
 // MediaType extension imported from okhttp3.MediaType.Companion.toMediaType
 

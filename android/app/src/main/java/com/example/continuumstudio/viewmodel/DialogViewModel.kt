@@ -341,6 +341,62 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         // This will be implemented in MainActivity to call the notification service
     }
 
+    /**
+     * Execute a quick action on the Synapsix daemon
+     * @param action The action name (e.g., "start_cursor", "start_android", "start_godot")
+     * @param args Optional arguments for the action
+     * @param onResult Callback with the result
+     */
+    fun executeAction(
+        action: String,
+        args: List<String> = emptyList(),
+        onResult: (com.example.continuumstudio.network.ActionResult) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            connectionState.value.serverUrl.takeIf { it.isNotBlank() }?.let { serverUrl ->
+                val result = wsClient.executeAction(serverUrl, action, args)
+                onResult(result)
+                if (result.success) {
+                    showToast("Action '$action' executed")
+                } else {
+                    showToast("Action failed: ${result.error ?: "Unknown error"}")
+                }
+            } ?: run {
+                showToast("Not connected to server")
+                onResult(com.example.continuumstudio.network.ActionResult(
+                    success = false,
+                    error = "Not connected to server"
+                ))
+            }
+        }
+    }
+
+    /**
+     * Render a diagram (Mermaid or D2) to SVG
+     * @param diagramType "mermaid" or "d2"
+     * @param content The diagram source code
+     * @param theme "dark" or "light"
+     * @param onResult Callback with the SVG result or error
+     */
+    fun renderDiagram(
+        diagramType: String,
+        content: String,
+        theme: String = "dark",
+        onResult: (com.example.continuumstudio.network.DiagramRenderResult) -> Unit
+    ) {
+        viewModelScope.launch {
+            connectionState.value.serverUrl.takeIf { it.isNotBlank() }?.let { serverUrl ->
+                val result = wsClient.renderDiagram(serverUrl, diagramType, content, theme)
+                onResult(result)
+            } ?: run {
+                onResult(com.example.continuumstudio.network.DiagramRenderResult(
+                    success = false,
+                    error = "Not connected to server"
+                ))
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         wsClient.disconnect()

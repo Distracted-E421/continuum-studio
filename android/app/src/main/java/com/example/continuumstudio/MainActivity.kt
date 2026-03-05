@@ -238,7 +238,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onQuickAction = { action ->
-                                    handleQuickAction(action, connectionState.serverUrl)
+                                    dialogViewModel.executeAction(action)
                                 }
                             )
                         }
@@ -304,14 +304,6 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    private fun handleQuickAction(action: String, serverUrl: String) {
-        // TODO: Implement quick action RPC calls to Synapsix
-        Toast.makeText(
-            this,
-            "Quick action: $action (coming soon)",
-            Toast.LENGTH_SHORT
-        ).show()
-    }
     
     override fun onResume() {
         super.onResume()

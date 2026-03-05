@@ -1,16 +1,19 @@
 # Continuum Studio Status - March 2026
 
-**Date**: 2026-03-04  
+**Date**: 2026-03-05  
 **Status**: Active Development
 
 ## Executive Summary
 
-Continuum Studio is the AI orchestration platform for the homelab. This month focused on Android app improvements, bringing mobile feature parity with the web interface.
+Continuum Studio is the AI orchestration platform for the homelab. This month focused on Android app improvements, bringing mobile feature parity with the web interface, and implementing quick actions for remote harness control.
 
 ### Recent Major Changes
 
 | Change | Date | Impact |
 |--------|------|--------|
+| **Quick Actions implemented** | Mar 5 | Android can trigger start_cursor, start_android, start_godot actions |
+| **Diagram rendering API** | Mar 5 | Mermaid/D2 rendering via /api/render-diagram |
+| **/api/action endpoint** | Mar 5 | Dialog daemon supports remote action execution |
 | **Cloudflare Access support** | Mar 4 | Android app can authenticate to tunnel via service tokens |
 | **Settings persistence** | Mar 4 | DataStore-backed settings survive app restarts |
 | **Deprecation cleanup** | Mar 4 | Updated to AutoMirrored icons, modern RequestBody API |
@@ -64,6 +67,8 @@ The Android app connects directly to the Synapsix dialog daemon:
 | `/api/hold` | POST | Toggle hold mode |
 | `/api/history` | GET | Fetch dialog history |
 | `/api/reinvoke/{id}` | POST | Re-show historical dialog |
+| `/api/action` | POST | Execute quick actions (start_cursor, etc.) |
+| `/api/render-diagram` | POST | Render Mermaid/D2 diagrams to SVG |
 | `/ws` | WebSocket | Real-time updates |
 
 All endpoints support Cloudflare Access authentication via headers:
@@ -111,6 +116,15 @@ Dialog daemon accessible via `dialog.datapunk.dev`:
 
 | File | Changes |
 |------|---------|
+| `DialogWebSocketClient.kt` | Added `renderDiagram()`, `executeAction()` methods |
+| `DialogViewModel.kt` | Added ViewModel wrappers for new APIs |
+| `MainActivity.kt` | Removed TODO placeholder, uses ViewModel.executeAction |
+| `web.rs` (synapsix-dialog) | Added `/api/action` endpoint for quick actions |
+
+### Previous Session (Mar 4)
+
+| File | Changes |
+|------|---------|
 | `DialogWebSocketClient.kt` | Cloudflare Access headers, RequestBody fixes |
 | `DialogViewModel.kt` | CF Access credentials in DataStore |
 | `MainActivity.kt` | Pass CF credentials to DialogScreen, icon fixes |
@@ -126,12 +140,13 @@ Dialog daemon accessible via `dialog.datapunk.dev`:
 2. ✅ **Infinite reconnection loop**: Fixed max attempt handling
 3. ✅ **Cannot connect via tunnel**: Fixed with Cloudflare Access service tokens
 4. ✅ **Deprecation warnings**: Fixed Icons and RequestBody API usage
+5. ✅ **Quick actions**: Implemented via `/api/action` endpoint (Mar 5)
 
 ### Remaining
 
-1. **Mermaid/D2 rendering**: Diagram rendering in prompts not implemented
-2. **Quick actions**: `handleQuickAction` has TODO implementations
-3. **Error state UI**: Could be more comprehensive
+1. **Mermaid/D2 UI rendering**: API exists, but UI integration in markdown prompts not yet implemented
+2. **Error state UI**: Could be more comprehensive
+3. **Diagram preview**: Need composable to display rendered SVG diagrams
 
 ## Development Notes
 
@@ -163,6 +178,15 @@ curl -H "CF-Access-Client-Id: $CLIENT_ID" \
 
 ## Change Log
 
+### March 5, 2026 (Session)
+
+- Added `/api/action` endpoint to Synapsix dialog daemon for quick actions
+- Implemented quick action handlers in Android app (start_cursor, start_android, start_godot, etc.)
+- Added `renderDiagram()` and `executeAction()` methods to DialogWebSocketClient
+- Added ViewModel wrappers for diagram rendering and action execution
+- Removed TODO placeholder in MainActivity for quick actions
+- APK compiles successfully with all changes
+
 ### March 4, 2026 (Session)
 
 - Implemented Cloudflare Access service token authentication
@@ -175,7 +199,7 @@ curl -H "CF-Access-Client-Id: $CLIENT_ID" \
 
 ## Next Steps
 
-1. Test APK on device with Cloudflare Access credentials
-2. Consider implementing Mermaid/D2 diagram rendering
-3. Implement quick action handlers
+1. Test APK on device with quick actions functionality
+2. Add SVG rendering composable for diagram display in prompts
+3. Integrate diagram rendering into MarkdownText composable
 4. Consider offline mode for basic functionality
