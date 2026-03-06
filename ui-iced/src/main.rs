@@ -1221,6 +1221,7 @@ enum ChatPipelineMsg {
     /// Export a single conversation
     ExportConversation(String),
     /// Export selected conversations
+    #[allow(dead_code)]
     ExportSelected,
     /// Export completed
     ExportCompleted(Result<ExportResult, String>),
