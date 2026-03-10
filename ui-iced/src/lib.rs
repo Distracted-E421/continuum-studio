@@ -10,6 +10,7 @@ pub mod dialog_client;
 pub mod feed_client;
 pub mod log_capture;
 pub mod monitoring;
+pub mod offline;
 pub mod services;
 pub mod sessions;
 pub mod settings;
@@ -52,4 +53,8 @@ pub use coordinator_client::{
 pub use zones::{
     ZoneManager, ZoneLayout, ZoneSnapshot, WindowPlacementConfig,
     LayoutApplication, ZONE_SNAPSHOT_PATH,
+};
+pub use offline::{
+    OfflineQueue, OfflineState, QueuedOperation, OperationType,
+    ConnectionTracker,
 };

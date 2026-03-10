@@ -27,6 +27,8 @@ Continuum Studio
 - VS Code theme compatibility
 - Self-update system
 - Settings management
+- **Diagram rendering** (Mermaid/D2) via `widgets/diagram.rs` (March 2026)
+- **Full offline mode** with operation queue via `offline.rs` (March 2026)
 
 ### Android App (`android/`)
 - Widget Bay - Customizable grid dashboard
@@ -79,3 +81,36 @@ cd core && mix deps.get && mix compile
 
 - `~/synapsix` - Dialog daemon, terminal monitor, harnesses
 - `~/phosphor` - Screen capture service
+
+## Overnight Session (March 10, 2026)
+
+### Completed Features
+
+**1. Diagram Rendering** (`ui-iced/src/widgets/diagram.rs`)
+- `DiagramRenderer`: Async diagram rendering with caching
+- `DiagramWidget`: Stateful view component
+- `DiagramState`: Tracks render state (Pending, Rendered, Error, Loading)
+- Supports Mermaid (`mmdc` CLI) and D2 (`d2` CLI) diagram types
+- `extract_diagrams()`: Extracts fenced code blocks from markdown
+- 3 unit tests
+
+**2. Full Offline Mode** (`ui-iced/src/offline.rs`)
+- `OfflineQueue`: Persistent operation queue (max 1000 ops)
+- `ConnectionTracker`: Multi-backend connectivity status
+- `QueuedOperation`: Task, Dialog, Settings, Session action types
+- Retry tracking with exponential backoff
+- Automatic sync when connections restore
+- 3 unit tests
+
+**3. UI Stabilization** (Audit)
+- Reviewed: `log_capture.rs`, `sessions.rs`, `dialog_client.rs`, `settings.rs`
+- Error handling is solid throughout (`.map_err()` chains)
+- Few `.unwrap()` calls, all in safe contexts
+
+### Key Files
+
+| Feature | File |
+|---------|------|
+| Diagram rendering | `ui-iced/src/widgets/diagram.rs` |
+| Offline mode | `ui-iced/src/offline.rs` |
+| Module exports | `ui-iced/src/lib.rs` |

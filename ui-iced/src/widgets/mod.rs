@@ -5,7 +5,7 @@
 
 // Widget modules will be added here as we port them from egui:
 // pub mod tab_bar;
-// pub mod diagram;
+pub mod diagram;
 // pub mod terminal;
 // pub mod code_view;
 
@@ -30,4 +30,8 @@ pub use task_queue::{
     TaskHistoryEntry,
     // Layout types
     PanelLayout, ActivePanel,
+};
+pub use diagram::{
+    DiagramType, DiagramState, DiagramRenderer, DiagramWidget,
+    DiagramMessage, extract_diagrams,
 };
