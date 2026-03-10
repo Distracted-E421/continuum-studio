@@ -20,18 +20,26 @@ pub mod task_queue;
 
 // Re-export commonly used items
 pub use cosmic_style::{ContainerVariant, CosmicButton, CosmicContainer};
+pub use diagram::{
+    extract_diagrams, DiagramMessage, DiagramRenderer, DiagramState, DiagramType, DiagramWidget,
+};
 pub use task_queue::{
-    TaskQueueWidget, TaskQueueMessage, TaskQueueAction, 
-    WidgetSize as TaskQueueSize, TaskQueueColors,
-    Task, TaskStatus, Priority, QueueStats,
+    ActivePanel,
     // Agent types
-    Agent, AgentType, AgentStatus,
+    Agent,
+    AgentStatus,
+    AgentType,
+    // Layout types
+    PanelLayout,
+    Priority,
+    QueueStats,
+    Task,
     // History types
     TaskHistoryEntry,
-    // Layout types
-    PanelLayout, ActivePanel,
-};
-pub use diagram::{
-    DiagramType, DiagramState, DiagramRenderer, DiagramWidget,
-    DiagramMessage, extract_diagrams,
+    TaskQueueAction,
+    TaskQueueColors,
+    TaskQueueMessage,
+    TaskQueueWidget,
+    TaskStatus,
+    WidgetSize as TaskQueueSize,
 };

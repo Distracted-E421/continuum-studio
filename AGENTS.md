@@ -21,6 +21,7 @@ Continuum Studio
 **Branch**: `iced-migration` (3 commits ahead of origin)
 
 ### Desktop UI (`ui-iced/`)
+
 - Session management for Cursor instances
 - Service discovery and monitoring dashboard
 - Chat message pipeline display
@@ -31,6 +32,7 @@ Continuum Studio
 - **Full offline mode** with operation queue via `offline.rs` (March 2026)
 
 ### Android App (`android/`)
+
 - Widget Bay - Customizable grid dashboard
 - Dialog Client - WebSocket to port 8080
 - Notification Service - Background dialog alerts
@@ -38,6 +40,7 @@ Continuum Studio
 - Coordination Dashboard for multi-agent monitoring
 
 ### Core (`core/`)
+
 - Elixir/OTP orchestration hub
 - Agent Bridge for multi-provider AI abstraction
 - Version Registry
@@ -52,6 +55,7 @@ Continuum Studio
 ## Build & Test
 
 ### Desktop (Rust)
+
 ```bash
 cd ui-iced && cargo build --release
 # Or with NixOS:
@@ -59,6 +63,7 @@ cd ui-iced && cargo build --release
 ```
 
 ### Android
+
 ```bash
 cd android && ./gradlew assembleDebug
 # Install:
@@ -66,6 +71,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ### Core (Elixir)
+
 ```bash
 cd core && mix deps.get && mix compile
 ```
@@ -87,6 +93,7 @@ cd core && mix deps.get && mix compile
 ### Completed Features
 
 **1. Diagram Rendering** (`ui-iced/src/widgets/diagram.rs`)
+
 - `DiagramRenderer`: Async diagram rendering with caching
 - `DiagramWidget`: Stateful view component
 - `DiagramState`: Tracks render state (Pending, Rendered, Error, Loading)
@@ -95,6 +102,7 @@ cd core && mix deps.get && mix compile
 - 3 unit tests
 
 **2. Full Offline Mode** (`ui-iced/src/offline.rs`)
+
 - `OfflineQueue`: Persistent operation queue (max 1000 ops)
 - `ConnectionTracker`: Multi-backend connectivity status
 - `QueuedOperation`: Task, Dialog, Settings, Session action types
@@ -103,6 +111,7 @@ cd core && mix deps.get && mix compile
 - 3 unit tests
 
 **3. UI Stabilization** (Audit)
+
 - Reviewed: `log_capture.rs`, `sessions.rs`, `dialog_client.rs`, `settings.rs`
 - Error handling is solid throughout (`.map_err()` chains)
 - Few `.unwrap()` calls, all in safe contexts

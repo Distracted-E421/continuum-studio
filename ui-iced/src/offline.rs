@@ -36,10 +36,7 @@ pub enum OperationType {
         priority: String,
     },
     /// Task status update
-    TaskUpdate {
-        task_id: String,
-        status: String,
-    },
+    TaskUpdate { task_id: String, status: String },
     /// Dialog response (cached for later sync)
     DialogResponse {
         dialog_id: String,
@@ -47,14 +44,9 @@ pub enum OperationType {
         comment: Option<String>,
     },
     /// Settings sync request
-    SettingsSync {
-        settings_json: String,
-    },
+    SettingsSync { settings_json: String },
     /// Session action (start, stop, etc.)
-    SessionAction {
-        session_id: String,
-        action: String,
-    },
+    SessionAction { session_id: String, action: String },
     /// Custom operation (for extensibility)
     Custom {
         name: String,
@@ -197,8 +189,7 @@ impl OfflineQueue {
 
     /// Get file path for persisting queue
     pub fn file_path() -> PathBuf {
-        let config_dir =
-            dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+        let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
         config_dir
             .join("continuum-studio")
             .join("offline-queue.json")
@@ -240,8 +231,7 @@ impl OfflineQueue {
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize queue: {}", e))?;
 
-        std::fs::write(&path, content)
-            .map_err(|e| format!("Failed to write queue: {}", e))?;
+        std::fs::write(&path, content).map_err(|e| format!("Failed to write queue: {}", e))?;
 
         log::debug!("Saved offline queue to {:?}", path);
         Ok(())

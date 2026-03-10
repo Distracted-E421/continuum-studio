@@ -253,9 +253,15 @@ impl DiagramRenderer {
 #[derive(Debug, Clone)]
 pub enum DiagramMessage {
     /// Request to render a diagram
-    Render { content: String, diagram_type: DiagramType },
+    Render {
+        content: String,
+        diagram_type: DiagramType,
+    },
     /// Rendering completed
-    Rendered { hash: u64, result: Result<PathBuf, String> },
+    Rendered {
+        hash: u64,
+        result: Result<PathBuf, String>,
+    },
 }
 
 /// Widget state for a single diagram
@@ -306,7 +312,7 @@ impl DiagramWidget {
                 if let Ok(bytes) = std::fs::read(svg_path) {
                     let handle = image::Handle::from_bytes(bytes);
                     let mut img = image::viewer(handle);
-                    
+
                     if let Some(w) = self.width {
                         img = img.width(Length::Fixed(w as f32));
                     }
@@ -356,7 +362,11 @@ pub fn extract_diagrams(markdown: &str) -> Vec<(DiagramType, String, usize)> {
             if in_code_block {
                 // End of code block
                 if let Some(diagram_type) = DiagramType::from_language(&current_lang) {
-                    diagrams.push((diagram_type, current_content.trim().to_string(), block_start));
+                    diagrams.push((
+                        diagram_type,
+                        current_content.trim().to_string(),
+                        block_start,
+                    ));
                 }
                 current_content.clear();
                 current_lang.clear();

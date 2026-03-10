@@ -22,39 +22,42 @@ pub mod widgets;
 pub mod zones;
 
 // Re-export common types
-pub use core::{CoreRequest, CoreResponse, CursorVersion, VersionStatus, Session, InstalledVersion, VersionStats, Workspace, GitStats, WorkspaceVersion};
-pub use monitoring::{SessionMetrics, SessionMonitor, SessionHistory, HealthStatus, DashboardData};
-pub use services::{ServiceConfig, ServiceManager, ServiceInfo, ServiceStatus};
-pub use sessions::{CursorSession, SessionTracker, SharedCursorSettings, CursorProcessType, ProcessInfo, WindowInfo};
-pub use settings::{Settings, ThemePreference, CosmicPreset};
-pub use subagents::{SubagentPanelState, SubagentMessage, CommandRecord, ErrorDetection, MonitorStats, AgentCodeName, generate_codename, CodeNameRegistry};
-pub use theme::{AppColors, SemanticColors, CosmicPalette, CosmicThemePreset};
-pub use updater::{
-    UpdateChannel, UpdateSettings, UpdateInfo, UpdateChecker, ForgeType, InstallationType,
-    SelfUpdater, ReleaseProvider, GitHubProvider, ForgejoProvider, LocalBuildProvider,
+pub use coordinator_client::{
+    Agent as CoordinatorAgent, AgentFocus, AgentStatus, AgentType, Conflict, CoordinatorEvent,
+    CoordinatorHttpClient,
 };
-pub use task_queue_client::{
-    Task as SynapsixTask, TaskStatus as SynapsixTaskStatus, Priority, QueueStats,
-    TaskQueueEvent, TaskQueueHttpClient, spawn_websocket_connection, Creator,
+pub use core::{
+    CoreRequest, CoreResponse, CursorVersion, GitStats, InstalledVersion, Session, VersionStats,
+    VersionStatus, Workspace, WorkspaceVersion,
 };
 pub use dialog_client::{
-    DialogClient, DialogClientMessage, DialogRequest as DialogPanelRequest,
-    DialogType as DialogPanelType, ChoiceOption as DialogChoiceOption,
-    spawn_dialog_monitor,
+    spawn_dialog_monitor, ChoiceOption as DialogChoiceOption, DialogClient, DialogClientMessage,
+    DialogRequest as DialogPanelRequest, DialogType as DialogPanelType,
 };
 pub use feed_client::{
-    FeedEntry, FeedSource, FeedLink, FeedStats, FeedEvent,
-    FeedHttpClient, spawn_feed_websocket,
+    spawn_feed_websocket, FeedEntry, FeedEvent, FeedHttpClient, FeedLink, FeedSource, FeedStats,
 };
-pub use coordinator_client::{
-    Agent as CoordinatorAgent, AgentType, AgentStatus, AgentFocus,
-    Conflict, CoordinatorEvent, CoordinatorHttpClient,
+pub use monitoring::{DashboardData, HealthStatus, SessionHistory, SessionMetrics, SessionMonitor};
+pub use offline::{ConnectionTracker, OfflineQueue, OfflineState, OperationType, QueuedOperation};
+pub use services::{ServiceConfig, ServiceInfo, ServiceManager, ServiceStatus};
+pub use sessions::{
+    CursorProcessType, CursorSession, ProcessInfo, SessionTracker, SharedCursorSettings, WindowInfo,
+};
+pub use settings::{CosmicPreset, Settings, ThemePreference};
+pub use subagents::{
+    generate_codename, AgentCodeName, CodeNameRegistry, CommandRecord, ErrorDetection,
+    MonitorStats, SubagentMessage, SubagentPanelState,
+};
+pub use task_queue_client::{
+    spawn_websocket_connection, Creator, Priority, QueueStats, Task as SynapsixTask,
+    TaskQueueEvent, TaskQueueHttpClient, TaskStatus as SynapsixTaskStatus,
+};
+pub use theme::{AppColors, CosmicPalette, CosmicThemePreset, SemanticColors};
+pub use updater::{
+    ForgeType, ForgejoProvider, GitHubProvider, InstallationType, LocalBuildProvider,
+    ReleaseProvider, SelfUpdater, UpdateChannel, UpdateChecker, UpdateInfo, UpdateSettings,
 };
 pub use zones::{
-    ZoneManager, ZoneLayout, ZoneSnapshot, WindowPlacementConfig,
-    LayoutApplication, ZONE_SNAPSHOT_PATH,
-};
-pub use offline::{
-    OfflineQueue, OfflineState, QueuedOperation, OperationType,
-    ConnectionTracker,
+    LayoutApplication, WindowPlacementConfig, ZoneLayout, ZoneManager, ZoneSnapshot,
+    ZONE_SNAPSHOT_PATH,
 };
