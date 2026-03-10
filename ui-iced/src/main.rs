@@ -34,6 +34,10 @@ use continuum_studio_iced::chat_pipeline::{
     TrainingStatsResponse,
     WatcherStatus,
 };
+use continuum_studio_iced::cli_agents::{
+    CLIAgentMessage, CLIAgentsState, CLIAgentTask, view_cli_agents_tab,
+};
+use continuum_studio_iced::cli_agents_client::CLIAgentsHttpClient;
 use continuum_studio_iced::coordinator_client::{
     Agent as CoordAgent, AgentStatus as CoordAgentStatus, Conflict as CoordConflict,
     CoordinatorHttpClient,
@@ -236,6 +240,10 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
         activity_feed_subscription(),
         // Agent coordinator polling (periodic refresh)
         coordinator_poll_subscription(),
+        // CLI agents WebSocket (only when on Cursor view + CLIAgents tab)
+        cli_agents_subscription(
+            state.current_view == View::Cursor && state.cursor_tab == CursorTab::CLIAgents,
+        ),
         // Window close events
         window::close_events().map(Message::WindowClosed),
     ])
@@ -463,6 +471,56 @@ fn coordinator_poll_worker() -> impl iced::futures::Stream<Item = Message> {
     )
 }
 
+/// CLI agents WebSocket subscription (only when on CLI Agents tab)
+fn cli_agents_subscription(active: bool) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
+    iced::Subscription::run(cli_agents_websocket_worker)
+}
+
+/// CLI agents WebSocket worker
+fn cli_agents_websocket_worker() -> impl iced::futures::Stream<Item = Message> {
+    use continuum_studio_iced::cli_agents_client::{spawn_cli_agents_websocket, CLIAgentWsEvent};
+
+    iced::stream::channel(
+        100,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use iced::futures::SinkExt;
+
+            let mut event_rx = spawn_cli_agents_websocket(None).await;
+            
+            while let Some(event) = event_rx.recv().await {
+                let msg = match event {
+                    CLIAgentWsEvent::Connected => {
+                        log::info!("CLI agents WebSocket connected");
+                        CLIAgentMessage::Connected
+                    }
+                    CLIAgentWsEvent::Started { agent_id, workspace, model } => {
+                        CLIAgentMessage::AgentStarted { id: agent_id, workspace, model }
+                    }
+                    CLIAgentWsEvent::Event { agent_id, event } => {
+                        if let Some(cli_event) = event.into_cli_agent_event() {
+                            CLIAgentMessage::AgentEvent(agent_id, cli_event)
+                        } else {
+                            continue;
+                        }
+                    }
+                    CLIAgentWsEvent::Completed { agent_id, result, error } => {
+                        if let Some(e) = error {
+                            CLIAgentMessage::AgentCompleted { id: agent_id, result: None, error: Some(e) }
+                        } else {
+                            CLIAgentMessage::AgentCompleted { id: agent_id, result, error: None }
+                        }
+                    }
+                    CLIAgentWsEvent::Ping => continue,
+                };
+                let _ = output.send(Message::CLIAgentAction(msg)).await;
+            }
+        },
+    )
+}
+
 /// Derive iced Theme from Settings
 fn derive_theme(settings: &Settings) -> Theme {
     match settings.theme {
@@ -583,6 +641,8 @@ impl ContinuumStudio {
                 auth_profiles: Vec::new(),
                 chat_pipeline: ChatPipelineState::default(),
                 subagent_state: SubagentPanelState::default(),
+                cli_agents_state: CLIAgentsState::default(),
+                cli_agents_http: CLIAgentsHttpClient::default(),
                 storage_disk_usage: Vec::new(),
                 storage_selected: std::collections::HashSet::new(),
                 storage_loading: false,
@@ -752,6 +812,10 @@ struct ContinuumStudio {
     chat_pipeline: ChatPipelineState,
     /// Sub-agent monitoring state
     subagent_state: SubagentPanelState,
+    /// CLI agents state (headless Cursor CLI orchestration)
+    cli_agents_state: CLIAgentsState,
+    /// CLI agents HTTP client
+    cli_agents_http: CLIAgentsHttpClient,
     /// Detailed disk usage per version (for Storage view)
     storage_disk_usage: Vec<VersionDiskUsage>,
     /// Versions selected for batch cleanup
@@ -922,8 +986,9 @@ struct WindowState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum CursorTab {
     #[default]
-    Sessions, // Running Cursor instances
+    Sessions,   // Running Cursor instances
     SubAgents,  // Sub-agent monitoring
+    CLIAgents,  // Headless CLI agents (NEW!)
     Auth,       // Authentication management
     Versions,   // Version management
     Workspaces, // .code-workspace management
@@ -971,6 +1036,8 @@ enum Message {
     ChatPipelineAction(ChatPipelineMsg),
     /// Sub-agent monitoring actions
     SubagentAction(SubagentMessage),
+    /// CLI agent orchestration actions
+    CLIAgentAction(CLIAgentMessage),
     /// Task queue actions
     TaskQueueAction(TaskQueueMsg),
 
@@ -1663,6 +1730,9 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::SubagentAction(msg) => {
             return handle_subagent_message(state, msg);
+        }
+        Message::CLIAgentAction(msg) => {
+            return handle_cli_agent_message(state, msg);
         }
         Message::TaskQueueAction(msg) => {
             return handle_task_queue_message(state, msg);
@@ -4998,6 +5068,7 @@ fn view_cursor(state: &ContinuumStudio) -> Element<'_, Message> {
     let tabs = row![
         tab_button("💬 Sessions", CursorTab::Sessions),
         tab_button("🤖 Sub-agents", CursorTab::SubAgents),
+        tab_button("⚡ CLI Agents", CursorTab::CLIAgents),
         tab_button("🔑 Auth", CursorTab::Auth),
         tab_button("📦 Versions", CursorTab::Versions),
         tab_button("📁 Workspaces", CursorTab::Workspaces),
@@ -5018,6 +5089,7 @@ fn view_cursor(state: &ContinuumStudio) -> Element<'_, Message> {
     let tab_content: Element<Message> = match current_tab {
         CursorTab::Sessions => view_sessions(state),
         CursorTab::SubAgents => view_subagents(state),
+        CursorTab::CLIAgents => view_cli_agents(state),
         CursorTab::Auth => view_auth(state),
         CursorTab::Versions => view_cursor_versions(state),
         CursorTab::Workspaces => view_workspaces(state),
@@ -11036,6 +11108,117 @@ fn handle_subagent_message(state: &mut ContinuumStudio, msg: SubagentMessage) ->
     }
 }
 
+/// Handle CLI agent messages
+fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -> Task<Message> {
+    // Update state and get any async task to perform
+    let task = state.cli_agents_state.update(msg);
+    
+    match task {
+        Some(CLIAgentTask::SpawnAgent { prompt, workspace, mode, force, approve_mcps }) => {
+            log::info!(
+                "CLI Agent spawn requested: workspace={}, mode={:?}, force={}",
+                workspace, mode, force
+            );
+            
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move {
+                    client.spawn_agent(&prompt, &workspace, Some(mode), Some(force), Some(approve_mcps)).await
+                },
+                |result| {
+                    match result {
+                        Ok(resp) => {
+                            log::info!("Agent spawned: {}", resp.agent_id);
+                            Message::CLIAgentAction(CLIAgentMessage::AgentStarted {
+                                id: resp.agent_id,
+                                workspace: String::new(),
+                                model: None,
+                            })
+                        }
+                        Err(e) => {
+                            log::error!("Failed to spawn agent: {}", e);
+                            Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                        }
+                    }
+                }
+            )
+        }
+        Some(CLIAgentTask::SpawnBatch { prompt, workspaces, max_concurrent, stop_on_failure }) => {
+            log::info!(
+                "CLI Batch spawn requested: {} workspaces, max_concurrent={}",
+                workspaces.len(), max_concurrent
+            );
+            
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move {
+                    client.spawn_batch(&prompt, workspaces, Some(max_concurrent), Some(stop_on_failure)).await
+                },
+                |result| {
+                    match result {
+                        Ok(resp) => {
+                            log::info!("Batch spawned: {:?}", resp.batch_id);
+                            Message::CLIAgentAction(CLIAgentMessage::RefreshAgents)
+                        }
+                        Err(e) => {
+                            log::error!("Failed to spawn batch: {}", e);
+                            Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                        }
+                    }
+                }
+            )
+        }
+        Some(CLIAgentTask::StopAgent { id }) => {
+            log::info!("CLI Agent stop requested: id={}", id);
+            
+            let client = state.cli_agents_http.clone();
+            let agent_id = id.clone();
+            Task::perform(
+                async move {
+                    client.stop_agent(&agent_id).await
+                },
+                move |result| {
+                    match result {
+                        Ok(()) => {
+                            log::info!("Agent stopped: {}", id);
+                            Message::CLIAgentAction(CLIAgentMessage::RefreshAgents)
+                        }
+                        Err(e) => {
+                            log::error!("Failed to stop agent: {}", e);
+                            Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                        }
+                    }
+                }
+            )
+        }
+        Some(CLIAgentTask::RefreshAgents) => {
+            log::info!("CLI Agents refresh requested");
+            
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move {
+                    client.list_agents().await
+                },
+                |result| {
+                    match result {
+                        Ok(agents) => {
+                            log::info!("Refreshed {} agents", agents.len());
+                            Message::CLIAgentAction(CLIAgentMessage::AgentsLoaded(
+                                agents.into_iter().map(|a| a.id).collect()
+                            ))
+                        }
+                        Err(e) => {
+                            log::error!("Failed to refresh agents: {}", e);
+                            Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                        }
+                    }
+                }
+            )
+        }
+        None => Task::none(),
+    }
+}
+
 // ============================================================================
 // Multi-Window Helpers
 // ============================================================================
@@ -11521,6 +11704,11 @@ fn handle_dialog_message(state: &mut ContinuumStudio, msg: DialogMsg) -> Task<Me
             Task::none()
         }
     }
+}
+
+/// View for CLI agent management (headless Cursor CLI orchestration)
+fn view_cli_agents(state: &ContinuumStudio) -> Element<'_, Message> {
+    view_cli_agents_tab(&state.cli_agents_state, Message::CLIAgentAction)
 }
 
 /// View for sub-agent monitoring panel

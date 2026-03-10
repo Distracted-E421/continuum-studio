@@ -4,6 +4,8 @@
 //! built with iced and designed for COSMIC desktop integration.
 
 pub mod chat_pipeline;
+pub mod cli_agents;
+pub mod cli_agents_client;
 pub mod coordinator_client;
 pub mod core;
 pub mod dialog_client;
@@ -22,6 +24,14 @@ pub mod widgets;
 pub mod zones;
 
 // Re-export common types
+pub use cli_agents::{
+    AgentMode as CLIAgentMode, CLIAgent, CLIAgentEvent, CLIAgentMessage, CLIAgentStatus,
+    CLIAgentsState, CLIAgentsView, CLIAgentTask, CLIEventType, view_cli_agents_tab,
+};
+pub use cli_agents_client::{
+    spawn_cli_agents_websocket, CLIAgentsHttpClient, CLIAgentWsEvent, 
+    SpawnAgentRequest, SpawnBatchRequest,
+};
 pub use coordinator_client::{
     Agent as CoordinatorAgent, AgentFocus, AgentStatus, AgentType, Conflict, CoordinatorEvent,
     CoordinatorHttpClient,
