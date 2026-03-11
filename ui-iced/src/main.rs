@@ -700,6 +700,9 @@ impl ContinuumStudio {
                 coordinator_conflicts: Vec::new(),
                 coordinator_http: CoordinatorHttpClient::new(),
                 coordinator_selected: None,
+                // Offline Mode: load persisted queue, start with disconnected tracker
+                offline_queue: continuum_studio_iced::offline::OfflineQueue::load(),
+                connection_tracker: continuum_studio_iced::offline::ConnectionTracker::new(),
             },
             startup_task,
         )
@@ -907,6 +910,11 @@ struct ContinuumStudio {
     coordinator_http: CoordinatorHttpClient,
     /// Selected agent ID in the coordinator panel
     coordinator_selected: Option<String>,
+    // === Offline Mode Support ===
+    /// Offline operation queue (persisted)
+    offline_queue: continuum_studio_iced::offline::OfflineQueue,
+    /// Connection tracker for backend status
+    connection_tracker: continuum_studio_iced::offline::ConnectionTracker,
 }
 
 /// Available views in the application
@@ -4679,6 +4687,41 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<'_, Message> {
                 Space::new().width(Length::Fill),
                 text(format!("{}", state.versions.len())).size(13),
             ],
+            Space::new().height(4),
+            // Offline mode status indicator
+            {
+                use continuum_studio_iced::offline::OfflineState;
+                let offline_state = {
+                    // Compute offline state from current connection bools
+                    let core_connected = matches!(state.connection_state, ConnectionState::Connected);
+                    let dialog_connected = state.dialog_daemon_connected;
+                    let task_connected = state.task_queue_connected;
+                    if core_connected && dialog_connected && task_connected {
+                        OfflineState::Online
+                    } else if !core_connected && !dialog_connected && !task_connected {
+                        OfflineState::FullyOffline
+                    } else {
+                        OfflineState::PartiallyOffline
+                    }
+                };
+                let queued_count = state.offline_queue.pending_count();
+                row![
+                    text("Offline Queue:").size(13),
+                    Space::new().width(Length::Fill),
+                    text(match offline_state {
+                        OfflineState::Online if queued_count == 0 => "Online".to_string(),
+                        OfflineState::Online => format!("{} pending sync", queued_count),
+                        OfflineState::PartiallyOffline => format!("Partial ({} queued)", queued_count),
+                        OfflineState::FullyOffline => format!("Offline ({} queued)", queued_count),
+                    })
+                    .size(13)
+                    .color(match offline_state {
+                        OfflineState::Online => colors.status_connected,
+                        OfflineState::PartiallyOffline => colors.status_connecting,
+                        OfflineState::FullyOffline => colors.status_disconnected,
+                    }),
+                ]
+            },
         ]
         .spacing(4),
     );
