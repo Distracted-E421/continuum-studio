@@ -598,6 +598,10 @@ impl CLIAgentsState {
         match message {
             CLIAgentMessage::ChangeView(view) => {
                 self.view = view;
+                // Fetch presets when opening Launch form if empty
+                if view == CLIAgentsView::Launch && self.presets.is_empty() {
+                    return Some(CLIAgentTask::FetchPresets);
+                }
                 None
             }
             CLIAgentMessage::SelectAgent(id) => {
@@ -1722,15 +1726,7 @@ where
     ]
     .spacing(4);
 
-    let prompt_input = column![
-        text("Prompt:").size(12),
-        text_input("What should the agent do?", &form.prompt)
-            .padding(8)
-            .on_input(move |s| to_message2(CLIAgentMessage::UpdatePrompt(s))),
-    ]
-    .spacing(4);
-
-    // Preset selector
+    // Preset selector (above prompt per UI design)
     let preset_options: Vec<Preset> = state.presets.clone();
     let selected_preset = state
         .selected_preset
@@ -1755,6 +1751,14 @@ where
         .width(Length::Fill),
     ]
     .spacing(2);
+
+    let prompt_input = column![
+        text("Prompt:").size(12),
+        text_input("What should the agent do?", &form.prompt)
+            .padding(8)
+            .on_input(move |s| to_message2(CLIAgentMessage::UpdatePrompt(s))),
+    ]
+    .spacing(4);
 
     // Preset description (if one is selected)
     let preset_desc: Element<'a, M> = if let Some(preset) = state.get_selected_preset() {
@@ -1918,10 +1922,10 @@ where
             Space::new().height(16),
             workspace_input,
             Space::new().height(12),
-            prompt_input,
-            Space::new().height(12),
             preset_selector,
             preset_desc,
+            Space::new().height(12),
+            prompt_input,
             Space::new().height(8),
             row![preview_btn].align_y(Alignment::Center),
             preview_section,

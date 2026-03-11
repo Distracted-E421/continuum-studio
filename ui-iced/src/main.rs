@@ -35,7 +35,7 @@ use continuum_studio_iced::chat_pipeline::{
     WatcherStatus,
 };
 use continuum_studio_iced::cli_agents::{
-    CLIAgentMessage, CLIAgentsState, CLIAgentTask, view_cli_agents_tab,
+    view_cli_agents_tab, CLIAgentMessage, CLIAgentTask, CLIAgentsState,
 };
 use continuum_studio_iced::cli_agents_client::CLIAgentsHttpClient;
 use continuum_studio_iced::coordinator_client::{
@@ -489,16 +489,22 @@ fn cli_agents_websocket_worker() -> impl iced::futures::Stream<Item = Message> {
             use iced::futures::SinkExt;
 
             let mut event_rx = spawn_cli_agents_websocket(None).await;
-            
+
             while let Some(event) = event_rx.recv().await {
                 let msg = match event {
                     CLIAgentWsEvent::Connected => {
                         log::info!("CLI agents WebSocket connected");
                         CLIAgentMessage::Connected
                     }
-                    CLIAgentWsEvent::Started { agent_id, workspace, model } => {
-                        CLIAgentMessage::AgentStarted { id: agent_id, workspace, model }
-                    }
+                    CLIAgentWsEvent::Started {
+                        agent_id,
+                        workspace,
+                        model,
+                    } => CLIAgentMessage::AgentStarted {
+                        id: agent_id,
+                        workspace,
+                        model,
+                    },
                     CLIAgentWsEvent::Event { agent_id, event } => {
                         if let Some(cli_event) = event.into_cli_agent_event() {
                             CLIAgentMessage::AgentEvent(agent_id, cli_event)
@@ -506,11 +512,23 @@ fn cli_agents_websocket_worker() -> impl iced::futures::Stream<Item = Message> {
                             continue;
                         }
                     }
-                    CLIAgentWsEvent::Completed { agent_id, result, error } => {
+                    CLIAgentWsEvent::Completed {
+                        agent_id,
+                        result,
+                        error,
+                    } => {
                         if let Some(e) = error {
-                            CLIAgentMessage::AgentCompleted { id: agent_id, result: None, error: Some(e) }
+                            CLIAgentMessage::AgentCompleted {
+                                id: agent_id,
+                                result: None,
+                                error: Some(e),
+                            }
                         } else {
-                            CLIAgentMessage::AgentCompleted { id: agent_id, result, error: None }
+                            CLIAgentMessage::AgentCompleted {
+                                id: agent_id,
+                                result,
+                                error: None,
+                            }
                         }
                     }
                     CLIAgentWsEvent::Ping => continue,
@@ -986,7 +1004,7 @@ struct WindowState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum CursorTab {
     #[default]
-    Sessions,   // Running Cursor instances
+    Sessions, // Running Cursor instances
     SubAgents,  // Sub-agent monitoring
     CLIAgents,  // Headless CLI agents (NEW!)
     Auth,       // Authentication management
@@ -1068,6 +1086,8 @@ enum Message {
     CoordinatorAction(CoordinatorMsg),
     /// Zone layout actions
     ZoneAction(ZoneMsg),
+    /// No-op message (for ignoring errors gracefully)
+    NoOp,
 }
 
 /// Zone manager sub-messages
@@ -1514,6 +1534,43 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             if tab == CursorTab::SubAgents {
                 return Task::perform(async { SubagentMessage::Refresh }, Message::SubagentAction);
             }
+            // Trigger preset and workspace override fetch when switching to CLI Agents tab
+            if tab == CursorTab::CLIAgents && state.cli_agents_state.presets.is_empty() {
+                let client1 = state.cli_agents_http.clone();
+                let client2 = state.cli_agents_http.clone();
+
+                let presets_task = Task::perform(
+                    async move { client1.list_presets().await },
+                    |result| match result {
+                        Ok(presets) => {
+                            log::info!("Auto-loaded {} presets on tab switch", presets.len());
+                            Message::CLIAgentAction(CLIAgentMessage::PresetsLoaded(presets))
+                        }
+                        Err(e) => {
+                            log::error!("Failed to auto-load presets: {}", e);
+                            Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                        }
+                    },
+                );
+
+                let overrides_task = Task::perform(
+                    async move { client2.list_workspace_overrides().await },
+                    |result| match result {
+                        Ok(overrides) => {
+                            log::info!("Auto-loaded {} workspace overrides", overrides.len());
+                            Message::CLIAgentAction(CLIAgentMessage::WorkspaceOverridesLoaded(
+                                overrides,
+                            ))
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to load workspace overrides: {}", e);
+                            Message::NoOp
+                        }
+                    },
+                );
+
+                return Task::batch([presets_task, overrides_task]);
+            }
         }
         Message::CoreConnected(tx) => {
             // Only process if we don't already have a connection
@@ -1748,6 +1805,9 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::ZoneAction(msg) => {
             return handle_zone_message(state, msg);
+        }
+        Message::NoOp => {
+            // Intentionally do nothing
         }
 
         // === Multi-Window Message Handlers ===
@@ -11112,107 +11172,412 @@ fn handle_subagent_message(state: &mut ContinuumStudio, msg: SubagentMessage) ->
 fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -> Task<Message> {
     // Update state and get any async task to perform
     let task = state.cli_agents_state.update(msg);
-    
+
     match task {
-        Some(CLIAgentTask::SpawnAgent { prompt, workspace, mode, force, approve_mcps }) => {
+        Some(CLIAgentTask::SpawnAgent {
+            prompt,
+            workspace,
+            mode,
+            force,
+            approve_mcps,
+            prefix,
+            suffix,
+        }) => {
             log::info!(
-                "CLI Agent spawn requested: workspace={}, mode={:?}, force={}",
-                workspace, mode, force
+                "CLI Agent spawn requested: workspace={}, mode={:?}, force={}, has_prefix={}, has_suffix={}",
+                workspace, mode, force, prefix.is_some(), suffix.is_some()
             );
-            
+
             let client = state.cli_agents_http.clone();
             Task::perform(
                 async move {
-                    client.spawn_agent(&prompt, &workspace, Some(mode), Some(force), Some(approve_mcps)).await
+                    client
+                        .spawn_agent_with_preset(
+                            &prompt,
+                            &workspace,
+                            Some(mode),
+                            Some(force),
+                            Some(approve_mcps),
+                            prefix,
+                            suffix,
+                        )
+                        .await
                 },
-                |result| {
-                    match result {
-                        Ok(resp) => {
-                            log::info!("Agent spawned: {}", resp.agent_id);
-                            Message::CLIAgentAction(CLIAgentMessage::AgentStarted {
-                                id: resp.agent_id,
-                                workspace: String::new(),
-                                model: None,
-                            })
-                        }
-                        Err(e) => {
-                            log::error!("Failed to spawn agent: {}", e);
-                            Message::CLIAgentAction(CLIAgentMessage::Error(e))
-                        }
+                |result| match result {
+                    Ok(resp) => {
+                        log::info!("Agent spawned: {}", resp.agent_id);
+                        Message::CLIAgentAction(CLIAgentMessage::AgentStarted {
+                            id: resp.agent_id,
+                            workspace: String::new(),
+                            model: None,
+                        })
                     }
-                }
+                    Err(e) => {
+                        log::error!("Failed to spawn agent: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
             )
         }
-        Some(CLIAgentTask::SpawnBatch { prompt, workspaces, max_concurrent, stop_on_failure }) => {
+        Some(CLIAgentTask::SpawnBatch {
+            prompt,
+            workspaces,
+            max_concurrent,
+            stop_on_failure,
+        }) => {
             log::info!(
                 "CLI Batch spawn requested: {} workspaces, max_concurrent={}",
-                workspaces.len(), max_concurrent
+                workspaces.len(),
+                max_concurrent
             );
-            
+
             let client = state.cli_agents_http.clone();
             Task::perform(
                 async move {
-                    client.spawn_batch(&prompt, workspaces, Some(max_concurrent), Some(stop_on_failure)).await
+                    client
+                        .spawn_batch(
+                            &prompt,
+                            workspaces,
+                            Some(max_concurrent),
+                            Some(stop_on_failure),
+                        )
+                        .await
                 },
-                |result| {
-                    match result {
-                        Ok(resp) => {
-                            log::info!("Batch spawned: {:?}", resp.batch_id);
-                            Message::CLIAgentAction(CLIAgentMessage::RefreshAgents)
-                        }
-                        Err(e) => {
-                            log::error!("Failed to spawn batch: {}", e);
-                            Message::CLIAgentAction(CLIAgentMessage::Error(e))
-                        }
+                |result| match result {
+                    Ok(resp) => {
+                        log::info!("Batch spawned: {:?}", resp.batch_id);
+                        Message::CLIAgentAction(CLIAgentMessage::RefreshAgents)
                     }
-                }
+                    Err(e) => {
+                        log::error!("Failed to spawn batch: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
             )
         }
         Some(CLIAgentTask::StopAgent { id }) => {
             log::info!("CLI Agent stop requested: id={}", id);
-            
+
             let client = state.cli_agents_http.clone();
             let agent_id = id.clone();
             Task::perform(
-                async move {
-                    client.stop_agent(&agent_id).await
-                },
-                move |result| {
-                    match result {
-                        Ok(()) => {
-                            log::info!("Agent stopped: {}", id);
-                            Message::CLIAgentAction(CLIAgentMessage::RefreshAgents)
-                        }
-                        Err(e) => {
-                            log::error!("Failed to stop agent: {}", e);
-                            Message::CLIAgentAction(CLIAgentMessage::Error(e))
-                        }
+                async move { client.stop_agent(&agent_id).await },
+                move |result| match result {
+                    Ok(()) => {
+                        log::info!("Agent stopped: {}", id);
+                        Message::CLIAgentAction(CLIAgentMessage::RefreshAgents)
                     }
-                }
+                    Err(e) => {
+                        log::error!("Failed to stop agent: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
             )
         }
         Some(CLIAgentTask::RefreshAgents) => {
             log::info!("CLI Agents refresh requested");
-            
+
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move { client.list_agents().await },
+                |result| match result {
+                    Ok(agents) => {
+                        log::info!("Refreshed {} agents", agents.len());
+                        Message::CLIAgentAction(CLIAgentMessage::AgentsLoaded(
+                            agents.into_iter().map(|a| a.id).collect(),
+                        ))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to refresh agents: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+
+        // Preset tasks
+        Some(CLIAgentTask::FetchPresets) => {
+            log::info!("Fetching presets");
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move { client.list_presets().await },
+                |result| match result {
+                    Ok(presets) => {
+                        log::info!("Loaded {} presets", presets.len());
+                        Message::CLIAgentAction(CLIAgentMessage::PresetsLoaded(presets))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to fetch presets: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::FetchSnippets) => {
+            log::info!("Fetching snippets");
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move { client.list_snippets().await },
+                |result| match result {
+                    Ok(snippets) => {
+                        log::info!("Loaded {} snippets", snippets.len());
+                        Message::CLIAgentAction(CLIAgentMessage::SnippetsLoaded(snippets))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to fetch snippets: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::CreatePreset {
+            name,
+            description,
+            category,
+            prefix,
+            suffix,
+        }) => {
+            log::info!("Creating preset: {}", name);
             let client = state.cli_agents_http.clone();
             Task::perform(
                 async move {
-                    client.list_agents().await
+                    client
+                        .create_preset(&name, description, &category, prefix, suffix)
+                        .await
                 },
-                |result| {
-                    match result {
-                        Ok(agents) => {
-                            log::info!("Refreshed {} agents", agents.len());
-                            Message::CLIAgentAction(CLIAgentMessage::AgentsLoaded(
-                                agents.into_iter().map(|a| a.id).collect()
-                            ))
-                        }
-                        Err(e) => {
-                            log::error!("Failed to refresh agents: {}", e);
-                            Message::CLIAgentAction(CLIAgentMessage::Error(e))
-                        }
+                |result| match result {
+                    Ok(preset) => {
+                        log::info!("Created preset: {}", preset.id);
+                        Message::CLIAgentAction(CLIAgentMessage::PresetSaved(preset))
                     }
-                }
+                    Err(e) => {
+                        log::error!("Failed to create preset: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::UpdatePreset {
+            id,
+            name,
+            description,
+            category,
+            prefix,
+            suffix,
+        }) => {
+            log::info!("Updating preset: {}", id);
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move {
+                    client
+                        .update_preset(&id, &name, description, &category, prefix, suffix)
+                        .await
+                },
+                |result| match result {
+                    Ok(preset) => {
+                        log::info!("Updated preset: {}", preset.id);
+                        Message::CLIAgentAction(CLIAgentMessage::PresetSaved(preset))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to update preset: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::DeletePreset { id }) => {
+            log::info!("Deleting preset: {}", id);
+            let client = state.cli_agents_http.clone();
+            let preset_id = id.clone();
+            Task::perform(
+                async move { client.delete_preset(&preset_id).await },
+                move |result| match result {
+                    Ok(()) => {
+                        log::info!("Deleted preset: {}", id);
+                        Message::CLIAgentAction(CLIAgentMessage::PresetDeleted(id.clone()))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to delete preset: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::CreateSnippet {
+            name,
+            description,
+            content,
+            position,
+        }) => {
+            log::info!("Creating snippet: {}", name);
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move {
+                    client
+                        .create_snippet(&name, description, &content, &position)
+                        .await
+                },
+                |result| match result {
+                    Ok(snippet) => {
+                        log::info!("Created snippet: {}", snippet.id);
+                        Message::CLIAgentAction(CLIAgentMessage::SnippetSaved(snippet))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create snippet: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::UpdateSnippet {
+            id,
+            name,
+            description,
+            content,
+            position,
+        }) => {
+            log::info!("Updating snippet: {}", id);
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move {
+                    client
+                        .update_snippet(&id, &name, description, &content, &position)
+                        .await
+                },
+                |result| match result {
+                    Ok(snippet) => {
+                        log::info!("Updated snippet: {}", snippet.id);
+                        Message::CLIAgentAction(CLIAgentMessage::SnippetSaved(snippet))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to update snippet: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::DeleteSnippet { id }) => {
+            log::info!("Deleting snippet: {}", id);
+            let client = state.cli_agents_http.clone();
+            let snippet_id = id.clone();
+            Task::perform(
+                async move { client.delete_snippet(&snippet_id).await },
+                move |result| match result {
+                    Ok(()) => {
+                        log::info!("Deleted snippet: {}", id);
+                        Message::CLIAgentAction(CLIAgentMessage::SnippetDeleted(id.clone()))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to delete snippet: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::FetchWorkspaceOverrides) => {
+            log::info!("Fetching workspace overrides");
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move { client.list_workspace_overrides().await },
+                |result| match result {
+                    Ok(overrides) => {
+                        log::info!("Loaded {} workspace overrides", overrides.len());
+                        Message::CLIAgentAction(CLIAgentMessage::WorkspaceOverridesLoaded(
+                            overrides,
+                        ))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load workspace overrides: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::SetWorkspaceOverride {
+            workspace,
+            preset_id,
+        }) => {
+            log::info!("Setting workspace override: {} -> {}", workspace, preset_id);
+            let client = state.cli_agents_http.clone();
+            let ws = workspace.clone();
+            let pid = preset_id.clone();
+            Task::perform(
+                async move { client.set_workspace_override(&ws, &pid).await },
+                move |result| match result {
+                    Ok(()) => {
+                        log::info!("Set workspace override: {} -> {}", workspace, preset_id);
+                        Message::CLIAgentAction(CLIAgentMessage::WorkspaceOverrideSet {
+                            workspace: workspace.clone(),
+                            preset_id: preset_id.clone(),
+                        })
+                    }
+                    Err(e) => {
+                        log::error!("Failed to set workspace override: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::ClearWorkspaceOverride { workspace }) => {
+            log::info!("Clearing workspace override: {}", workspace);
+            let client = state.cli_agents_http.clone();
+            let ws = workspace.clone();
+            Task::perform(
+                async move { client.clear_workspace_override(&ws).await },
+                move |result| match result {
+                    Ok(()) => {
+                        log::info!("Cleared workspace override: {}", workspace);
+                        Message::CLIAgentAction(CLIAgentMessage::WorkspaceOverrideCleared(
+                            workspace.clone(),
+                        ))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to clear workspace override: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        // Dialog Orchestration Tasks
+        Some(CLIAgentTask::FetchPendingDialogs) => {
+            log::info!("Fetching pending dialogs from daemon");
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move { client.fetch_pending_dialogs().await },
+                |result| match result {
+                    Ok(dialogs) => {
+                        log::info!("Fetched {} pending dialogs", dialogs.len());
+                        Message::CLIAgentAction(CLIAgentMessage::DialogsLoaded(dialogs))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to fetch dialogs: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(CLIAgentTask::RespondToDialog {
+            dialog_id,
+            selection,
+            comment,
+        }) => {
+            log::info!("Responding to dialog {}: selection={}", dialog_id, selection);
+            let client = state.cli_agents_http.clone();
+            let id = dialog_id.clone();
+            Task::perform(
+                async move { client.respond_to_dialog(&id, &selection, comment).await },
+                move |result| match result {
+                    Ok(()) => {
+                        log::info!("Dialog response submitted: {}", dialog_id);
+                        Message::CLIAgentAction(CLIAgentMessage::DialogResponseSubmitted(
+                            dialog_id.clone(),
+                        ))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to respond to dialog: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::Error(e))
+                    }
+                },
             )
         }
         None => Task::none(),
