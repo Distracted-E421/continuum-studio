@@ -122,4 +122,21 @@ cd core && mix deps.get && mix compile
 |---------|------|
 | Diagram rendering | `ui-iced/src/widgets/diagram.rs` |
 | Offline mode | `ui-iced/src/offline.rs` |
+| CLI agents | `ui-iced/src/cli_agents.rs` |
+| CLI agents client | `ui-iced/src/cli_agents_client.rs` |
 | Module exports | `ui-iced/src/lib.rs` |
+
+### March 11, 2026
+
+**Orchestrator Dialog Inbox Integration**
+
+- Extended `PendingDialog` with agent routing fields: `source`, `priority`, `workspace`, `orchestrator_id`
+- Added `DialogSource` enum: Orchestrator, SessionAgent, SubAgent, External
+- Added `DialogPriority` enum: Low, Normal, High, Critical
+- Updated HTTP client:
+  - `fetch_pending_dialogs()` → `/api/agent-dialogs`
+  - `respond_to_dialog()` → `/api/agent-dialogs/:id/respond`
+  - Added `escalate_dialog()` for critical escalation
+- Added `OrchestratorWsEvent` types for real-time dialog notifications
+- Added `spawn_orchestrator_websocket()` for `/ws/orchestrator` connection
+- UI shows source badge and priority emoji on dialog cards
