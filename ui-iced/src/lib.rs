@@ -8,11 +8,13 @@ pub mod cli_agents;
 pub mod cli_agents_client;
 pub mod coordinator_client;
 pub mod core;
+pub mod decision_engine;
 pub mod dialog_client;
 pub mod feed_client;
 pub mod log_capture;
 pub mod monitoring;
 pub mod offline;
+pub mod orchestrator_panel;
 pub mod services;
 pub mod sessions;
 pub mod settings;
@@ -40,9 +42,17 @@ pub use core::{
     CoreRequest, CoreResponse, CursorVersion, GitStats, InstalledVersion, Session, VersionStats,
     VersionStatus, Workspace, WorkspaceVersion,
 };
+pub use decision_engine::{
+    DecisionEngine, DecisionEngineConfig, DecisionRecord, DecisionResult, TriageItem, TriageState,
+};
 pub use dialog_client::{
     spawn_dialog_monitor, ChoiceOption as DialogChoiceOption, DialogClient, DialogClientMessage,
     DialogRequest as DialogPanelRequest, DialogType as DialogPanelType,
+    OrchestratorMode, OrchestratorModeInfo,
+};
+pub use orchestrator_panel::{
+    view_orchestrator_panel, view_mode_selector, view_triage_queue,
+    OrchestratorMessage, OrchestratorPanelState,
 };
 pub use feed_client::{
     spawn_feed_websocket, FeedEntry, FeedEvent, FeedHttpClient, FeedLink, FeedSource, FeedStats,

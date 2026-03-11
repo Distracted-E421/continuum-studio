@@ -1266,8 +1266,11 @@ where
     }
 
     if state.show_workspace_overrides_editor {
-        return iced::widget::stack![main_view, view_workspace_overrides_modal(state, to_message.clone()),]
-            .into();
+        return iced::widget::stack![
+            main_view,
+            view_workspace_overrides_modal(state, to_message.clone()),
+        ]
+        .into();
     }
 
     if state.show_dialog_response_modal {
@@ -2704,10 +2707,7 @@ where
             Space::new().width(0).into()
         };
 
-        row(option_chips)
-            .push(more_text)
-            .spacing(4)
-            .into()
+        row(option_chips).push(more_text).spacing(4).into()
     } else {
         Space::new().height(0).into()
     };
@@ -2778,20 +2778,19 @@ where
     let title = text(format!("📥 {}", dialog.title)).size(18);
 
     // Show full prompt
-    let prompt_section = container(
-        scrollable(text(&dialog.prompt).size(12)).height(Length::Fixed(120.0)),
-    )
-    .padding(12)
-    .style(|_| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(
-            0.08, 0.08, 0.1,
-        ))),
-        border: iced::Border {
-            radius: 4.0.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    });
+    let prompt_section =
+        container(scrollable(text(&dialog.prompt).size(12)).height(Length::Fixed(120.0)))
+            .padding(12)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.08, 0.08, 0.1,
+                ))),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
 
     // Response input based on dialog type
     let response_input: Element<'a, M> = match dialog.dialog_type.as_str() {
@@ -2911,32 +2910,26 @@ where
             ]
             .into()
         }
-        "text" => {
-            column![
-                text("Enter your response:").size(12),
-                Space::new().height(4),
-                text_input("Type your response...", &response.selection)
-                    .padding(8)
-                    .on_input(move |s| to_msg1(CLIAgentMessage::UpdateDialogSelection(s))),
-            ]
-            .into()
-        }
-        "slider" => {
-            column![
-                text("Enter a numeric value:").size(12),
-                Space::new().height(4),
-                text_input("Enter number...", &response.selection)
-                    .padding(8)
-                    .on_input(move |s| to_msg1(CLIAgentMessage::UpdateDialogSelection(s))),
-            ]
-            .into()
-        }
-        _ => {
-            text_input("Enter response...", &response.selection)
+        "text" => column![
+            text("Enter your response:").size(12),
+            Space::new().height(4),
+            text_input("Type your response...", &response.selection)
                 .padding(8)
-                .on_input(move |s| to_msg1(CLIAgentMessage::UpdateDialogSelection(s)))
-                .into()
-        }
+                .on_input(move |s| to_msg1(CLIAgentMessage::UpdateDialogSelection(s))),
+        ]
+        .into(),
+        "slider" => column![
+            text("Enter a numeric value:").size(12),
+            Space::new().height(4),
+            text_input("Enter number...", &response.selection)
+                .padding(8)
+                .on_input(move |s| to_msg1(CLIAgentMessage::UpdateDialogSelection(s))),
+        ]
+        .into(),
+        _ => text_input("Enter response...", &response.selection)
+            .padding(8)
+            .on_input(move |s| to_msg1(CLIAgentMessage::UpdateDialogSelection(s)))
+            .into(),
     };
 
     // Comment input

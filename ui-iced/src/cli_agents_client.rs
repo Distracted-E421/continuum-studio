@@ -762,13 +762,14 @@ impl CLIAgentsHttpClient {
             .data
             .into_iter()
             .map(|d| {
-                let source = match d.source.as_deref() {
-                    Some("session_agent") => DialogSource::SessionAgent,
-                    Some("sub_agent") => DialogSource::SubAgent,
+                // Match both snake_case and PascalCase from API
+                let source = match d.source.as_deref().map(|s| s.to_lowercase()).as_deref() {
+                    Some("session_agent") | Some("sessionagent") => DialogSource::SessionAgent,
+                    Some("sub_agent") | Some("subagent") => DialogSource::SubAgent,
                     Some("external") => DialogSource::External,
                     _ => DialogSource::Orchestrator,
                 };
-                let priority = match d.priority.as_deref() {
+                let priority = match d.priority.as_deref().map(|s| s.to_lowercase()).as_deref() {
                     Some("low") => DialogPriority::Low,
                     Some("high") => DialogPriority::High,
                     Some("critical") => DialogPriority::Critical,

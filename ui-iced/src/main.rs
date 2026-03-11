@@ -38,6 +38,10 @@ use continuum_studio_iced::cli_agents::{
     view_cli_agents_tab, CLIAgentMessage, CLIAgentTask, CLIAgentsState,
 };
 use continuum_studio_iced::cli_agents_client::CLIAgentsHttpClient;
+use continuum_studio_iced::orchestrator_panel::{
+    view_orchestrator_panel, OrchestratorMessage, OrchestratorPanelState,
+};
+use continuum_studio_iced::dialog_client::OrchestratorMode;
 use continuum_studio_iced::coordinator_client::{
     Agent as CoordAgent, AgentStatus as CoordAgentStatus, Conflict as CoordConflict,
     CoordinatorHttpClient,
@@ -243,6 +247,12 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
         // CLI agents WebSocket (only when on Cursor view + CLIAgents tab)
         cli_agents_subscription(
             state.current_view == View::Cursor && state.cursor_tab == CursorTab::CLIAgents,
+        ),
+        // Agent dialog polling (active on CLI Agents OR Orchestrator tabs)
+        dialog_polling_subscription(
+            state.current_view == View::Cursor
+                && (state.cursor_tab == CursorTab::CLIAgents
+                    || state.cursor_tab == CursorTab::Orchestrator),
         ),
         // Window close events
         window::close_events().map(Message::WindowClosed),
@@ -539,6 +549,18 @@ fn cli_agents_websocket_worker() -> impl iced::futures::Stream<Item = Message> {
     )
 }
 
+/// Agent dialog polling subscription
+/// Active when on CLI Agents tab or Orchestrator tab to keep dialogs fresh
+fn dialog_polling_subscription(active: bool) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
+
+    // Poll every 5 seconds to fetch pending agent dialogs
+    iced::time::every(std::time::Duration::from_secs(5))
+        .map(|_| Message::CLIAgentAction(CLIAgentMessage::RefreshDialogs))
+}
+
 /// Derive iced Theme from Settings
 fn derive_theme(settings: &Settings) -> Theme {
     match settings.theme {
@@ -620,6 +642,26 @@ impl ContinuumStudio {
                 },
             ));
         }
+
+        // Sync orchestrator mode from daemon on startup
+        tasks.push(Task::perform(
+            async {
+                use continuum_studio_iced::dialog_client::DialogClient;
+                let mut client = DialogClient::new();
+                if client.connect().await.is_ok() {
+                    client.get_orchestrator_mode().await.ok()
+                } else {
+                    None
+                }
+            },
+            |result| {
+                if let Some(mode) = result {
+                    Message::OrchestratorAction(OrchestratorMessage::ModeRefreshed(mode))
+                } else {
+                    Message::OrchestratorAction(OrchestratorMessage::DaemonConnectionChanged(false))
+                }
+            },
+        ));
 
         let startup_task = if tasks.is_empty() {
             Task::none()
@@ -703,6 +745,8 @@ impl ContinuumStudio {
                 // Offline Mode: load persisted queue, start with disconnected tracker
                 offline_queue: continuum_studio_iced::offline::OfflineQueue::load(),
                 connection_tracker: continuum_studio_iced::offline::ConnectionTracker::new(),
+                // Orchestrator Panel: manage CLI agent dialogs
+                orchestrator_state: OrchestratorPanelState::default(),
             },
             startup_task,
         )
@@ -913,8 +957,12 @@ struct ContinuumStudio {
     // === Offline Mode Support ===
     /// Offline operation queue (persisted)
     offline_queue: continuum_studio_iced::offline::OfflineQueue,
-    /// Connection tracker for backend status
+    /// Connection tracker for backend status (planned: route ops through queue when offline)
+    #[allow(dead_code)]
     connection_tracker: continuum_studio_iced::offline::ConnectionTracker,
+    // === Orchestrator Panel State ===
+    /// Orchestrator panel state for managing CLI agent dialogs
+    orchestrator_state: OrchestratorPanelState,
 }
 
 /// Available views in the application
@@ -1012,12 +1060,13 @@ struct WindowState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum CursorTab {
     #[default]
-    Sessions, // Running Cursor instances
-    SubAgents,  // Sub-agent monitoring
-    CLIAgents,  // Headless CLI agents (NEW!)
-    Auth,       // Authentication management
-    Versions,   // Version management
-    Workspaces, // .code-workspace management
+    Sessions,     // Running Cursor instances
+    SubAgents,    // Sub-agent monitoring
+    CLIAgents,    // Headless CLI agents (NEW!)
+    Orchestrator, // Orchestrator mode and dialog triage
+    Auth,         // Authentication management
+    Versions,     // Version management
+    Workspaces,   // .code-workspace management
 }
 
 /// Application messages (Elm architecture)
@@ -1064,6 +1113,8 @@ enum Message {
     SubagentAction(SubagentMessage),
     /// CLI agent orchestration actions
     CLIAgentAction(CLIAgentMessage),
+    /// Orchestrator panel actions (mode switching, triage decisions)
+    OrchestratorAction(OrchestratorMessage),
     /// Task queue actions
     TaskQueueAction(TaskQueueMsg),
 
@@ -1798,6 +1849,9 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::CLIAgentAction(msg) => {
             return handle_cli_agent_message(state, msg);
+        }
+        Message::OrchestratorAction(msg) => {
+            return handle_orchestrator_message(state, msg);
         }
         Message::TaskQueueAction(msg) => {
             return handle_task_queue_message(state, msg);
@@ -4693,7 +4747,8 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<'_, Message> {
                 use continuum_studio_iced::offline::OfflineState;
                 let offline_state = {
                     // Compute offline state from current connection bools
-                    let core_connected = matches!(state.connection_state, ConnectionState::Connected);
+                    let core_connected =
+                        matches!(state.connection_state, ConnectionState::Connected);
                     let dialog_connected = state.dialog_daemon_connected;
                     let task_connected = state.task_queue_connected;
                     if core_connected && dialog_connected && task_connected {
@@ -4711,7 +4766,8 @@ fn view_dashboard(state: &ContinuumStudio) -> Element<'_, Message> {
                     text(match offline_state {
                         OfflineState::Online if queued_count == 0 => "Online".to_string(),
                         OfflineState::Online => format!("{} pending sync", queued_count),
-                        OfflineState::PartiallyOffline => format!("Partial ({} queued)", queued_count),
+                        OfflineState::PartiallyOffline =>
+                            format!("Partial ({} queued)", queued_count),
                         OfflineState::FullyOffline => format!("Offline ({} queued)", queued_count),
                     })
                     .size(13)
@@ -5172,6 +5228,7 @@ fn view_cursor(state: &ContinuumStudio) -> Element<'_, Message> {
         tab_button("💬 Sessions", CursorTab::Sessions),
         tab_button("🤖 Sub-agents", CursorTab::SubAgents),
         tab_button("⚡ CLI Agents", CursorTab::CLIAgents),
+        tab_button("🎛️ Orchestrator", CursorTab::Orchestrator),
         tab_button("🔑 Auth", CursorTab::Auth),
         tab_button("📦 Versions", CursorTab::Versions),
         tab_button("📁 Workspaces", CursorTab::Workspaces),
@@ -5193,6 +5250,7 @@ fn view_cursor(state: &ContinuumStudio) -> Element<'_, Message> {
         CursorTab::Sessions => view_sessions(state),
         CursorTab::SubAgents => view_subagents(state),
         CursorTab::CLIAgents => view_cli_agents(state),
+        CursorTab::Orchestrator => view_orchestrator(state),
         CursorTab::Auth => view_auth(state),
         CursorTab::Versions => view_cursor_versions(state),
         CursorTab::Workspaces => view_workspaces(state),
@@ -11213,6 +11271,34 @@ fn handle_subagent_message(state: &mut ContinuumStudio, msg: SubagentMessage) ->
 
 /// Handle CLI agent messages
 fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -> Task<Message> {
+    // Check if this is DialogsLoaded to also wire to orchestrator triage queue
+    if let CLIAgentMessage::DialogsLoaded(ref dialogs) = msg {
+        use continuum_studio_iced::cli_agents::DialogPriority;
+        use continuum_studio_iced::decision_engine::TriageState;
+
+        // Add dialogs to orchestrator's triage queue
+        for dialog in dialogs {
+            // Determine triage state based on priority
+            // Critical/High -> Manual (requires human attention)
+            // Lower priority -> Manual by default (can be changed to AutoApprove)
+            let triage_state = match dialog.priority {
+                DialogPriority::Critical | DialogPriority::High => TriageState::Manual,
+                _ => TriageState::Manual,
+            };
+            let reasoning = format!(
+                "Dialog from {:?} agent in {}",
+                dialog.source,
+                dialog.workspace.as_deref().unwrap_or("unknown")
+            );
+            state.orchestrator_state.add_to_triage(dialog.clone(), triage_state, reasoning);
+        }
+        log::info!(
+            "Added {} dialogs to orchestrator triage queue (total: {})",
+            dialogs.len(),
+            state.orchestrator_state.engine.triage_queue().len()
+        );
+    }
+
     // Update state and get any async task to perform
     let task = state.cli_agents_state.update(msg);
 
@@ -11604,7 +11690,11 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
             selection,
             comment,
         }) => {
-            log::info!("Responding to dialog {}: selection={}", dialog_id, selection);
+            log::info!(
+                "Responding to dialog {}: selection={}",
+                dialog_id,
+                selection
+            );
             let client = state.cli_agents_http.clone();
             let id = dialog_id.clone();
             Task::perform(
@@ -11624,6 +11714,228 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
             )
         }
         None => Task::none(),
+    }
+}
+
+/// Handle orchestrator panel messages
+fn handle_orchestrator_message(
+    state: &mut ContinuumStudio,
+    msg: OrchestratorMessage,
+) -> Task<Message> {
+    use OrchestratorMessage::*;
+    match msg {
+        SetMode(mode) => {
+            // Fire async D-Bus call to set mode
+            let mode_str = mode.as_str().to_string();
+            Task::perform(
+                async move {
+                    use continuum_studio_iced::dialog_client::DialogClient;
+                    let mut client = DialogClient::new();
+                    if client.connect().await.is_ok() {
+                        match client.set_orchestrator_mode(OrchestratorMode::from_str(&mode_str)).await {
+                            Ok(new_mode) => Ok(new_mode),
+                            Err(e) => Err(e),
+                        }
+                    } else {
+                        Err("Failed to connect to daemon".to_string())
+                    }
+                },
+                |result| Message::OrchestratorAction(ModeSetResult(result)),
+            )
+        }
+        ModeRefreshed(mode) => {
+            state.orchestrator_state.mode = mode;
+            state.orchestrator_state.mode_since = std::time::Instant::now();
+            state.orchestrator_state.engine.set_mode(mode);
+            state.orchestrator_state.daemon_connected = true;
+            log::info!("Orchestrator mode refreshed from daemon: {:?}", mode);
+            Task::none()
+        }
+        ModeSetResult(result) => {
+            match result {
+                Ok(mode) => {
+                    state.orchestrator_state.mode = mode;
+                    state.orchestrator_state.mode_since = std::time::Instant::now();
+                    state.orchestrator_state.engine.set_mode(mode);
+                    state.orchestrator_state.daemon_connected = true;
+                    log::info!("Orchestrator mode set via D-Bus: {:?}", mode);
+                }
+                Err(e) => {
+                    log::error!("Failed to set orchestrator mode: {}", e);
+                }
+            }
+            Task::none()
+        }
+        DaemonConnectionChanged(connected) => {
+            state.orchestrator_state.daemon_connected = connected;
+            log::info!("Orchestrator daemon connected: {}", connected);
+            Task::none()
+        }
+        ApproveTriage(id) => {
+            // Find the dialog and determine the response to send
+            let response = if let Some(item) = state
+                .orchestrator_state
+                .engine
+                .triage_queue()
+                .iter()
+                .find(|item| item.dialog.id == id)
+            {
+                // Use suggested response if available, otherwise pick first option
+                let selection = item.suggested_response.clone().unwrap_or_else(|| {
+                    item.dialog
+                        .options
+                        .as_ref()
+                        .and_then(|opts| opts.first())
+                        .map(|opt| opt.value.clone())
+                        .unwrap_or_else(|| "continue".to_string())
+                });
+                log::info!("Approving triage item: {} -> {}", id, selection);
+                Some((id.clone(), selection))
+            } else {
+                log::warn!("Triage item not found for approve: {}", id);
+                None
+            };
+
+            // Remove from queue optimistically
+            state.orchestrator_state.engine.remove_from_triage(&id);
+
+            // Send response to daemon
+            if let Some((dialog_id, selection)) = response {
+                let client = state.cli_agents_http.clone();
+                let id_for_result = dialog_id.clone();
+                Task::perform(
+                    async move {
+                        client
+                            .respond_to_dialog(&dialog_id, &selection, Some("Approved via triage".to_string()))
+                            .await
+                    },
+                    move |result| {
+                        Message::OrchestratorAction(OrchestratorMessage::TriageResponseResult(
+                            id_for_result.clone(),
+                            result,
+                        ))
+                    },
+                )
+            } else {
+                Task::none()
+            }
+        }
+        DeclineTriage(id) => {
+            log::info!("Declining triage item: {}", id);
+
+            // Find the dialog to get cancel option if available
+            let cancel_selection = state
+                .orchestrator_state
+                .engine
+                .triage_queue()
+                .iter()
+                .find(|item| item.dialog.id == id)
+                .and_then(|item| {
+                    // Try to find a cancel/decline option
+                    item.dialog.options.as_ref().and_then(|opts| {
+                        opts.iter()
+                            .find(|opt| {
+                                let v = opt.value.to_lowercase();
+                                v.contains("cancel")
+                                    || v.contains("decline")
+                                    || v.contains("no")
+                                    || v.contains("stop")
+                            })
+                            .map(|opt| opt.value.clone())
+                    })
+                })
+                .unwrap_or_else(|| "cancelled".to_string());
+
+            // Remove from queue optimistically
+            state.orchestrator_state.engine.remove_from_triage(&id);
+
+            // Send response to daemon
+            let client = state.cli_agents_http.clone();
+            let dialog_id = id.clone();
+            let id_for_result = id.clone();
+            Task::perform(
+                async move {
+                    client
+                        .respond_to_dialog(&dialog_id, &cancel_selection, Some("Declined via triage".to_string()))
+                        .await
+                },
+                move |result| {
+                    Message::OrchestratorAction(OrchestratorMessage::TriageResponseResult(
+                        id_for_result.clone(),
+                        result,
+                    ))
+                },
+            )
+        }
+        ClaimDialog(id) => {
+            log::info!("User claiming dialog: {}", id);
+            state.orchestrator_state.engine.remove_from_triage(&id);
+            Task::none()
+        }
+        SetTriageState(id, triage_state) => {
+            state
+                .orchestrator_state
+                .engine
+                .set_triage_state(&id, triage_state);
+            Task::none()
+        }
+        ToggleHistory => {
+            state.orchestrator_state.show_history = !state.orchestrator_state.show_history;
+            Task::none()
+        }
+        UndoLastDecision => {
+            let undoable = state.orchestrator_state.engine.undoable_decisions();
+            if let Some(recent) = undoable.last() {
+                log::info!("Undoing decision: {}", recent.dialog_id);
+            }
+            Task::none()
+        }
+        ClearTriage => {
+            log::info!("Clearing triage queue");
+            let queue_ids: Vec<String> = state
+                .orchestrator_state
+                .engine
+                .triage_queue()
+                .iter()
+                .map(|item| item.dialog.id.clone())
+                .collect();
+            for id in queue_ids {
+                state.orchestrator_state.engine.remove_from_triage(&id);
+            }
+            Task::none()
+        }
+        RefreshMode => {
+            log::info!("Refreshing orchestrator mode from daemon");
+            Task::perform(
+                async {
+                    use continuum_studio_iced::dialog_client::DialogClient;
+                    let mut client = DialogClient::new();
+                    if client.connect().await.is_ok() {
+                        client.get_orchestrator_mode().await.ok()
+                    } else {
+                        None
+                    }
+                },
+                |result| {
+                    if let Some(mode) = result {
+                        Message::OrchestratorAction(ModeRefreshed(mode))
+                    } else {
+                        Message::OrchestratorAction(DaemonConnectionChanged(false))
+                    }
+                },
+            )
+        }
+        TriageResponseResult(dialog_id, result) => {
+            match result {
+                Ok(()) => {
+                    log::info!("Triage response sent successfully for dialog: {}", dialog_id);
+                }
+                Err(e) => {
+                    log::error!("Failed to send triage response for {}: {}", dialog_id, e);
+                }
+            }
+            Task::none()
+        }
     }
 }
 
@@ -12117,6 +12429,11 @@ fn handle_dialog_message(state: &mut ContinuumStudio, msg: DialogMsg) -> Task<Me
 /// View for CLI agent management (headless Cursor CLI orchestration)
 fn view_cli_agents(state: &ContinuumStudio) -> Element<'_, Message> {
     view_cli_agents_tab(&state.cli_agents_state, Message::CLIAgentAction)
+}
+
+/// View for orchestrator panel (mode switching, dialog triage)
+fn view_orchestrator(state: &ContinuumStudio) -> Element<'_, Message> {
+    view_orchestrator_panel(&state.orchestrator_state, Message::OrchestratorAction)
 }
 
 /// View for sub-agent monitoring panel

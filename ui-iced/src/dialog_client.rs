@@ -62,6 +62,73 @@ pub struct ChoiceOption {
     pub description: Option<String>,
 }
 
+/// Orchestrator mode for dialog handling automation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OrchestratorMode {
+    /// User handles all dialogs (default)
+    #[default]
+    UserActive,
+    /// User delegates routine dialogs; high/critical escalate to user
+    UserDelegate,
+    /// Orchestrator in charge; user can claim dialogs within timeout
+    Spectator,
+    /// User fully AFK; orchestrator handles everything autonomously
+    Autonomous,
+}
+
+impl OrchestratorMode {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "user_active" => Self::UserActive,
+            "user_delegate" => Self::UserDelegate,
+            "spectator" => Self::Spectator,
+            "autonomous" => Self::Autonomous,
+            _ => Self::UserActive,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::UserActive => "user_active",
+            Self::UserDelegate => "user_delegate",
+            Self::Spectator => "spectator",
+            Self::Autonomous => "autonomous",
+        }
+    }
+
+    pub fn emoji(&self) -> &'static str {
+        match self {
+            Self::UserActive => "🟢",
+            Self::UserDelegate => "🟡",
+            Self::Spectator => "🟠",
+            Self::Autonomous => "🔴",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::UserActive => "User Active",
+            Self::UserDelegate => "Delegated",
+            Self::Spectator => "Spectator",
+            Self::Autonomous => "Autonomous",
+        }
+    }
+
+    /// Whether this mode allows auto-handling dialogs
+    pub fn allows_auto_handle(&self) -> bool {
+        matches!(self, Self::UserDelegate | Self::Spectator | Self::Autonomous)
+    }
+}
+
+/// Extended orchestrator mode info
+#[derive(Debug, Clone)]
+pub struct OrchestratorModeInfo {
+    pub mode: OrchestratorMode,
+    pub since_secs: u64,
+    pub inactivity_timeout_secs: u64,
+    pub spectator_claim_timeout_secs: u64,
+}
+
 /// Messages from the dialog client to the main app
 #[derive(Debug, Clone)]
 pub enum DialogClientMessage {
@@ -73,6 +140,8 @@ pub enum DialogClientMessage {
     DialogDismissed(String),
     /// Hold mode state changed
     HoldModeChanged(bool),
+    /// Orchestrator mode changed
+    OrchestratorModeChanged(OrchestratorMode),
     /// Error occurred
     Error(String),
 }
@@ -251,6 +320,123 @@ impl DialogClient {
 
         let result: Result<String, _> = proxy.call("Ping", &()).await;
         Ok(result.map(|s| s == "pong").unwrap_or(false))
+    }
+
+    // ========================================================================
+    // Orchestrator Mode Methods
+    // ========================================================================
+
+    /// Get current orchestrator mode
+    pub async fn get_orchestrator_mode(&self) -> Result<OrchestratorMode, String> {
+        let conn = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| "Not connected".to_string())?;
+
+        let proxy = Proxy::new(
+            conn,
+            "sh.synapsix.Dialog",
+            "/sh/synapsix/Dialog",
+            "sh.synapsix.Dialog1",
+        )
+        .await
+        .map_err(|e| format!("Failed to create proxy: {}", e))?;
+
+        let result: String = proxy
+            .call("GetOrchestratorMode", &())
+            .await
+            .map_err(|e| format!("D-Bus call failed: {}", e))?;
+
+        Ok(OrchestratorMode::from_str(&result))
+    }
+
+    /// Set orchestrator mode
+    pub async fn set_orchestrator_mode(&self, mode: OrchestratorMode) -> Result<OrchestratorMode, String> {
+        let conn = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| "Not connected".to_string())?;
+
+        let proxy = Proxy::new(
+            conn,
+            "sh.synapsix.Dialog",
+            "/sh/synapsix/Dialog",
+            "sh.synapsix.Dialog1",
+        )
+        .await
+        .map_err(|e| format!("Failed to create proxy: {}", e))?;
+
+        let result: String = proxy
+            .call("SetOrchestratorMode", &(mode.as_str(),))
+            .await
+            .map_err(|e| format!("D-Bus call failed: {}", e))?;
+
+        Ok(OrchestratorMode::from_str(&result))
+    }
+
+    /// Get detailed orchestrator mode info
+    pub async fn get_orchestrator_mode_info(&self) -> Result<OrchestratorModeInfo, String> {
+        let conn = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| "Not connected".to_string())?;
+
+        let proxy = Proxy::new(
+            conn,
+            "sh.synapsix.Dialog",
+            "/sh/synapsix/Dialog",
+            "sh.synapsix.Dialog1",
+        )
+        .await
+        .map_err(|e| format!("Failed to create proxy: {}", e))?;
+
+        let result: String = proxy
+            .call("GetOrchestratorModeInfo", &())
+            .await
+            .map_err(|e| format!("D-Bus call failed: {}", e))?;
+
+        let json: serde_json::Value =
+            serde_json::from_str(&result).map_err(|e| format!("Failed to parse info: {}", e))?;
+
+        Ok(OrchestratorModeInfo {
+            mode: OrchestratorMode::from_str(json["mode"].as_str().unwrap_or("user_active")),
+            since_secs: json["since_secs"].as_u64().unwrap_or(0),
+            inactivity_timeout_secs: json["inactivity_timeout_secs"].as_u64().unwrap_or(300),
+            spectator_claim_timeout_secs: json["spectator_claim_timeout_secs"].as_u64().unwrap_or(30),
+        })
+    }
+
+    /// Update orchestrator configuration (timeouts)
+    pub async fn set_orchestrator_config(
+        &self,
+        inactivity_timeout_secs: Option<u64>,
+        spectator_claim_timeout_secs: Option<u64>,
+    ) -> Result<(), String> {
+        let conn = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| "Not connected".to_string())?;
+
+        let proxy = Proxy::new(
+            conn,
+            "sh.synapsix.Dialog",
+            "/sh/synapsix/Dialog",
+            "sh.synapsix.Dialog1",
+        )
+        .await
+        .map_err(|e| format!("Failed to create proxy: {}", e))?;
+
+        let config = serde_json::json!({
+            "inactivity_timeout_secs": inactivity_timeout_secs,
+            "spectator_claim_timeout_secs": spectator_claim_timeout_secs,
+        });
+
+        let _result: String = proxy
+            .call("SetOrchestratorConfig", &(config.to_string(),))
+            .await
+            .map_err(|e| format!("D-Bus call failed: {}", e))?;
+
+        Ok(())
     }
 }
 

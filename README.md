@@ -76,6 +76,13 @@ Features:
 - VS Code theme compatibility
 - Self-update system
 - Settings management
+- **Diagram rendering** - Mermaid and D2 via CLI tools
+- **Full offline mode** - Operation queue with auto-sync
+- **Orchestrator mode** - Decision engine for automated dialog handling
+- **CLI Agents** - Spawn, monitor, and respond to headless Cursor agents
+  - Preset/snippet system for prompt templates
+  - Batch launch across workspaces
+  - Dialog inbox for worker agent responses
 
 ```bash
 cd ui-iced && cargo run --release
@@ -152,11 +159,17 @@ Agent action verification via SMT solvers:
 ### Dialog System
 
 Interactive AI agent feedback without wasting API requests:
-- Native desktop dialogs (egui)
+- Native desktop dialogs (egui) and iced panel
 - Mobile dialogs (WebSocket + web UI)
 - Priority queue, decision memory, approval workflows
 - Hold mode for complex decisions
 - Rich context (code diffs, file previews, progress)
+- **Orchestrator mode** - Four modes for varying autonomy levels:
+  - User Active (all dialogs to user)
+  - Delegated (auto-handle routine, escalate critical)
+  - Spectator (auto-handle with claim timeout)
+  - Autonomous (full auto, critical queued)
+- **Decision engine** - Critical keyword detection, session continuation
 
 ### Service Discovery
 

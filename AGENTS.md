@@ -30,6 +30,8 @@ Continuum Studio
 - Settings management
 - **Diagram rendering** (Mermaid/D2) via `widgets/diagram.rs` (March 2026)
 - **Full offline mode** with operation queue via `offline.rs` (March 2026)
+- **Orchestrator mode** with decision engine via `decision_engine.rs` (March 2026)
+- **CLI Agents** with presets, batch launch, dialog inbox (March 2026)
 
 ### Android App (`android/`)
 
@@ -51,6 +53,69 @@ Continuum Studio
 - Use Nushell for scripting (not bash)
 - Use fast_shell MCP tool for commands when available
 - Follow language philosophy: Nix > Nushell > Elixir > Rust > Kotlin
+
+## Available MCP Tools
+
+### Synapsix MCP (synapsix-mcp)
+
+Primary tooling for Cursor agents. ~20ms latency via D-Bus.
+
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| `fast_shell` | Execute commands | Build, test, cargo commands |
+| `fast_dialog` | GUI dialogs | User interaction, decisions |
+| `fast_screenshot` | Screen capture | UI testing, visual debugging |
+| `fast_visual_diff` | Compare images | Before/after UI comparisons |
+| `handoff_context` | Get past context | Understanding previous work |
+| `handoff_share` | Share status | Multi-agent coordination |
+
+### UI Integration Notes
+
+Continuum Studio integrates deeply with Synapsix tooling:
+
+1. **Dialog Client** (`dialog_client.rs`) - D-Bus connection to synapsix-dialog-daemon
+2. **CLI Agents Client** (`cli_agents_client.rs`) - HTTP/WebSocket to Synapsix API
+3. **Decision Engine** (`decision_engine.rs`) - Auto-handling based on orchestrator mode
+4. **Orchestrator Panel** (`orchestrator_panel.rs`) - Mode control and triage queue
+
+### Synapsix API Endpoints Used
+
+| Endpoint | Purpose | Client |
+|----------|---------|--------|
+| `/api/cli-agents/*` | Agent management | `CLIAgentsHttpClient` |
+| `/api/presets/*` | Preset management | `CLIAgentsHttpClient` |
+| `/api/agent-dialogs/*` | Dialog inbox | `CLIAgentsHttpClient` |
+| `/api/orchestrator/mode` | Mode control | `DialogClient` |
+| `/ws/cli-agents` | Agent events | WebSocket |
+| `/ws/orchestrator` | Dialog stream | WebSocket |
+
+### D-Bus Integration
+
+| Service | Path | Interface |
+|---------|------|-----------|
+| `sh.synapsix.Dialog` | `/sh/synapsix/Dialog` | `sh.synapsix.Dialog1` |
+
+Key methods:
+- `GetOrchestratorMode` / `SetOrchestratorMode`
+- `ShowDialog` - Display dialog via GUI
+- `GetModeInfo` - Extended mode info
+
+## Tool Usage Guidelines
+
+### DEPRECATED Approaches
+
+**Do NOT use these approaches:**
+
+1. **Writing .ncl files to ~/.synapsix/dialogs/** - Use `fast_dialog` MCP or D-Bus
+2. **Manual polling for dialog responses** - Use WebSocket or D-Bus signals
+3. **synapsix-dialog-cli when MCP available** - CLI is fallback only
+
+### Cross-References
+
+- [MCP Tool Reference](../cortex/docs/mcp-tool-reference.md) - Complete tool documentation
+- [Dialog Usage Guide](../cortex/docs/dialog-usage-guide.md) - Dialog best practices
+- [Orchestrator Mode Protocol](../cortex/docs/orchestrator-mode-protocol.md) - Mode system spec
+- [Synapsix AGENTS.md](../synapsix/AGENTS.md) - Backend implementation
 
 ## Build & Test
 
@@ -98,18 +163,103 @@ Integrated agent dialog routing into CLI Agents tab:
 - `DialogSource` enum: Orchestrator, SessionAgent, SubAgent, External
 - `DialogPriority` enum with emoji display: Low, Normal, High (🔴), Critical (🚨)
 - `CLIAgentsHttpClient` updated:
- - `fetch_pending_dialogs` → `/api/agent-dialogs`
- - `respond_to_dialog` → `/api/agent-dialogs/:id/respond`
- - `escalate_dialog` function added
+  - `fetch_pending_dialogs` → `/api/agent-dialogs`
+  - `respond_to_dialog` → `/api/agent-dialogs/:id/respond`
+  - `escalate_dialog` function added
 - WebSocket client for `/ws/orchestrator` real-time updates
+- `OrchestratorWsEvent` types: DialogNew, DialogResponded, DialogTimeout, ModeChanged, AgentStarted, AgentCompleted
+- `spawn_orchestrator_websocket()` for persistent connection with auto-reconnect
+
+### Decision Engine (`ui-iced/src/decision_engine.rs`)
+
+**NEW** - Automated dialog handling based on orchestrator mode and priority.
+
+**Core Types:**
+- `DecisionRecord` - Records decisions with reasoning, timestamps, undo tracking
+- `TriageState` - Manual, AutoApprove, AutoDecline, Paused
+- `TriageItem` - Queue items with suggested responses and timeouts
+- `DecisionEngineConfig` - Configurable critical keywords, timeouts, agent-specific overrides
+- `DecisionResult` - AutoHandle, RequireUser, or Triage outcomes
+
+**Decision Logic by Mode:**
+| Mode | Low/Normal | High | Critical |
+|------|-----------|------|----------|
+| UserActive | → User | → User | → User |
+| UserDelegate | Auto-handle | → User | → User |
+| Spectator | Auto + claim timeout | Auto + claim | → User (timeout) |
+| Autonomous | Auto-handle | Auto-handle | Queued for review |
+
+**Features:**
+- Critical keyword detection (delete, production, sudo, etc.)
+- Session continuation prioritization (keeps agents running)
+- Undo window for recent decisions
+- 4 unit tests
+
+### Orchestrator Panel (`ui-iced/src/orchestrator_panel.rs`)
+
+**NEW** - UI component for orchestrator mode control and decision triage.
+
+**Components:**
+- `OrchestratorPanelState` - UI state (mode, engine, daemon connection status)
+- `OrchestratorMessage` - SetMode, ApproveTriage, DeclineTriage, ClaimDialog, Undo
+- `view_mode_selector()` - 4-button mode bar (🟢 🟡 🟠 🔴)
+- `view_triage_queue()` - Pending decisions with approve/decline/claim actions
+- `view_triage_item()` - Individual items with countdown timers
+- `view_orchestrator_panel()` - Full panel with connection status and undo button
+
+**UI Features:**
+- Color-coded mode buttons
+- Countdown timers for auto-actions
+- Priority emoji indicators
+- Source badges (Session, Sub-agent, External)
+
+### CLI Agents Preset System (`ui-iced/src/cli_agents.rs`)
+
+Full preset and snippet system for agent prompts:
+
+**Types:**
+- `Preset` - Named prompt configurations with prefix/suffix
+- `Snippet` - Reusable prompt fragments
+- `WorkspaceOverrides` - Auto-select presets per workspace
+
+**State Fields:**
+- `presets`, `snippets` - Available prompt templates
+- `selected_preset` - Current preset for launch form
+- `workspace_overrides` - Workspace → preset mappings
+- `show_preset_editor`, `editing_preset` - Modal state
+
+**Views:**
+- `CLIAgentsView::Launch` - Launch form with preset selector
+- `CLIAgentsView::Batch` - Multi-workspace batch launch
+- `CLIAgentsView::Dialogs` - Dialog inbox for worker responses
+- Modal editors for presets, snippets, workspace overrides
+
+**Tasks:**
+- `FetchPresets`, `CreatePreset`, `UpdatePreset`, `DeletePreset`
+- `FetchSnippets`, `CreateSnippet`, `UpdateSnippet`, `DeleteSnippet`
+- `FetchWorkspaceOverrides`, `SetWorkspaceOverride`, `ClearWorkspaceOverride`
+- `FetchPendingDialogs`, `RespondToDialog`
+
+### Dialog Client Extensions (`ui-iced/src/dialog_client.rs`)
+
+**OrchestratorMode enum:**
+- `UserActive` - User handles all dialogs (default)
+- `UserDelegate` - Auto-handle routine, escalate high/critical
+- `Spectator` - Auto-handle all, user can claim within timeout
+- `Autonomous` - Full auto, critical queued for later
+
+**D-Bus Methods:**
+- `get_orchestrator_mode()` / `set_orchestrator_mode()`
+- `get_orchestrator_mode_info()` - Extended info with timeouts
+- `set_orchestrator_config()` - Configure timeouts
 
 ### Offline Mode Integration
 
 - `offline_queue` and `connection_tracker` fields added to `ContinuumStudio` struct
 - Dashboard shows offline status indicator with:
- - Online/Partial/Offline state computed from connection bools
- - Pending operation count for sync
- - Color-coded status
+  - Online/Partial/Offline state computed from connection bools
+  - Pending operation count for sync
+  - Color-coded status
 
 **Future work**: Route operations through queue when offline, sync on reconnect.
 
@@ -150,19 +300,8 @@ Integrated agent dialog routing into CLI Agents tab:
 | Offline mode | `ui-iced/src/offline.rs` |
 | CLI agents | `ui-iced/src/cli_agents.rs` |
 | CLI agents client | `ui-iced/src/cli_agents_client.rs` |
+| Decision engine | `ui-iced/src/decision_engine.rs` |
+| Orchestrator panel | `ui-iced/src/orchestrator_panel.rs` |
+| Dialog client | `ui-iced/src/dialog_client.rs` |
 | Module exports | `ui-iced/src/lib.rs` |
 
-### March 11, 2026
-
-**Orchestrator Dialog Inbox Integration**
-
-- Extended `PendingDialog` with agent routing fields: `source`, `priority`, `workspace`, `orchestrator_id`
-- Added `DialogSource` enum: Orchestrator, SessionAgent, SubAgent, External
-- Added `DialogPriority` enum: Low, Normal, High, Critical
-- Updated HTTP client:
-  - `fetch_pending_dialogs()` → `/api/agent-dialogs`
-  - `respond_to_dialog()` → `/api/agent-dialogs/:id/respond`
-  - Added `escalate_dialog()` for critical escalation
-- Added `OrchestratorWsEvent` types for real-time dialog notifications
-- Added `spawn_orchestrator_websocket()` for `/ws/orchestrator` connection
-- UI shows source badge and priority emoji on dialog cards

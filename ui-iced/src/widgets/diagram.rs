@@ -62,6 +62,7 @@ pub enum DiagramState {
 /// A cached diagram entry
 #[derive(Debug)]
 struct CachedDiagram {
+    #[allow(dead_code)]
     content_hash: u64,
     state: DiagramState,
 }

@@ -1,19 +1,24 @@
 # CLI Agents UI Design
 
-## Status: Phase 3 Complete (Full Stack)
+## Status: Phase 4 Complete (Orchestration)
 
 **Frontend (March 2026):**
 
 - Rust UI module (`src/cli_agents.rs`) with full state management
 - State types: `CLIAgentsState`, `CLIAgent`, `CLIAgentEvent`, `LaunchForm`, `BatchForm`
+- **Preset System** (March 11): `Preset`, `Snippet`, `WorkspaceOverrides`, modal editors
+- **Dialog Inbox** (March 11): `PendingDialog`, `DialogSource`, `DialogPriority`, response modal
 - Message types: `CLIAgentMessage` with all UI actions + WebSocket events
 - Task types: `CLIAgentTask` for backend communication
-- View components: List, Detail, Launch Form, Batch Form
+- View components: List, Detail, Launch Form, Batch Form, **Dialogs Inbox**
 - Main app integration: Message routing, state initialization, task handling
 - HTTP Client (`src/cli_agents_client.rs`):
   - `CLIAgentsHttpClient` with spawn_agent, spawn_batch, list_agents, get_agent, stop_agent
+  - **Preset API** (March 11): CRUD for presets, snippets, workspace overrides
+  - **Dialog API** (March 11): fetch_pending_dialogs, respond_to_dialog, escalate_dialog
   - Request/Response types matching planned API
   - WebSocket connection with auto-reconnect (`spawn_cli_agents_websocket`)
+  - **Orchestrator WebSocket** (March 11): `spawn_orchestrator_websocket`, `OrchestratorWsEvent`
   - Event conversion helpers (`EventJson::into_cli_agent_event`)
 - WebSocket Subscription in main.rs:
   - `cli_agents_subscription()` - only active when on CLI Agents tab
@@ -29,6 +34,11 @@
   - `POST /api/cli-agents/spawn` - Spawn single agent
   - `POST /api/cli-agents/batch` - Spawn batch
   - `POST /api/cli-agents/:id/stop` - Stop agent
+- **Dialog/Orchestrator API** (March 11):
+  - `GET /api/agent-dialogs` - List pending dialogs from workers
+  - `POST /api/agent-dialogs/:id/respond` - Submit dialog response
+  - `POST /api/agent-dialogs/:id/escalate` - Escalate to critical
+  - `WS /ws/orchestrator` - Real-time dialog notifications
 - WebSocket handler (`synapsix/lib/synapsix/harnesses/cursor/cli_websocket.ex`):
   - Real-time event streaming
   - Heartbeat ping/pong
@@ -42,10 +52,19 @@
 - Application supervision (`synapsix/lib/synapsix/application.ex`):
   - CLI.Registry added to supervision tree
 
+**Orchestration (March 11):**
+
+- Decision Engine (`decision_engine.rs`): Auto-handle dialogs based on mode/priority
+- Orchestrator Panel (`orchestrator_panel.rs`): Mode selector, triage queue UI
+- Four orchestrator modes: UserActive, UserDelegate, Spectator, Autonomous
+- Critical keyword detection for safety
+- Session continuation prioritization
+
 **Next Steps:**
 
-- Test end-to-end with actual Cursor CLI agents
-- Add CLIBackend event emission to WebSocket broadcasts
+- Wire decision engine to dialog inbox (auto-respond to routine dialogs)
+- Add orchestrator panel to main app layout
+- Add timeout indicators to triage queue
 
 ## Overview
 
@@ -180,6 +199,52 @@ WS /ws/cli-agents
 │ [✓] Stop on failure                            │
 │                                                 │
 │               [▶ Launch Batch (2 agents)]      │
+└─────────────────────────────────────────────────┘
+```
+
+### 5. Dialog Inbox (March 2026)
+
+```
+┌─────────────────────────────────────────────────┐
+│ 📥 Dialog Inbox                    3 pending   │
+├─────────────────────────────────────────────────┤
+│ ┌─────────────────────────────────────────────┐ │
+│ │ 📋 Session Continuation  🤖 Session  ➡️    │ │
+│ │ ✅ Completed: Documentation review          │ │
+│ │ What should I do next?                      │ │
+│ │ [Continue] [Next Task] [End Session]        │ │
+│ │                              [Respond →]    │ │
+│ └─────────────────────────────────────────────┘ │
+│ ┌─────────────────────────────────────────────┐ │
+│ │ ❓ Confirmation  📦 Sub-agent  🔴 CRITICAL │ │
+│ │ Delete all test files in /tmp?              │ │
+│ │ [Yes] [No]                                  │ │
+│ │                              [Respond →]    │ │
+│ └─────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────┘
+```
+
+### 6. Preset System (March 2026)
+
+```
+┌─────────────────────────────────────────────────┐
+│ Prompt Preset: [📦 Overnight Worker ▼] [+ New] │
+│ Description: Worker preset with dialog usage    │
+├─────────────────────────────────────────────────┤
+│ Prompt: ┌────────────────────────────────────┐ │
+│         │ Review the codebase                 │ │
+│         └────────────────────────────────────┘ │
+│                      [Show Preview] [Edit] [X] │
+└─────────────────────────────────────────────────┘
+
+Preview expanded:
+┌─────────────────────────────────────────────────┐
+│ --- PREFIX ---                                  │
+│ You are a worker agent being orchestrated...    │
+│ --- YOUR TASK ---                               │
+│ Review the codebase                             │
+│ --- SUFFIX ---                                  │
+│ Remember: Ask questions via synapsix-dialog...  │
 └─────────────────────────────────────────────────┘
 ```
 
