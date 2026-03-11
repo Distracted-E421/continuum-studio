@@ -18,7 +18,7 @@ Continuum Studio
 
 ## Current Status
 
-**Branch**: `iced-migration` (3 commits ahead of origin)
+**Branch**: `iced-migration` (4 commits ahead of origin)
 
 ### Desktop UI (`ui-iced/`)
 
@@ -88,6 +88,31 @@ cd core && mix deps.get && mix compile
 - `~/synapsix` - Dialog daemon, terminal monitor, harnesses
 - `~/phosphor` - Screen capture service
 
+## Overnight Session (March 11, 2026)
+
+### Orchestrator Dialog Inbox
+
+Integrated agent dialog routing into CLI Agents tab:
+
+- `PendingDialog` extended with `agent_id`, `source`, `priority`, `workspace`, `orchestrator_id`
+- `DialogSource` enum: Orchestrator, SessionAgent, SubAgent, External
+- `DialogPriority` enum with emoji display: Low, Normal, High (🔴), Critical (🚨)
+- `CLIAgentsHttpClient` updated:
+ - `fetch_pending_dialogs` → `/api/agent-dialogs`
+ - `respond_to_dialog` → `/api/agent-dialogs/:id/respond`
+ - `escalate_dialog` function added
+- WebSocket client for `/ws/orchestrator` real-time updates
+
+### Offline Mode Integration
+
+- `offline_queue` and `connection_tracker` fields added to `ContinuumStudio` struct
+- Dashboard shows offline status indicator with:
+ - Online/Partial/Offline state computed from connection bools
+ - Pending operation count for sync
+ - Color-coded status
+
+**Future work**: Route operations through queue when offline, sync on reconnect.
+
 ## Overnight Session (March 10, 2026)
 
 ### Completed Features
@@ -101,7 +126,7 @@ cd core && mix deps.get && mix compile
 - `extract_diagrams()`: Extracts fenced code blocks from markdown
 - 3 unit tests
 
-**2. Full Offline Mode** (`ui-iced/src/offline.rs`)
+**2. Full Offline Mode** (`ui-iced/src/offline.rs` + `ui-iced/src/main.rs`)
 
 - `OfflineQueue`: Persistent operation queue (max 1000 ops)
 - `ConnectionTracker`: Multi-backend connectivity status
@@ -109,6 +134,7 @@ cd core && mix deps.get && mix compile
 - Retry tracking with exponential backoff
 - Automatic sync when connections restore
 - 3 unit tests
+- **Integration (March 11, 2026)**: Fields added to main app state, dashboard shows offline status indicator
 
 **3. UI Stabilization** (Audit)
 
