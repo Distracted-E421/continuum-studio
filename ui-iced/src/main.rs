@@ -60,6 +60,7 @@ use continuum_studio_iced::core::{
 use continuum_studio_iced::feed_client::{
     spawn_feed_websocket, FeedEntry, FeedEvent, FeedHttpClient, FeedSource, FeedStats,
 };
+use continuum_studio_iced::activity_stream_client::spawn_activity_stream;
 use continuum_studio_iced::log_capture::{init_logger, LogBuffer};
 use continuum_studio_iced::monitoring::{DashboardData, SessionMetrics, SessionMonitor};
 use continuum_studio_iced::services::{ServiceConfig, ServiceInfo, ServiceManager, ServiceStatus};
@@ -249,6 +250,8 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
         dialog_daemon_subscription(),
         // Activity feed WebSocket connection (always active for real-time feed)
         activity_feed_subscription(),
+        // Agent activity stream from dialog daemon (commands, dialogs)
+        activity_stream_subscription(),
         // Agent coordinator polling (periodic refresh)
         coordinator_poll_subscription(),
         // CLI agents WebSocket (only when on Cursor view + CLIAgents tab)
@@ -417,6 +420,28 @@ fn task_queue_websocket_worker() -> impl iced::futures::Stream<Item = Message> {
 /// Activity feed WebSocket subscription
 fn activity_feed_subscription() -> iced::Subscription<Message> {
     iced::Subscription::run(activity_feed_worker)
+}
+
+/// Agent activity stream subscription (dialog daemon port 8080)
+fn activity_stream_subscription() -> iced::Subscription<Message> {
+    iced::Subscription::run(activity_stream_worker)
+}
+
+/// Activity stream worker - forwards ActivityEvent to agent_activity_state
+fn activity_stream_worker() -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(
+        100,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use iced::futures::SinkExt;
+
+            let mut event_rx = spawn_activity_stream().await;
+            while let Some(ev) = event_rx.recv().await {
+                let _ = output
+                    .send(Message::AgentActivityFeed(ActivityMessage::NewEvent(ev)))
+                    .await;
+            }
+        },
+    )
 }
 
 /// Activity feed WebSocket worker

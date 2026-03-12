@@ -4,6 +4,7 @@
 //! built with iced and designed for COSMIC desktop integration.
 
 pub mod activity_feed;
+pub mod activity_stream_client;
 pub mod chat_pipeline;
 pub mod cli_agents;
 pub mod cli_agents_client;
@@ -65,6 +66,7 @@ pub use parked_agents::{
     view_parked_agents_panel, ParkedAgent, ParkedAgentTask, ParkedAgentsPanelState, ParkedMessage,
 };
 pub use parked_agents_client::ParkedAgentsHttpClient;
+pub use activity_stream_client::{spawn_activity_stream, DEFAULT_ACTIVITY_WS_URL};
 pub use feed_client::{
     spawn_feed_websocket, FeedEntry, FeedEvent, FeedHttpClient, FeedLink, FeedSource, FeedStats,
 };
