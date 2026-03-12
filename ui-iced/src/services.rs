@@ -166,6 +166,45 @@ impl ServiceManager {
         }
     }
 
+    /// Check if Vextor is running via health endpoint
+    pub fn is_vextor_running(&self) -> bool {
+        match Command::new("curl")
+            .args(["-sf", "http://localhost:6333/api/health"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(status) => status.success(),
+            Err(_) => false,
+        }
+    }
+
+    /// Check if Phosphor D-Bus service is running
+    pub fn is_phosphor_running(&self) -> bool {
+        match Command::new("busctl")
+            .args(["--user", "status", "sh.synapsix.Phosphor"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(status) => status.success(),
+            Err(_) => false,
+        }
+    }
+
+    /// Check if Flux D-Bus service is running
+    pub fn is_flux_running(&self) -> bool {
+        match Command::new("busctl")
+            .args(["--user", "status", "sh.synapsix.Flux"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(status) => status.success(),
+            Err(_) => false,
+        }
+    }
+
     /// Get all service info
     pub fn get_services(&self) -> Vec<ServiceInfo> {
         vec![
@@ -179,7 +218,7 @@ impl ServiceManager {
                 },
                 start_command: self.core_start_command_background(),
                 check_command: format!("test -S {}", self.config.core_socket.display()),
-                pid: None, // TODO: Get PID from somewhere
+                pid: None,
             },
             ServiceInfo {
                 name: "Dialog Daemon".to_string(),
@@ -191,6 +230,42 @@ impl ServiceManager {
                 },
                 start_command: self.dialog_start_command(),
                 check_command: "synapsix-dialog-cli ping".to_string(),
+                pid: None,
+            },
+            ServiceInfo {
+                name: "Vextor".to_string(),
+                description: "High-performance vector database for embeddings".to_string(),
+                status: if self.is_vextor_running() {
+                    ServiceStatus::Running
+                } else {
+                    ServiceStatus::Stopped
+                },
+                start_command: "systemctl --user start vextor".to_string(),
+                check_command: "curl -sf http://localhost:6333/api/health".to_string(),
+                pid: None,
+            },
+            ServiceInfo {
+                name: "Phosphor".to_string(),
+                description: "Screen capture service for visual testing".to_string(),
+                status: if self.is_phosphor_running() {
+                    ServiceStatus::Running
+                } else {
+                    ServiceStatus::Stopped
+                },
+                start_command: "phosphor daemon --foreground &".to_string(),
+                check_command: "busctl --user status sh.synapsix.Phosphor".to_string(),
+                pid: None,
+            },
+            ServiceInfo {
+                name: "Flux".to_string(),
+                description: "System monitor with D-Bus integration".to_string(),
+                status: if self.is_flux_running() {
+                    ServiceStatus::Running
+                } else {
+                    ServiceStatus::Stopped
+                },
+                start_command: "flux &".to_string(),
+                check_command: "busctl --user status sh.synapsix.Flux".to_string(),
                 pid: None,
             },
         ]
