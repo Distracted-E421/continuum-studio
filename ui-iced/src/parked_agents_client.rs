@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use crate::parked_agents::ParkedAgent;
 
-/// Default Synapsix API base URL
-pub const DEFAULT_API_BASE: &str = "http://localhost:4001";
+/// Default Synapsix API base URL (dialog daemon, not CLI backend)
+pub const DEFAULT_API_BASE: &str = "http://localhost:8080";
 
 // =============================================================================
 // API Response Types
