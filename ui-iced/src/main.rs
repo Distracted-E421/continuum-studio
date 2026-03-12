@@ -41,6 +41,13 @@ use continuum_studio_iced::cli_agents_client::CLIAgentsHttpClient;
 use continuum_studio_iced::orchestrator_panel::{
     view_orchestrator_panel, OrchestratorMessage, OrchestratorPanelState,
 };
+use continuum_studio_iced::activity_feed::{
+    view_activity_feed, ActivityFeedState, ActivityMessage,
+};
+use continuum_studio_iced::parked_agents::{
+    view_parked_agents_panel, ParkedAgentTask, ParkedMessage,
+};
+use continuum_studio_iced::parked_agents_client::ParkedAgentsHttpClient;
 use continuum_studio_iced::dialog_client::OrchestratorMode;
 use continuum_studio_iced::coordinator_client::{
     Agent as CoordAgent, AgentStatus as CoordAgentStatus, Conflict as CoordConflict,
@@ -747,6 +754,9 @@ impl ContinuumStudio {
                 connection_tracker: continuum_studio_iced::offline::ConnectionTracker::new(),
                 // Orchestrator Panel: manage CLI agent dialogs
                 orchestrator_state: OrchestratorPanelState::default(),
+                parked_agents_state: continuum_studio_iced::parked_agents::ParkedAgentsPanelState::default(),
+                parked_agents_http: ParkedAgentsHttpClient::new(),
+                agent_activity_state: ActivityFeedState::new(),
             },
             startup_task,
         )
@@ -963,6 +973,12 @@ struct ContinuumStudio {
     // === Orchestrator Panel State ===
     /// Orchestrator panel state for managing CLI agent dialogs
     orchestrator_state: OrchestratorPanelState,
+    /// Parked agents panel state
+    parked_agents_state: continuum_studio_iced::parked_agents::ParkedAgentsPanelState,
+    /// HTTP client for parked agents API
+    parked_agents_http: ParkedAgentsHttpClient,
+    /// Agent activity feed state (FileEdit, Command, ToolCall, Dialog events)
+    agent_activity_state: ActivityFeedState,
 }
 
 /// Available views in the application
@@ -1063,8 +1079,10 @@ enum CursorTab {
     Sessions,     // Running Cursor instances
     SubAgents,    // Sub-agent monitoring
     CLIAgents,    // Headless CLI agents (NEW!)
-    Orchestrator, // Orchestrator mode and dialog triage
-    Auth,         // Authentication management
+    Orchestrator,  // Orchestrator mode and dialog triage
+    ParkedAgents,  // Parked agents awaiting task assignment
+    AgentActivity, // Agent activity feed (file edits, commands, dialogs)
+    Auth,          // Authentication management
     Versions,     // Version management
     Workspaces,   // .code-workspace management
 }
@@ -1115,6 +1133,10 @@ enum Message {
     CLIAgentAction(CLIAgentMessage),
     /// Orchestrator panel actions (mode switching, triage decisions)
     OrchestratorAction(OrchestratorMessage),
+    /// Parked agents panel actions
+    ParkedAgentAction(ParkedMessage),
+    /// Agent activity feed actions (FileEdit, Command, ToolCall, Dialog events)
+    AgentActivityFeed(ActivityMessage),
     /// Task queue actions
     TaskQueueAction(TaskQueueMsg),
 
@@ -1594,6 +1616,9 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 return Task::perform(async { SubagentMessage::Refresh }, Message::SubagentAction);
             }
             // Trigger preset and workspace override fetch when switching to CLI Agents tab
+            if tab == CursorTab::ParkedAgents {
+                return Task::perform(async { ParkedMessage::RefreshList }, Message::ParkedAgentAction);
+            }
             if tab == CursorTab::CLIAgents && state.cli_agents_state.presets.is_empty() {
                 let client1 = state.cli_agents_http.clone();
                 let client2 = state.cli_agents_http.clone();
@@ -1852,6 +1877,13 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::OrchestratorAction(msg) => {
             return handle_orchestrator_message(state, msg);
+        }
+        Message::ParkedAgentAction(msg) => {
+            return handle_parked_agent_message(state, msg);
+        }
+        Message::AgentActivityFeed(msg) => {
+            state.agent_activity_state.update(msg);
+            return Task::none();
         }
         Message::TaskQueueAction(msg) => {
             return handle_task_queue_message(state, msg);
@@ -5229,6 +5261,8 @@ fn view_cursor(state: &ContinuumStudio) -> Element<'_, Message> {
         tab_button("🤖 Sub-agents", CursorTab::SubAgents),
         tab_button("⚡ CLI Agents", CursorTab::CLIAgents),
         tab_button("🎛️ Orchestrator", CursorTab::Orchestrator),
+        tab_button("🅿️ Parked", CursorTab::ParkedAgents),
+        tab_button("📋 Activity", CursorTab::AgentActivity),
         tab_button("🔑 Auth", CursorTab::Auth),
         tab_button("📦 Versions", CursorTab::Versions),
         tab_button("📁 Workspaces", CursorTab::Workspaces),
@@ -5251,6 +5285,8 @@ fn view_cursor(state: &ContinuumStudio) -> Element<'_, Message> {
         CursorTab::SubAgents => view_subagents(state),
         CursorTab::CLIAgents => view_cli_agents(state),
         CursorTab::Orchestrator => view_orchestrator(state),
+        CursorTab::ParkedAgents => view_parked_agents(state),
+        CursorTab::AgentActivity => view_agent_activity(state),
         CursorTab::Auth => view_auth(state),
         CursorTab::Versions => view_cursor_versions(state),
         CursorTab::Workspaces => view_workspaces(state),
@@ -11939,6 +11975,58 @@ fn handle_orchestrator_message(
     }
 }
 
+/// Handle parked agents panel messages
+fn handle_parked_agent_message(
+    state: &mut ContinuumStudio,
+    msg: ParkedMessage,
+) -> Task<Message> {
+    let task = state.parked_agents_state.update(msg);
+
+    match task {
+        Some(ParkedAgentTask::FetchParkedAgents) => {
+            let client = state.parked_agents_http.clone();
+            Task::perform(
+                async move { client.fetch_parked_agents().await },
+                |result| match result {
+                    Ok(agents) => {
+                        log::info!("Loaded {} parked agents", agents.len());
+                        Message::ParkedAgentAction(ParkedMessage::AgentsLoaded(agents))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to fetch parked agents: {}", e);
+                        Message::ParkedAgentAction(ParkedMessage::Error(e))
+                    }
+                },
+            )
+        }
+        Some(ParkedAgentTask::UnparkAndAssignTask {
+            agent_id,
+            task_description,
+        }) => {
+            let client = state.parked_agents_http.clone();
+            let agent_id_clone = agent_id.clone();
+            Task::perform(
+                async move {
+                    client
+                        .unpark_and_assign(&agent_id_clone, &task_description)
+                        .await
+                },
+                move |result| match result {
+                    Ok(()) => {
+                        log::info!("Agent unparked and task assigned: {}", agent_id);
+                        Message::ParkedAgentAction(ParkedMessage::AgentUnparked(agent_id))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to unpark agent: {}", e);
+                        Message::ParkedAgentAction(ParkedMessage::Error(e))
+                    }
+                },
+            )
+        }
+        None => Task::none(),
+    }
+}
+
 // ============================================================================
 // Multi-Window Helpers
 // ============================================================================
@@ -12434,6 +12522,15 @@ fn view_cli_agents(state: &ContinuumStudio) -> Element<'_, Message> {
 /// View for orchestrator panel (mode switching, dialog triage)
 fn view_orchestrator(state: &ContinuumStudio) -> Element<'_, Message> {
     view_orchestrator_panel(&state.orchestrator_state, Message::OrchestratorAction)
+}
+
+/// View for parked agents panel
+fn view_agent_activity(state: &ContinuumStudio) -> Element<'_, Message> {
+    view_activity_feed(&state.agent_activity_state, Message::AgentActivityFeed)
+}
+
+fn view_parked_agents(state: &ContinuumStudio) -> Element<'_, Message> {
+    view_parked_agents_panel(&state.parked_agents_state, Message::ParkedAgentAction)
 }
 
 /// View for sub-agent monitoring panel

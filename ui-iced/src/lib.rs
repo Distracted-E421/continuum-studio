@@ -3,6 +3,7 @@
 //! This library provides the UI components for Continuum Studio,
 //! built with iced and designed for COSMIC desktop integration.
 
+pub mod activity_feed;
 pub mod chat_pipeline;
 pub mod cli_agents;
 pub mod cli_agents_client;
@@ -15,6 +16,8 @@ pub mod log_capture;
 pub mod monitoring;
 pub mod offline;
 pub mod orchestrator_panel;
+pub mod parked_agents;
+pub mod parked_agents_client;
 pub mod services;
 pub mod sessions;
 pub mod settings;
@@ -26,6 +29,10 @@ pub mod widgets;
 pub mod zones;
 
 // Re-export common types
+pub use activity_feed::{
+    view_activity_feed, ActivityEvent, ActivityEventType, ActivityFeedState, ActivityMessage,
+    FilterType,
+};
 pub use cli_agents::{
     AgentMode as CLIAgentMode, CLIAgent, CLIAgentEvent, CLIAgentMessage, CLIAgentStatus,
     CLIAgentsState, CLIAgentsView, CLIAgentTask, CLIEventType, view_cli_agents_tab,
@@ -54,6 +61,10 @@ pub use orchestrator_panel::{
     view_orchestrator_panel, view_mode_selector, view_triage_queue,
     OrchestratorMessage, OrchestratorPanelState,
 };
+pub use parked_agents::{
+    view_parked_agents_panel, ParkedAgent, ParkedAgentTask, ParkedAgentsPanelState, ParkedMessage,
+};
+pub use parked_agents_client::ParkedAgentsHttpClient;
 pub use feed_client::{
     spawn_feed_websocket, FeedEntry, FeedEvent, FeedHttpClient, FeedLink, FeedSource, FeedStats,
 };

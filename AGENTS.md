@@ -96,6 +96,7 @@ Continuum Studio integrates deeply with Synapsix tooling:
 | `sh.synapsix.Dialog` | `/sh/synapsix/Dialog` | `sh.synapsix.Dialog1` |
 
 Key methods:
+
 - `GetOrchestratorMode` / `SetOrchestratorMode`
 - `ShowDialog` - Display dialog via GUI
 - `GetModeInfo` - Extended mode info
@@ -175,6 +176,7 @@ Integrated agent dialog routing into CLI Agents tab:
 **NEW** - Automated dialog handling based on orchestrator mode and priority.
 
 **Core Types:**
+
 - `DecisionRecord` - Records decisions with reasoning, timestamps, undo tracking
 - `TriageState` - Manual, AutoApprove, AutoDecline, Paused
 - `TriageItem` - Queue items with suggested responses and timeouts
@@ -182,6 +184,7 @@ Integrated agent dialog routing into CLI Agents tab:
 - `DecisionResult` - AutoHandle, RequireUser, or Triage outcomes
 
 **Decision Logic by Mode:**
+
 | Mode | Low/Normal | High | Critical |
 |------|-----------|------|----------|
 | UserActive | → User | → User | → User |
@@ -190,6 +193,7 @@ Integrated agent dialog routing into CLI Agents tab:
 | Autonomous | Auto-handle | Auto-handle | Queued for review |
 
 **Features:**
+
 - Critical keyword detection (delete, production, sudo, etc.)
 - Session continuation prioritization (keeps agents running)
 - Undo window for recent decisions
@@ -200,6 +204,7 @@ Integrated agent dialog routing into CLI Agents tab:
 **NEW** - UI component for orchestrator mode control and decision triage.
 
 **Components:**
+
 - `OrchestratorPanelState` - UI state (mode, engine, daemon connection status)
 - `OrchestratorMessage` - SetMode, ApproveTriage, DeclineTriage, ClaimDialog, Undo
 - `view_mode_selector()` - 4-button mode bar (🟢 🟡 🟠 🔴)
@@ -208,6 +213,7 @@ Integrated agent dialog routing into CLI Agents tab:
 - `view_orchestrator_panel()` - Full panel with connection status and undo button
 
 **UI Features:**
+
 - Color-coded mode buttons
 - Countdown timers for auto-actions
 - Priority emoji indicators
@@ -218,23 +224,27 @@ Integrated agent dialog routing into CLI Agents tab:
 Full preset and snippet system for agent prompts:
 
 **Types:**
+
 - `Preset` - Named prompt configurations with prefix/suffix
 - `Snippet` - Reusable prompt fragments
 - `WorkspaceOverrides` - Auto-select presets per workspace
 
 **State Fields:**
+
 - `presets`, `snippets` - Available prompt templates
 - `selected_preset` - Current preset for launch form
 - `workspace_overrides` - Workspace → preset mappings
 - `show_preset_editor`, `editing_preset` - Modal state
 
 **Views:**
+
 - `CLIAgentsView::Launch` - Launch form with preset selector
 - `CLIAgentsView::Batch` - Multi-workspace batch launch
 - `CLIAgentsView::Dialogs` - Dialog inbox for worker responses
 - Modal editors for presets, snippets, workspace overrides
 
 **Tasks:**
+
 - `FetchPresets`, `CreatePreset`, `UpdatePreset`, `DeletePreset`
 - `FetchSnippets`, `CreateSnippet`, `UpdateSnippet`, `DeleteSnippet`
 - `FetchWorkspaceOverrides`, `SetWorkspaceOverride`, `ClearWorkspaceOverride`
@@ -243,12 +253,14 @@ Full preset and snippet system for agent prompts:
 ### Dialog Client Extensions (`ui-iced/src/dialog_client.rs`)
 
 **OrchestratorMode enum:**
+
 - `UserActive` - User handles all dialogs (default)
 - `UserDelegate` - Auto-handle routine, escalate high/critical
 - `Spectator` - Auto-handle all, user can claim within timeout
 - `Autonomous` - Full auto, critical queued for later
 
 **D-Bus Methods:**
+
 - `get_orchestrator_mode()` / `set_orchestrator_mode()`
 - `get_orchestrator_mode_info()` - Extended info with timeouts
 - `set_orchestrator_config()` - Configure timeouts
@@ -304,4 +316,36 @@ Full preset and snippet system for agent prompts:
 | Orchestrator panel | `ui-iced/src/orchestrator_panel.rs` |
 | Dialog client | `ui-iced/src/dialog_client.rs` |
 | Module exports | `ui-iced/src/lib.rs` |
+| Parked agents panel | `ui-iced/src/parked_agents.rs` |
+| Activity feed | `ui-iced/src/activity_feed.rs` |
 
+## March 12, 2026
+
+### Agent Parking System UI
+
+**New UI Components:**
+
+- `parked_agents.rs`: Panel for managing parked agents
+  - `ParkedAgentsPanelState` - Parked agent list, loading state, assign modal
+  - `ParkedAgent` struct with display helpers (time formatting, capability badges)
+  - "Assign Task" button per agent with modal for task assignment
+  - HTTP client integration (`/api/agents/parked` endpoints)
+  - Added as "Parked" tab in main navigation (`CursorTab::ParkedAgents`)
+
+- `activity_feed.rs`: Real-time agent activity monitoring
+  - `ActivityFeedState` - Ring buffer, event filters, expanded items
+  - `ActivityEvent` enum: FileEdit, Command, ToolCall, DialogSent, DialogResponse
+  - Scrollable, filterable list with expand/collapse per event
+  - Subscription system for WebSocket event streaming
+  - Integrated into main app (subscription active in `main.rs`)
+
+**Integration:**
+
+- Both modules exported in `lib.rs`
+- `ParkedAgents` variant added to `CursorTab` enum (visible in UI)
+- Activity feed subscription started at app initialization
+
+**Pending:**
+
+- HTTP API endpoint (`GET /api/agents/parked`) requires daemon refactor to share state
+- Full WebSocket event streaming for activity feed
