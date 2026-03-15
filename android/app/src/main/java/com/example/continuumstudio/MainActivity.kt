@@ -108,6 +108,12 @@ class MainActivity : ComponentActivity() {
                 val cfAccessClientId by dialogViewModel.cfAccessClientId.collectAsState()
                 val cfAccessClientSecret by dialogViewModel.cfAccessClientSecret.collectAsState()
                 
+                // Endpoint configuration states
+                val endpoints by dialogViewModel.endpoints.collectAsState()
+                val activeEndpointIndex by dialogViewModel.activeEndpointIndex.collectAsState()
+                val endpointFallbackEnabled by dialogViewModel.endpointFallbackEnabled.collectAsState()
+                val endpointStatus by dialogViewModel.endpointStatus.collectAsState()
+                
                 // Handle events - show toasts and notifications
                 LaunchedEffect(Unit) {
                     dialogViewModel.events.collect { event ->
@@ -315,6 +321,18 @@ class MainActivity : ComponentActivity() {
                                     clipboard.setPrimaryClip(clip)
                                     dialogViewModel.showToast("Copied to clipboard!")
                                 },
+                                // Endpoint configuration
+                                endpoints = endpoints,
+                                activeEndpointIndex = activeEndpointIndex,
+                                endpointFallbackEnabled = endpointFallbackEnabled,
+                                endpointStatus = endpointStatus,
+                                onAddEndpoint = dialogViewModel::addEndpoint,
+                                onRemoveEndpoint = dialogViewModel::removeEndpoint,
+                                onToggleEndpoint = dialogViewModel::toggleEndpoint,
+                                onSetActiveEndpoint = dialogViewModel::setActiveEndpoint,
+                                onSetEndpointFallbackEnabled = dialogViewModel::setEndpointFallbackEnabled,
+                                onTestEndpoint = dialogViewModel::testEndpoint,
+                                onTestAllEndpoints = dialogViewModel::testAllEndpoints,
                             )
                         }
                         

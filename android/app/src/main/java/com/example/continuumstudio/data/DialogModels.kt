@@ -141,12 +141,45 @@ data class DialogAnswerRequest(
 
 // === UI State ===
 
+/**
+ * Represents a server endpoint configuration
+ */
+@Serializable
+data class ServerEndpoint(
+    val name: String,
+    val url: String,
+    val type: EndpointType = EndpointType.REMOTE,
+    val enabled: Boolean = true,
+    val cfAccessClientId: String = "",
+    val cfAccessClientSecret: String = "",
+)
+
+@Serializable
+enum class EndpointType {
+    @SerialName("local") LOCAL,
+    @SerialName("tailscale") TAILSCALE,
+    @SerialName("cloudflare") CLOUDFLARE,
+    @SerialName("remote") REMOTE
+}
+
+/**
+ * Status of an endpoint test
+ */
+data class EndpointStatus(
+    val connected: Boolean = false,
+    val latency: Long? = null,
+    val error: String? = null,
+    val testing: Boolean = false,
+    val lastTest: Long = 0,
+)
+
 data class ConnectionState(
     val isConnected: Boolean = false,
     val isConnecting: Boolean = false,
     val isReconnecting: Boolean = false,
     val reconnectAttempts: Int = 0,
     val serverUrl: String = "",
+    val connectedEndpoint: String? = null, // Name of connected endpoint
     val errorMessage: String? = null,
 )
 

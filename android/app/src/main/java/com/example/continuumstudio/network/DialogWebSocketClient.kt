@@ -143,6 +143,11 @@ class DialogWebSocketClient(
     }
     
     /**
+     * Build HTTP URL for external testing (public version)
+     */
+    fun buildHttpUrlForTest(serverUrl: String): String = buildHttpUrl(serverUrl)
+    
+    /**
      * Create a request builder with CF Access headers if credentials are available
      */
     private fun buildRequestWithAuth(url: String): Request.Builder {

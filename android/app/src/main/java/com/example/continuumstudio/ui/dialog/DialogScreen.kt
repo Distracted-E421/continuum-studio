@@ -18,6 +18,8 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
@@ -38,6 +40,12 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Vpn
 import com.example.continuumstudio.data.*
 
 /**
@@ -84,6 +92,18 @@ fun DialogScreen(
     onCfAccessClientSecretChange: (String) -> Unit = {},
     onTestNotification: () -> Unit = {},
     onCopyToClipboard: (String) -> Unit = {},
+    // Endpoint configuration
+    endpoints: List<ServerEndpoint> = emptyList(),
+    activeEndpointIndex: Int = 0,
+    endpointFallbackEnabled: Boolean = true,
+    endpointStatus: Map<String, EndpointStatus> = emptyMap(),
+    onAddEndpoint: (String, String) -> Unit = { _, _ -> },
+    onRemoveEndpoint: (Int) -> Unit = {},
+    onToggleEndpoint: (Int) -> Unit = {},
+    onSetActiveEndpoint: (Int) -> Unit = {},
+    onSetEndpointFallbackEnabled: (Boolean) -> Unit = {},
+    onTestEndpoint: (Int) -> Unit = {},
+    onTestAllEndpoints: () -> Unit = {},
 ) {
     // Initialize serverUrlInput from savedServerUrl (persisted in DataStore)
     var serverUrlInput by remember { mutableStateOf(savedServerUrl) }
@@ -269,6 +289,17 @@ fun DialogScreen(
                         onCfAccessClientIdChange = onCfAccessClientIdChange,
                         onCfAccessClientSecretChange = onCfAccessClientSecretChange,
                         onTestNotification = onTestNotification,
+                        endpoints = endpoints,
+                        activeEndpointIndex = activeEndpointIndex,
+                        endpointFallbackEnabled = endpointFallbackEnabled,
+                        endpointStatus = endpointStatus,
+                        onAddEndpoint = onAddEndpoint,
+                        onRemoveEndpoint = onRemoveEndpoint,
+                        onToggleEndpoint = onToggleEndpoint,
+                        onSetActiveEndpoint = onSetActiveEndpoint,
+                        onSetEndpointFallbackEnabled = onSetEndpointFallbackEnabled,
+                        onTestEndpoint = onTestEndpoint,
+                        onTestAllEndpoints = onTestAllEndpoints,
                     )
                 }
                 else -> {
@@ -512,14 +543,198 @@ fun SettingsView(
     onCfAccessClientIdChange: (String) -> Unit = {},
     onCfAccessClientSecretChange: (String) -> Unit = {},
     onTestNotification: () -> Unit,
+    // Endpoint configuration
+    endpoints: List<ServerEndpoint> = emptyList(),
+    activeEndpointIndex: Int = 0,
+    endpointFallbackEnabled: Boolean = true,
+    endpointStatus: Map<String, EndpointStatus> = emptyMap(),
+    onAddEndpoint: (String, String) -> Unit = { _, _ -> },
+    onRemoveEndpoint: (Int) -> Unit = {},
+    onToggleEndpoint: (Int) -> Unit = {},
+    onSetActiveEndpoint: (Int) -> Unit = {},
+    onSetEndpointFallbackEnabled: (Boolean) -> Unit = {},
+    onTestEndpoint: (Int) -> Unit = {},
+    onTestAllEndpoints: () -> Unit = {},
 ) {
     val hapticFeedback = LocalHapticFeedback.current
+    var showAddEndpointDialog by remember { mutableStateOf(false) }
+    var newEndpointName by remember { mutableStateOf("") }
+    var newEndpointUrl by remember { mutableStateOf("") }
+    
+    // Add Endpoint Dialog
+    if (showAddEndpointDialog) {
+        AlertDialog(
+            onDismissRequest = { 
+                showAddEndpointDialog = false
+                newEndpointName = ""
+                newEndpointUrl = ""
+            },
+            title = { Text("Add Endpoint") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = newEndpointName,
+                        onValueChange = { newEndpointName = it },
+                        label = { Text("Name") },
+                        placeholder = { Text("e.g., Home Server") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newEndpointUrl,
+                        onValueChange = { newEndpointUrl = it },
+                        label = { Text("URL") },
+                        placeholder = { Text("e.g., 192.168.1.100:8080") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newEndpointName.isNotBlank() && newEndpointUrl.isNotBlank()) {
+                            onAddEndpoint(newEndpointName, newEndpointUrl)
+                            showAddEndpointDialog = false
+                            newEndpointName = ""
+                            newEndpointUrl = ""
+                        }
+                    },
+                    enabled = newEndpointName.isNotBlank() && newEndpointUrl.isNotBlank()
+                ) {
+                    Text("Add")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { 
+                    showAddEndpointDialog = false
+                    newEndpointName = ""
+                    newEndpointUrl = ""
+                }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
     
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Server Endpoints Section (NEW)
+        item {
+            SettingsSectionHeader(title = "Server Endpoints")
+        }
+        
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        "Multiple Endpoints",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "Configure multiple server endpoints for automatic failover. Active endpoint is used first, others are fallbacks.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    // Fallback toggle
+                    SettingsToggleRow(
+                        title = "Auto Fallback",
+                        subtitle = "Try other enabled endpoints if active fails",
+                        checked = endpointFallbackEnabled,
+                        onCheckedChange = {
+                            if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onSetEndpointFallbackEnabled(it)
+                        }
+                    )
+                    
+                    HorizontalDivider()
+                    
+                    // Endpoint list
+                    if (endpoints.isNotEmpty()) {
+                        endpoints.forEachIndexed { index, endpoint ->
+                            val status = endpointStatus[endpoint.url]
+                            EndpointRow(
+                                endpoint = endpoint,
+                                status = status,
+                                isActive = index == activeEndpointIndex,
+                                onToggle = { onToggleEndpoint(index) },
+                                onSetActive = { onSetActiveEndpoint(index) },
+                                onTest = { onTestEndpoint(index) },
+                                onRemove = { onRemoveEndpoint(index) },
+                                vibrationEnabled = vibrationEnabled,
+                            )
+                            if (index < endpoints.size - 1) {
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            }
+                        }
+                    } else {
+                        Text(
+                            "No endpoints configured",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    
+                    HorizontalDivider()
+                    
+                    // Action buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { 
+                                if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showAddEndpointDialog = true 
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add")
+                        }
+                        Button(
+                            onClick = { 
+                                if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onTestAllEndpoints() 
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.NetworkCheck, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Test All")
+                        }
+                    }
+                    
+                    // Quick add Tailscale
+                    TextButton(
+                        onClick = {
+                            if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onAddEndpoint("Tailscale (Obsidian)", "100.109.236.61:8080")
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Vpn, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Quick Add: Tailscale (Obsidian)")
+                    }
+                }
+            }
+        }
+        
         // Connection Settings Section
         item {
             SettingsSectionHeader(title = "Connection")
@@ -2002,6 +2217,169 @@ fun CodeBlock(
 /**
  * Parse inline markdown formatting (bold, italic, code, links)
  */
+/**
+ * Individual endpoint row in the settings
+ */
+@Composable
+fun EndpointRow(
+    endpoint: ServerEndpoint,
+    status: EndpointStatus?,
+    isActive: Boolean,
+    onToggle: () -> Unit,
+    onSetActive: () -> Unit,
+    onTest: () -> Unit,
+    onRemove: () -> Unit,
+    vibrationEnabled: Boolean,
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+    
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { 
+                if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                onSetActive()
+            }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Enable/disable checkbox
+        Checkbox(
+            checked = endpoint.enabled,
+            onCheckedChange = { 
+                if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                onToggle()
+            }
+        )
+        
+        // Endpoint type icon
+        val typeIcon = when (endpoint.type) {
+            EndpointType.LOCAL -> Icons.Default.Home
+            EndpointType.TAILSCALE -> Icons.Default.Vpn
+            EndpointType.CLOUDFLARE -> Icons.Default.Public
+            EndpointType.REMOTE -> Icons.Default.Dns
+        }
+        Icon(
+            typeIcon,
+            contentDescription = endpoint.type.name,
+            modifier = Modifier.size(20.dp),
+            tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        
+        Spacer(modifier = Modifier.width(8.dp))
+        
+        // Endpoint info
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    endpoint.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+                )
+                if (isActive) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            "ACTIVE",
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+            Text(
+                endpoint.url,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        
+        // Status indicator
+        if (status != null) {
+            when {
+                status.testing -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+                status.connected -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Connected",
+                            modifier = Modifier.size(16.dp),
+                            tint = Color(0xFF4CAF50)
+                        )
+                        status.latency?.let { latency ->
+                            Spacer(modifier = Modifier.width(2.dp))
+                            val latencyColor = when {
+                                latency < 100 -> Color(0xFF4CAF50)
+                                latency < 300 -> Color(0xFFFF9800)
+                                else -> Color(0xFFF44336)
+                            }
+                            Text(
+                                "${latency}ms",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = latencyColor
+                            )
+                        }
+                    }
+                }
+                status.error != null -> {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = "Error",
+                        modifier = Modifier.size(16.dp),
+                        tint = Color(0xFFF44336)
+                    )
+                }
+            }
+        }
+        
+        Spacer(modifier = Modifier.width(4.dp))
+        
+        // Test button
+        IconButton(
+            onClick = { 
+                if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                onTest()
+            },
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                Icons.Default.NetworkCheck,
+                contentDescription = "Test",
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        
+        // Delete button (only for non-default endpoints)
+        if (endpoint.type != EndpointType.LOCAL) {
+            IconButton(
+                onClick = { 
+                    if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onRemove()
+                },
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Remove",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
 private fun parseInlineMarkdown(text: String): androidx.compose.ui.text.AnnotatedString {
     return buildAnnotatedString {
         var currentIndex = 0

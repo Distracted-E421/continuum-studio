@@ -40,6 +40,30 @@ Continuum Studio
 - Notification Service - Background dialog alerts
 - Auto-reconnect with exponential backoff
 - Coordination Dashboard for multi-agent monitoring
+- **Multi-Endpoint Configuration** (March 2026) - Multiple server endpoints with auto-fallback
+
+#### Multi-Endpoint Configuration (March 13, 2026)
+
+**Files Modified:**
+
+- `data/DialogModels.kt` - `ServerEndpoint`, `EndpointType`, `EndpointStatus` data classes
+- `viewmodel/DialogViewModel.kt` - Endpoint management state and functions
+- `ui/dialog/DialogScreen.kt` - Settings UI for endpoints with `EndpointRow` composable
+- `MainActivity.kt` - Wiring state to UI
+- `network/DialogWebSocketClient.kt` - `buildHttpUrlForTest` method
+
+**Features:**
+
+- Configure multiple server endpoints (Local, Tailscale, Cloudflare, Remote)
+- Enable/disable individual endpoints
+- Set active endpoint with one tap
+- Auto-fallback to other enabled endpoints on connection failure
+- Test individual endpoints with latency display
+- Test all endpoints simultaneously
+- Quick-add button for Tailscale (Obsidian) endpoint
+- Persistent settings via DataStore
+
+**UI Location:** Settings tab → "Server Endpoints" section
 
 ### Core (`core/`)
 

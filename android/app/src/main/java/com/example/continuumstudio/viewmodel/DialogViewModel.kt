@@ -14,8 +14,13 @@ import com.example.continuumstudio.data.*
 import com.example.continuumstudio.network.DialogEvent
 import com.example.continuumstudio.network.DialogWebSocketClient
 import com.example.continuumstudio.network.NetworkMonitor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 // DataStore extension
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -64,7 +69,40 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
         val CF_ACCESS_CLIENT_ID = stringPreferencesKey("cf_access_client_id")
         val CF_ACCESS_CLIENT_SECRET = stringPreferencesKey("cf_access_client_secret")
+        val ENDPOINTS_JSON = stringPreferencesKey("endpoints_json")
+        val ACTIVE_ENDPOINT_INDEX = stringPreferencesKey("active_endpoint_index")
+        val ENDPOINT_FALLBACK_ENABLED = booleanPreferencesKey("endpoint_fallback_enabled")
     }
+
+    // Default endpoints
+    private val defaultEndpoints = listOf(
+        ServerEndpoint(
+            name = "Tailscale (Obsidian)",
+            url = "100.109.236.61:8080",
+            type = EndpointType.TAILSCALE
+        ),
+        ServerEndpoint(
+            name = "Cloudflare",
+            url = "dialog.datapunk.dev",
+            type = EndpointType.CLOUDFLARE
+        )
+    )
+
+    // Multi-endpoint support
+    private val _endpoints = MutableStateFlow<List<ServerEndpoint>>(defaultEndpoints)
+    val endpoints: StateFlow<List<ServerEndpoint>> = _endpoints.asStateFlow()
+    
+    private val _activeEndpointIndex = MutableStateFlow(0)
+    val activeEndpointIndex: StateFlow<Int> = _activeEndpointIndex.asStateFlow()
+    
+    private val _endpointFallbackEnabled = MutableStateFlow(true)
+    val endpointFallbackEnabled: StateFlow<Boolean> = _endpointFallbackEnabled.asStateFlow()
+    
+    private val _endpointStatus = MutableStateFlow<Map<String, EndpointStatus>>(emptyMap())
+    val endpointStatus: StateFlow<Map<String, EndpointStatus>> = _endpointStatus.asStateFlow()
+    
+    // Track failed endpoints for fallback
+    private val failedEndpoints = mutableSetOf<Int>()
 
     // Saved server URL - defaults to public Cloudflare tunnel for mobile access
     val savedServerUrl: StateFlow<String> = dataStore.data.map { prefs ->
@@ -96,13 +134,32 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     init {
-        // Auto-connect on startup if we have a saved URL
+        // Load saved endpoints
         viewModelScope.launch {
-            savedServerUrl.first().let { url ->
-                if (url.isNotBlank()) {
-                    connect(url)
+            dataStore.data.first().let { prefs ->
+                prefs[PrefsKeys.ENDPOINTS_JSON]?.let { json ->
+                    try {
+                        val saved = kotlinx.serialization.json.Json.decodeFromString<List<ServerEndpoint>>(json)
+                        if (saved.isNotEmpty()) {
+                            _endpoints.value = saved
+                        }
+                    } catch (e: Exception) {
+                        // Keep defaults
+                    }
+                }
+                prefs[PrefsKeys.ACTIVE_ENDPOINT_INDEX]?.let {
+                    _activeEndpointIndex.value = it.toIntOrNull() ?: 0
+                }
+                prefs[PrefsKeys.ENDPOINT_FALLBACK_ENABLED]?.let {
+                    _endpointFallbackEnabled.value = it
                 }
             }
+        }
+        
+        // Auto-connect on startup to active endpoint
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(500) // Wait for endpoints to load
+            connectToActiveEndpoint()
         }
 
         // Watch for network recovery and auto-reconnect
@@ -118,14 +175,189 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                         !state.isConnected && 
                         !state.isConnecting && 
                         !state.isReconnecting) {
-                        val url = savedServerUrl.value
-                        if (url.isNotBlank()) {
-                            showToast("Network restored, reconnecting...")
-                            connect(url)
-                        }
+                        showToast("Network restored, reconnecting...")
+                        connectToActiveEndpoint()
                     }
                 }
                 wasOffline = !online
+            }
+        }
+    }
+    
+    /**
+     * Get the currently active endpoint
+     */
+    fun getActiveEndpoint(): ServerEndpoint? {
+        val index = _activeEndpointIndex.value
+        val eps = _endpoints.value
+        if (index < eps.size && eps[index].enabled) {
+            return eps[index]
+        }
+        return eps.firstOrNull { it.enabled }
+    }
+    
+    /**
+     * Connect to the active endpoint
+     */
+    fun connectToActiveEndpoint() {
+        val endpoint = getActiveEndpoint()
+        if (endpoint != null) {
+            connect(endpoint.url, endpoint.cfAccessClientId, endpoint.cfAccessClientSecret)
+        }
+    }
+    
+    /**
+     * Add a new endpoint
+     */
+    fun addEndpoint(name: String, url: String, type: EndpointType = EndpointType.REMOTE) {
+        val newEndpoint = ServerEndpoint(name = name, url = url, type = type)
+        _endpoints.value = _endpoints.value + newEndpoint
+        saveEndpoints()
+    }
+    
+    /**
+     * Remove an endpoint by index
+     */
+    fun removeEndpoint(index: Int) {
+        if (index > 0 && index < _endpoints.value.size) {
+            _endpoints.value = _endpoints.value.toMutableList().apply { removeAt(index) }
+            if (_activeEndpointIndex.value >= _endpoints.value.size) {
+                _activeEndpointIndex.value = 0
+            }
+            saveEndpoints()
+        }
+    }
+    
+    /**
+     * Toggle an endpoint's enabled state
+     */
+    fun toggleEndpoint(index: Int) {
+        _endpoints.value = _endpoints.value.toMutableList().apply {
+            this[index] = this[index].copy(enabled = !this[index].enabled)
+        }
+        saveEndpoints()
+    }
+    
+    /**
+     * Set the active endpoint and connect to it
+     */
+    fun setActiveEndpoint(index: Int) {
+        if (index < _endpoints.value.size && _endpoints.value[index].enabled) {
+            _activeEndpointIndex.value = index
+            saveEndpoints()
+            failedEndpoints.clear()
+            wsClient.disconnect()
+            connectToActiveEndpoint()
+        }
+    }
+    
+    /**
+     * Toggle endpoint fallback
+     */
+    fun setEndpointFallbackEnabled(enabled: Boolean) {
+        _endpointFallbackEnabled.value = enabled
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.ENDPOINT_FALLBACK_ENABLED] = enabled
+            }
+        }
+    }
+    
+    /**
+     * Test an endpoint's connectivity
+     */
+    fun testEndpoint(index: Int) {
+        val endpoint = _endpoints.value.getOrNull(index) ?: return
+        val url = endpoint.url
+        
+        _endpointStatus.value = _endpointStatus.value + (url to EndpointStatus(testing = true))
+        
+        viewModelScope.launch {
+            val startTime = System.currentTimeMillis()
+            try {
+                val httpUrl = wsClient.buildHttpUrlForTest(endpoint.url)
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                
+                val request = okhttp3.Request.Builder()
+                    .url("$httpUrl/api/status")
+                    .apply {
+                        if (endpoint.cfAccessClientId.isNotBlank()) {
+                            header("CF-Access-Client-Id", endpoint.cfAccessClientId)
+                            header("CF-Access-Client-Secret", endpoint.cfAccessClientSecret)
+                        }
+                    }
+                    .build()
+                
+                val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    client.newCall(request).execute()
+                }
+                
+                val latency = System.currentTimeMillis() - startTime
+                
+                if (response.isSuccessful) {
+                    _endpointStatus.value = _endpointStatus.value + (url to EndpointStatus(
+                        connected = true,
+                        latency = latency,
+                        lastTest = System.currentTimeMillis()
+                    ))
+                } else {
+                    _endpointStatus.value = _endpointStatus.value + (url to EndpointStatus(
+                        connected = false,
+                        error = "HTTP ${response.code}",
+                        lastTest = System.currentTimeMillis()
+                    ))
+                }
+            } catch (e: Exception) {
+                _endpointStatus.value = _endpointStatus.value + (url to EndpointStatus(
+                    connected = false,
+                    error = e.message ?: "Connection failed",
+                    lastTest = System.currentTimeMillis()
+                ))
+            }
+        }
+    }
+    
+    /**
+     * Test all enabled endpoints
+     */
+    fun testAllEndpoints() {
+        _endpoints.value.forEachIndexed { index, endpoint ->
+            if (endpoint.enabled) {
+                testEndpoint(index)
+            }
+        }
+    }
+    
+    /**
+     * Try fallback to another endpoint on connection failure
+     */
+    fun tryFallbackEndpoint(): Boolean {
+        if (!_endpointFallbackEnabled.value) return false
+        
+        failedEndpoints.add(_activeEndpointIndex.value)
+        
+        for (i in _endpoints.value.indices) {
+            if (!failedEndpoints.contains(i) && _endpoints.value[i].enabled) {
+                _activeEndpointIndex.value = i
+                showToast("Falling back to ${_endpoints.value[i].name}")
+                connectToActiveEndpoint()
+                return true
+            }
+        }
+        
+        // All endpoints failed - reset for next attempt
+        failedEndpoints.clear()
+        return false
+    }
+    
+    private fun saveEndpoints() {
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.ENDPOINTS_JSON] = kotlinx.serialization.json.Json.encodeToString(_endpoints.value)
+                prefs[PrefsKeys.ACTIVE_ENDPOINT_INDEX] = _activeEndpointIndex.value.toString()
             }
         }
     }
@@ -133,16 +365,16 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Connect to the dialog daemon
      */
-    fun connect(serverUrl: String) {
+    fun connect(serverUrl: String, clientId: String = "", clientSecret: String = "") {
         viewModelScope.launch {
             // Save the URL
             dataStore.edit { prefs ->
                 prefs[PrefsKeys.SERVER_URL] = serverUrl
             }
-            // Pass CF Access credentials if available
-            val clientId = cfAccessClientId.value
-            val clientSecret = cfAccessClientSecret.value
-            wsClient.connect(serverUrl, clientId, clientSecret)
+            // Use provided credentials or fall back to stored ones
+            val effectiveClientId = clientId.ifBlank { cfAccessClientId.value }
+            val effectiveClientSecret = clientSecret.ifBlank { cfAccessClientSecret.value }
+            wsClient.connect(serverUrl, effectiveClientId, effectiveClientSecret)
         }
     }
 

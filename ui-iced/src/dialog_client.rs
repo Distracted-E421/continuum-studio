@@ -371,7 +371,16 @@ impl DialogClient {
             .await
             .map_err(|e| format!("D-Bus call failed: {}", e))?;
 
-        Ok(OrchestratorMode::from_str(&result))
+        // D-Bus returns JSON: {"emoji":"🟡","new_mode":"user_delegate","old_mode":"autonomous","success":true}
+        // Parse the JSON and extract new_mode
+        let json: serde_json::Value = serde_json::from_str(&result)
+            .map_err(|e| format!("Failed to parse mode response: {}", e))?;
+        
+        let new_mode = json["new_mode"]
+            .as_str()
+            .ok_or_else(|| "Missing new_mode in response".to_string())?;
+        
+        Ok(OrchestratorMode::from_str(new_mode))
     }
 
     /// Get detailed orchestrator mode info
