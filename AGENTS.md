@@ -65,6 +65,12 @@ Continuum Studio
 
 **UI Location:** Settings tab → "Server Endpoints" section
 
+#### Overnight Session Verification (March 16, 2026)
+
+- **Parked Agents API**: E2E verified - `GET /api/parking/agents` and `POST /api/parking/agents/:id/unpark` work; Continuum Studio `ParkedAgentsHttpClient` uses `http://localhost:8080`
+- **Activity Feed**: `/ws/activity` WebSocket connects, sends `dialog_sent`, `dialog_response`, `command` events; Command events require Cursor integrated terminal (not fast_shell)
+- **Android**: `./gradlew assembleDebug` succeeds; Coordination tab ready for manual device test
+
 ### Core (`core/`)
 
 - Elixir/OTP orchestration hub
