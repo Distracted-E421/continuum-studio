@@ -34,13 +34,14 @@ pub use activity_feed::{
     view_activity_feed, ActivityEvent, ActivityEventType, ActivityFeedState, ActivityMessage,
     FilterType,
 };
+pub use activity_stream_client::{spawn_activity_stream, DEFAULT_ACTIVITY_WS_URL};
 pub use cli_agents::{
-    AgentMode as CLIAgentMode, CLIAgent, CLIAgentEvent, CLIAgentMessage, CLIAgentStatus,
-    CLIAgentsState, CLIAgentsView, CLIAgentTask, CLIEventType, view_cli_agents_tab,
+    view_cli_agents_tab, AgentMode as CLIAgentMode, CLIAgent, CLIAgentEvent, CLIAgentMessage,
+    CLIAgentStatus, CLIAgentTask, CLIAgentsState, CLIAgentsView, CLIEventType,
 };
 pub use cli_agents_client::{
-    spawn_cli_agents_websocket, CLIAgentsHttpClient, CLIAgentWsEvent, 
-    SpawnAgentRequest, SpawnBatchRequest,
+    spawn_cli_agents_websocket, CLIAgentWsEvent, CLIAgentsHttpClient, SpawnAgentRequest,
+    SpawnBatchRequest,
 };
 pub use coordinator_client::{
     Agent as CoordinatorAgent, AgentFocus, AgentStatus, AgentType, Conflict, CoordinatorEvent,
@@ -55,23 +56,22 @@ pub use decision_engine::{
 };
 pub use dialog_client::{
     spawn_dialog_monitor, ChoiceOption as DialogChoiceOption, DialogClient, DialogClientMessage,
-    DialogRequest as DialogPanelRequest, DialogType as DialogPanelType,
-    OrchestratorMode, OrchestratorModeInfo,
+    DialogRequest as DialogPanelRequest, DialogType as DialogPanelType, OrchestratorMode,
+    OrchestratorModeInfo,
 };
-pub use orchestrator_panel::{
-    view_orchestrator_panel, view_mode_selector, view_triage_queue,
-    OrchestratorMessage, OrchestratorPanelState,
-};
-pub use parked_agents::{
-    view_parked_agents_panel, ParkedAgent, ParkedAgentTask, ParkedAgentsPanelState, ParkedMessage,
-};
-pub use parked_agents_client::ParkedAgentsHttpClient;
-pub use activity_stream_client::{spawn_activity_stream, DEFAULT_ACTIVITY_WS_URL};
 pub use feed_client::{
     spawn_feed_websocket, FeedEntry, FeedEvent, FeedHttpClient, FeedLink, FeedSource, FeedStats,
 };
 pub use monitoring::{DashboardData, HealthStatus, SessionHistory, SessionMetrics, SessionMonitor};
 pub use offline::{ConnectionTracker, OfflineQueue, OfflineState, OperationType, QueuedOperation};
+pub use orchestrator_panel::{
+    view_mode_selector, view_orchestrator_panel, view_triage_queue, OrchestratorMessage,
+    OrchestratorPanelState,
+};
+pub use parked_agents::{
+    view_parked_agents_panel, ParkedAgent, ParkedAgentTask, ParkedAgentsPanelState, ParkedMessage,
+};
+pub use parked_agents_client::ParkedAgentsHttpClient;
 pub use services::{ServiceConfig, ServiceInfo, ServiceManager, ServiceStatus};
 pub use sessions::{
     CursorProcessType, CursorSession, ProcessInfo, SessionTracker, SharedCursorSettings, WindowInfo,

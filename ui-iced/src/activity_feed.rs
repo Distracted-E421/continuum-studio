@@ -7,9 +7,7 @@
 //! future implementation.
 
 use chrono::{DateTime, Utc};
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, text, Space,
-};
+use iced::widget::{button, column, container, pick_list, row, scrollable, text, Space};
 use iced::{Alignment, Element, Length};
 use std::collections::{HashSet, VecDeque};
 
@@ -138,13 +136,17 @@ impl ActivityEvent {
     pub fn summary(&self) -> String {
         match self {
             ActivityEvent::FileEdit {
-                path, lines_changed, ..
+                path,
+                lines_changed,
+                ..
             } => {
                 let sign = if *lines_changed >= 0 { "+" } else { "" };
                 format!("{} {} {} lines", path, sign, lines_changed)
             }
             ActivityEvent::Command { command, .. } => truncate(command, 60),
-            ActivityEvent::ToolCall { tool_name, status, .. } => {
+            ActivityEvent::ToolCall {
+                tool_name, status, ..
+            } => {
                 format!("{} ({})", tool_name, status)
             }
             ActivityEvent::DialogSent { title, .. } => truncate(title, 50),
@@ -181,7 +183,10 @@ impl ActivityEvent {
                 tool_name,
                 status,
                 ..
-            } => format!("Agent: {}\nTool: {}\nStatus: {}", agent_id, tool_name, status),
+            } => format!(
+                "Agent: {}\nTool: {}\nStatus: {}",
+                agent_id, tool_name, status
+            ),
             ActivityEvent::DialogSent {
                 agent_id,
                 dialog_id,
@@ -269,7 +274,11 @@ pub struct ActivityFeedState {
 impl Default for ActivityFeedState {
     fn default() -> Self {
         let mut opts = vec![FilterType::All];
-        opts.extend(ActivityEventType::all().iter().map(|t| FilterType::ByType(*t)));
+        opts.extend(
+            ActivityEventType::all()
+                .iter()
+                .map(|t| FilterType::ByType(*t)),
+        );
         Self {
             events: VecDeque::new(),
             filter: FilterType::default(),
@@ -308,7 +317,11 @@ impl ActivityFeedState {
     /// Rebuild filter_options for the dropdown
     fn rebuild_filter_options(&mut self) {
         let mut opts = vec![FilterType::All];
-        opts.extend(ActivityEventType::all().iter().map(|t| FilterType::ByType(*t)));
+        opts.extend(
+            ActivityEventType::all()
+                .iter()
+                .map(|t| FilterType::ByType(*t)),
+        );
         opts.extend(self.agent_ids.iter().cloned().map(FilterType::ByAgent));
         self.filter_options = opts;
     }
@@ -376,8 +389,8 @@ impl ActivityFeedState {
 
 /// Hash agent_id to a stable RGB color for badge
 fn agent_color(agent_id: &str) -> (f32, f32, f32) {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
     agent_id.hash(&mut hasher);
@@ -423,9 +436,7 @@ where
         .spacing(4)
         .height(Length::Fill);
 
-    scrollable(content)
-        .height(Length::Fill)
-        .into()
+    scrollable(content).height(Length::Fill).into()
 }
 
 fn view_header<'a, M>(
@@ -474,7 +485,7 @@ where
     let filtered = state.filtered_events();
 
     if filtered.is_empty() {
-        let empty =         container(
+        let empty = container(
             text("No activity yet. Events will appear as agents work.")
                 .size(14)
                 .style(|_: &iced::Theme| text::Style {
@@ -520,15 +531,18 @@ where
     let ts = event.timestamp();
     let time_str = ts.format("%H:%M:%S").to_string();
 
-    let badge: Element<'a, M> = event.agent_id().map(|id| {
-        let (r, g, b) = agent_color(id);
-        text(truncate(id, 12))
-            .size(11)
-            .style(move |_: &iced::Theme| text::Style {
-                color: Some(iced::Color::from_rgb(r, g, b)),
-            })
-            .into()
-    }).unwrap_or_else(|| Space::new().width(0).into());
+    let badge: Element<'a, M> = event
+        .agent_id()
+        .map(|id| {
+            let (r, g, b) = agent_color(id);
+            text(truncate(id, 12))
+                .size(11)
+                .style(move |_: &iced::Theme| text::Style {
+                    color: Some(iced::Color::from_rgb(r, g, b)),
+                })
+                .into()
+        })
+        .unwrap_or_else(|| Space::new().width(0).into());
 
     let event_type = event.event_type();
     let summary = event.summary();
@@ -536,9 +550,11 @@ where
     let expand_icon = if expanded { "▼" } else { "▶" };
 
     let header_content = row![
-        text(time_str).size(11).style(|_: &iced::Theme| text::Style {
-            color: Some(iced::Color::from_rgb(0.5, 0.5, 0.55)),
-        }),
+        text(time_str)
+            .size(11)
+            .style(|_: &iced::Theme| text::Style {
+                color: Some(iced::Color::from_rgb(0.5, 0.5, 0.55)),
+            }),
         Space::new().width(8),
         text(event_type.emoji()).size(12),
         Space::new().width(4),
@@ -557,13 +573,9 @@ where
         let details = event.details();
         column![
             container(header_content).padding(8),
-            container(
-                text(details)
-                    .size(12)
-                    .style(|_: &iced::Theme| text::Style {
-                        color: Some(iced::Color::from_rgb(0.6, 0.6, 0.65)),
-                    })
-            )
+            container(text(details).size(12).style(|_: &iced::Theme| text::Style {
+                color: Some(iced::Color::from_rgb(0.6, 0.6, 0.65)),
+            }))
             .padding(8)
         ]
         .spacing(0)
@@ -588,17 +600,13 @@ where
 }
 
 // =============================================================================
-// WebSocket Stubs (for future integration)
+// WebSocket Integration
 // =============================================================================
-
-/// Spawn WebSocket listener for terminal monitor events (stub)
-/// Future: subscribe to synapsix-terminal-monitor events
-pub fn _spawn_terminal_monitor_ws(_state: &ActivityFeedState) {
-    // TODO: WebSocket to terminal monitor, emit ActivityMessage::NewEvent(Command { ... })
-}
-
-/// Spawn WebSocket listener for dialog events (stub)
-/// Future: subscribe to orchestrator/dialog stream
-pub fn _spawn_dialog_events_ws(_state: &ActivityFeedState) {
-    // TODO: WebSocket to /ws/orchestrator, emit ActivityMessage::NewEvent(DialogSent/Response)
-}
+//
+// The actual WebSocket implementation is in `activity_stream_client.rs`:
+// - Connects to ws://localhost:8080/ws/activity
+// - Converts daemon events to ActivityEvent
+// - Used by activity_stream_worker() in main.rs
+//
+// This module focuses on UI state management. Events flow through:
+// activity_stream_client -> main.rs -> ActivityMessage::NewEvent -> ActivityFeedState
