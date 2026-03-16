@@ -25,6 +25,7 @@ fun CoordinationDashboard(
     val uiState by viewModel.uiState.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
     val error by viewModel.error.collectAsState()
+    val counts by viewModel.counts.collectAsState()
     
     LaunchedEffect(Unit) {
         viewModel.startPolling()
@@ -62,7 +63,7 @@ fun CoordinationDashboard(
                 )
             }
             
-            CountsSummary(counts = uiState.counts)
+            CountsSummary(counts = counts)
             
             TabRow(selectedTabIndex = uiState.selectedTab.ordinal) {
                 CoordinationTab.entries.forEach { tab ->
@@ -94,13 +95,13 @@ fun CoordinationDashboard(
                     onResolveConflict = { id, resolution -> viewModel.resolveConflict(id, resolution) }
                 )
                 CoordinationTab.HANDOFFS -> HandoffsTab(
-                    handoffs = uiState.handoffs,
+                    handoffs = uiState.pendingHandoffs,
                     history = uiState.handoffHistory,
                     onAcceptHandoff = { id, agent -> viewModel.acceptHandoff(id, agent) },
                     onCancelHandoff = { viewModel.cancelHandoff(it) }
                 )
                 CoordinationTab.STATE -> StateTab(
-                    namespaces = uiState.stateNamespaces
+                    namespaces = uiState.namespaces
                 )
             }
         }
@@ -169,19 +170,19 @@ private fun CountsSummary(counts: CoordinationCounts) {
     ) {
         CountBadge(
             label = "Locks",
-            count = counts.activeLocks,
+            count = counts.locks,
             icon = Icons.Default.Lock,
             color = Color(0xFF2196F3)
         )
         CountBadge(
             label = "Conflicts",
-            count = counts.activeConflicts,
+            count = counts.conflicts,
             icon = Icons.Default.Warning,
-            color = if (counts.activeConflicts > 0) Color(0xFFF44336) else Color(0xFF4CAF50)
+            color = if (counts.conflicts > 0) Color(0xFFF44336) else Color(0xFF4CAF50)
         )
         CountBadge(
             label = "Handoffs",
-            count = counts.pendingHandoffs,
+            count = counts.handoffs,
             icon = Icons.Default.SwapHoriz,
             color = Color(0xFFFF9800)
         )
@@ -356,8 +357,8 @@ private fun ConflictsTab(
                             horizontalArrangement = Arrangement.SpaceEvenly
                         ) {
                             StatItem("Total", s.totalDetected)
-                            StatItem("Resolved", s.resolved)
-                            StatItem("Active", s.active)
+                            StatItem("Resolved", s.totalResolved)
+                            StatItem("Active", s.totalDetected - s.totalResolved)
                         }
                     }
                 }
@@ -447,7 +448,7 @@ private fun StateTab(namespaces: List<SharedStateNamespace>) {
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(namespaces, key = { it.name }) { namespace ->
+            items(namespaces, key = { it.namespace }) { namespace ->
                 NamespaceCard(namespace = namespace)
             }
         }
@@ -536,7 +537,7 @@ private fun ConflictCard(conflict: Conflict, onResolve: (String?) -> Unit) {
             Spacer(modifier = Modifier.height(8.dp))
             
             Text(
-                text = conflict.description,
+                text = conflict.reason,
                 style = MaterialTheme.typography.bodyMedium
             )
             
@@ -547,17 +548,17 @@ private fun ConflictCard(conflict: Conflict, onResolve: (String?) -> Unit) {
                 style = MaterialTheme.typography.bodySmall
             )
             Text(
-                text = "Resource: ${conflict.resourceType}/${conflict.resourceId}",
+                text = "Detected: ${conflict.detectedAt}",
                 style = MaterialTheme.typography.bodySmall
             )
             
-            if (conflict.suggestedResolutions.isNotEmpty()) {
+            if (!conflict.suggestions.isNullOrEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "Suggested resolutions:",
                     style = MaterialTheme.typography.labelMedium
                 )
-                conflict.suggestedResolutions.forEach { resolution ->
+                conflict.suggestions.forEach { resolution ->
                     TextButton(onClick = { onResolve(resolution) }) {
                         Text("• $resolution")
                     }
@@ -590,10 +591,10 @@ private fun HandoffCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Task: ${handoff.taskId}",
+                    text = "Handoff: ${handoff.id.take(8)}...",
                     style = MaterialTheme.typography.titleSmall
                 )
-                StatusChip(status = handoff.status, isHealthy = handoff.status == "completed")
+                StatusChip(status = handoff.status, isHealthy = handoff.status == "accepted")
             }
             
             Spacer(modifier = Modifier.height(8.dp))
@@ -605,19 +606,17 @@ private fun HandoffCard(
                     contentDescription = null,
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
-                Text(text = handoff.toAgent, style = MaterialTheme.typography.bodyMedium)
+                Text(text = handoff.toAgent ?: "Any agent", style = MaterialTheme.typography.bodyMedium)
             }
             
-            handoff.reason?.let {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Reason: $it",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Reason: ${handoff.reason}",
+                style = MaterialTheme.typography.bodySmall
+            )
             
             Text(
-                text = "Initiated: ${handoff.initiatedAt}",
+                text = "Created: ${handoff.createdAt}",
                 style = MaterialTheme.typography.bodySmall
             )
             
@@ -631,7 +630,7 @@ private fun HandoffCard(
                         Text("Cancel")
                     }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = { onAccept(handoff.toAgent) }) {
+                    Button(onClick = { onAccept(handoff.toAgent ?: "") }) {
                         Text("Accept")
                     }
                 }
@@ -657,11 +656,11 @@ private fun HandoffHistoryCard(handoff: Handoff) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "${handoff.fromAgent} → ${handoff.toAgent}",
+                    text = "${handoff.fromAgent} → ${handoff.toAgent ?: "Any"}",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = handoff.taskId,
+                    text = handoff.id.take(8) + "...",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -678,12 +677,12 @@ private fun NamespaceCard(namespace: SharedStateNamespace) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = namespace.name,
+                text = namespace.namespace,
                 style = MaterialTheme.typography.titleSmall
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "${namespace.keyCount} keys",
+                text = "${namespace.scopes.size} scopes",
                 style = MaterialTheme.typography.bodySmall
             )
             

@@ -50,6 +50,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
     
+    private val _counts = MutableStateFlow(CoordinationCounts())
+    val counts: StateFlow<CoordinationCounts> = _counts.asStateFlow()
+    
     init {
         loadSettings()
     }
@@ -171,19 +174,19 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     
     private suspend fun refreshHandoffs() {
         apiClient.getHandoffs().onSuccess { response ->
-            _uiState.update { it.copy(handoffs = response.handoffs) }
+            _uiState.update { it.copy(pendingHandoffs = response.handoffs) }
         }.onFailure { e ->
             _error.value = "Failed to fetch handoffs: ${e.message}"
         }
         
         apiClient.getHandoffHistory().onSuccess { response ->
-            _uiState.update { it.copy(handoffHistory = response.history) }
+            _uiState.update { it.copy(handoffHistory = response.handoffs) }
         }
     }
     
     private suspend fun refreshState() {
         apiClient.getNamespaces().onSuccess { response ->
-            _uiState.update { it.copy(stateNamespaces = response.namespaces) }
+            _uiState.update { it.copy(namespaces = response.namespaces) }
         }.onFailure { e ->
             _error.value = "Failed to fetch state: ${e.message}"
         }
@@ -198,15 +201,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         apiClient.getConflicts().onSuccess { conflictCount = it.conflicts.size }
         apiClient.getHandoffs().onSuccess { handoffCount = it.handoffs.size }
         
-        _uiState.update {
-            it.copy(
-                counts = CoordinationCounts(
-                    activeLocks = lockCount,
-                    activeConflicts = conflictCount,
-                    pendingHandoffs = handoffCount
-                )
-            )
-        }
+        _counts.value = CoordinationCounts(
+            locks = lockCount,
+            conflicts = conflictCount,
+            handoffs = handoffCount
+        )
     }
     
     // === Actions ===
@@ -256,18 +255,16 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     
     fun initiateHandoff(
         fromAgent: String,
-        toAgent: String,
-        taskId: String,
-        context: Map<String, String> = emptyMap(),
-        reason: String? = null
+        reason: String,
+        artifacts: List<String>? = null
     ) {
         viewModelScope.launch {
             val request = InitiateHandoffRequest(
                 fromAgent = fromAgent,
-                toAgent = toAgent,
-                taskId = taskId,
-                context = context,
-                reason = reason
+                reason = reason,
+                context = null,
+                progress = null,
+                artifacts = artifacts
             )
             apiClient.initiateHandoff(request).onSuccess {
                 refresh()
@@ -277,9 +274,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
     }
     
-    fun acceptHandoff(handoffId: String, acceptingAgent: String) {
+    fun acceptHandoff(handoffId: String, agentId: String) {
         viewModelScope.launch {
-            val request = AcceptHandoffRequest(acceptingAgent = acceptingAgent)
+            val request = AcceptHandoffRequest(agentId = agentId)
             apiClient.acceptHandoff(handoffId, request).onSuccess {
                 refresh()
             }.onFailure { e ->

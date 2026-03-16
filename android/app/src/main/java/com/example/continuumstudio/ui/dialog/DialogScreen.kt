@@ -45,7 +45,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Public
-import androidx.compose.material.icons.filled.Vpn
+import androidx.compose.material.icons.filled.VpnKey
 import com.example.continuumstudio.data.*
 
 /**
@@ -727,7 +727,7 @@ fun SettingsView(
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Default.Vpn, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Quick Add: Tailscale (Obsidian)")
                     }
@@ -2255,7 +2255,7 @@ fun EndpointRow(
         // Endpoint type icon
         val typeIcon = when (endpoint.type) {
             EndpointType.LOCAL -> Icons.Default.Home
-            EndpointType.TAILSCALE -> Icons.Default.Vpn
+            EndpointType.TAILSCALE -> Icons.Default.VpnKey
             EndpointType.CLOUDFLARE -> Icons.Default.Public
             EndpointType.REMOTE -> Icons.Default.Dns
         }

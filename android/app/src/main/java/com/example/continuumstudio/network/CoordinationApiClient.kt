@@ -134,10 +134,12 @@ class CoordinationApiClient(
     }
     
     suspend fun resolveConflict(conflictId: String, resolution: String? = null): Result<Map<String, String>> {
-        val bodyMap = buildMap {
-            resolution?.let { put("resolution", it) }
+        val bodyJson = buildString {
+            append("{")
+            resolution?.let { append("\"resolution\":\"$it\"") }
+            append("}")
         }
-        val body = json.encodeToString(bodyMap).toRequestBody(jsonMediaType)
+        val body = bodyJson.toRequestBody(jsonMediaType)
         val request = buildRequest("/conflicts/$conflictId/resolve")
             .post(body)
             .build()
