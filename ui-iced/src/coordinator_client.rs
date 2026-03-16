@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Default Synapsix API base URL
-pub const DEFAULT_API_URL: &str = "http://localhost:4001/api/agents";
+/// Default Synapsix API base URL (Coordination API for locks, conflicts, claims)
+pub const DEFAULT_API_URL: &str = "http://localhost:4001/api/coordination/agents";
 
 // ============================================================================
 // Data Types (matching Synapsix AgentCoordinator)

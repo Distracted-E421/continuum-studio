@@ -1,6 +1,6 @@
 //! HTTP client for Parked Agents API (Synapsix)
 //!
-//! Fetches parked agents from GET /api/agents/parked and unparks with task assignment.
+//! Fetches parked agents from GET /api/parking/agents and unparks with task assignment.
 //! Stubs empty responses when the endpoint is not yet available.
 
 use chrono::{DateTime, Utc};
@@ -16,7 +16,7 @@ pub const DEFAULT_API_BASE: &str = "http://localhost:8080";
 // API Response Types
 // =============================================================================
 
-/// Response from GET /api/agents/parked
+/// Response from GET /api/parking/agents
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParkedAgentsResponse {
@@ -85,7 +85,7 @@ impl ParkedAgentsHttpClient {
     /// Fetch list of parked agents.
     /// Returns empty vec when endpoint is not available (404, connection error, etc.)
     pub async fn fetch_parked_agents(&self) -> Result<Vec<ParkedAgent>, String> {
-        let url = format!("{}/api/agents/parked", self.base_url);
+        let url = format!("{}/api/parking/agents", self.base_url);
 
         let resp = match self.client.get(&url).send().await {
             Ok(r) => r,
@@ -115,14 +115,14 @@ impl ParkedAgentsHttpClient {
     }
 
     /// Unpark an agent and assign it a task.
-    /// Calls POST /api/agents/parked/{id}/unpark with task body.
+    /// Calls POST /api/parking/agents/{id}/unpark with task body.
     /// Stubs success when endpoint is not available (404).
     pub async fn unpark_and_assign(
         &self,
         agent_id: &str,
         task_description: &str,
     ) -> Result<(), String> {
-        let url = format!("{}/api/agents/parked/{}/unpark", self.base_url, agent_id);
+        let url = format!("{}/api/parking/agents/{}/unpark", self.base_url, agent_id);
 
         let body = serde_json::json!({
             "task": task_description
