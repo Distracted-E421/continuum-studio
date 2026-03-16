@@ -21,6 +21,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 
 // DataStore extension
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -100,6 +102,10 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     
     private val _endpointStatus = MutableStateFlow<Map<String, EndpointStatus>>(emptyMap())
     val endpointStatus: StateFlow<Map<String, EndpointStatus>> = _endpointStatus.asStateFlow()
+    
+    // Orchestrator mode state
+    private val _orchestratorMode = MutableStateFlow(OrchestratorPresenceMode.USER_ACTIVE)
+    val orchestratorMode: StateFlow<OrchestratorPresenceMode> = _orchestratorMode.asStateFlow()
     
     // Track failed endpoints for fallback
     private val failedEndpoints = mutableSetOf<Int>()
@@ -259,6 +265,79 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             dataStore.edit { prefs ->
                 prefs[PrefsKeys.ENDPOINT_FALLBACK_ENABLED] = enabled
+            }
+        }
+    }
+    
+    /**
+     * Set orchestrator presence mode
+     */
+    fun setOrchestratorMode(mode: OrchestratorPresenceMode) {
+        _orchestratorMode.value = mode
+        viewModelScope.launch {
+            try {
+                val endpoint = getActiveEndpoint() ?: return@launch
+                val httpUrl = wsClient.buildHttpUrlForTest(endpoint.url)
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                
+                val modeValue = when (mode) {
+                    OrchestratorPresenceMode.USER_ACTIVE -> "user_active"
+                    OrchestratorPresenceMode.USER_DELEGATE -> "user_delegate"
+                    OrchestratorPresenceMode.SPECTATOR -> "spectator"
+                    OrchestratorPresenceMode.AUTONOMOUS -> "autonomous"
+                }
+                
+                val body = """{"mode":"$modeValue"}"""
+                    .toRequestBody("application/json".toMediaType())
+                
+                val request = okhttp3.Request.Builder()
+                    .url("$httpUrl/api/orchestrator/mode")
+                    .post(body)
+                    .build()
+                
+                withContext(Dispatchers.IO) {
+                    client.newCall(request).execute().close()
+                }
+            } catch (e: Exception) {
+                // Mode set locally even if API fails
+            }
+        }
+    }
+    
+    /**
+     * Quick respond to a dialog by ID and option value
+     */
+    fun quickRespond(dialogId: String, optionValue: String) {
+        viewModelScope.launch {
+            try {
+                val endpoint = getActiveEndpoint() ?: return@launch
+                val httpUrl = wsClient.buildHttpUrlForTest(endpoint.url)
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                
+                val body = """{"selection":"$optionValue"}"""
+                    .toRequestBody("application/json".toMediaType())
+                
+                val request = okhttp3.Request.Builder()
+                    .url("$httpUrl/api/dialogs/$dialogId/respond")
+                    .post(body)
+                    .build()
+                
+                val response = withContext(Dispatchers.IO) {
+                    client.newCall(request).execute()
+                }
+                
+                if (response.isSuccessful) {
+                    showToast("Response sent")
+                } else {
+                    showToast("Failed to respond: ${response.code}")
+                }
+                response.close()
+            } catch (e: Exception) {
+                showToast("Error: ${e.message}")
             }
         }
     }

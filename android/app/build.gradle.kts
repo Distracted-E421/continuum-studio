@@ -62,6 +62,11 @@ dependencies {
     // DataStore for preferences
     implementation(libs.androidx.datastore.prefs)
     
+    // Widget (Glance)
+    implementation(libs.androidx.glance)
+    implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.glance.material3)
+    
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

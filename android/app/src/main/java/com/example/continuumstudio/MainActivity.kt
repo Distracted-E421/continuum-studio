@@ -21,9 +21,13 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Timeline
+import androidx.compose.material.icons.filled.LocalParking
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -32,19 +36,33 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.continuumstudio.network.DialogEvent
 import com.example.continuumstudio.service.DialogNotificationService
+import com.example.continuumstudio.ui.activityfeed.ActivityFeedScreen
+import com.example.continuumstudio.ui.cliagents.CLIAgentsScreen
 import com.example.continuumstudio.ui.coordination.CoordinationDashboard
 import com.example.continuumstudio.ui.dialog.DialogScreen
+import com.example.continuumstudio.ui.parkedagents.ParkedAgentsScreen
+import com.example.continuumstudio.ui.settings.SettingsScreen
 import com.example.continuumstudio.ui.theme.ContinuumStudioTheme
 import com.example.continuumstudio.ui.widgets.WidgetBayScreen
+import com.example.continuumstudio.ui.widgets.WidgetBayState
+import com.example.continuumstudio.viewmodel.ActivityFeedViewModel
+import com.example.continuumstudio.viewmodel.CLIAgentsViewModel
 import com.example.continuumstudio.viewmodel.CoordinationViewModel
 import com.example.continuumstudio.viewmodel.DialogViewModel
+import com.example.continuumstudio.viewmodel.NetworkMonitorViewModel
+import com.example.continuumstudio.viewmodel.OfflineViewModel
+import com.example.continuumstudio.viewmodel.ParkedAgentsViewModel
 import com.example.continuumstudio.viewmodel.WidgetBayViewModel
 
 // Navigation routes
-sealed class Screen(val route: String, val title: String) {
-    object Dashboard : Screen("dashboard", "Dashboard")
-    object Dialog : Screen("dialog", "Dialog")
-    object Coordination : Screen("coordination", "Coordination")
+sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
+    object Dashboard : Screen("dashboard", "Home", Icons.Default.Home)
+    object Dialog : Screen("dialog", "Dialog", Icons.AutoMirrored.Filled.List)
+    object CLIAgents : Screen("cli_agents", "Agents", Icons.Default.SmartToy)
+    object Activity : Screen("activity", "Feed", Icons.Default.Timeline)
+    object Parked : Screen("parked", "Parked", Icons.Default.LocalParking)
+    object Coordination : Screen("coordination", "Coord", Icons.Default.Groups)
+    object Settings : Screen("settings", "Settings", Icons.Default.Settings)
 }
 
 class MainActivity : ComponentActivity() {
@@ -86,6 +104,19 @@ class MainActivity : ComponentActivity() {
                 val dialogViewModel: DialogViewModel = viewModel()
                 val widgetBayViewModel: WidgetBayViewModel = viewModel()
                 val coordinationViewModel: CoordinationViewModel = viewModel()
+                val activityFeedViewModel: ActivityFeedViewModel = viewModel()
+                val cliAgentsViewModel: CLIAgentsViewModel = viewModel()
+                val parkedAgentsViewModel: ParkedAgentsViewModel = viewModel()
+                val networkMonitorViewModel: NetworkMonitorViewModel = viewModel()
+                val offlineViewModel: OfflineViewModel = viewModel()
+                
+                // Start all background services at Activity level
+                LaunchedEffect(Unit) {
+                    activityFeedViewModel.connect()
+                    cliAgentsViewModel.startPolling()
+                    parkedAgentsViewModel.startPolling()
+                    networkMonitorViewModel.startMonitoring()
+                }
                 
                 val connectionState by dialogViewModel.connectionState.collectAsState()
                 val dialogState by dialogViewModel.dialogState.collectAsState()
@@ -95,10 +126,28 @@ class MainActivity : ComponentActivity() {
                 val snackbarMessage by dialogViewModel.snackbarMessage.collectAsState()
                 val isOnline by dialogViewModel.isOnline.collectAsState()
                 val bayConfig by widgetBayViewModel.bayConfig.collectAsState()
-                val harnesses by widgetBayViewModel.harnesses.collectAsState()
-                val services by widgetBayViewModel.services.collectAsState()
-                val isLoadingHarnesses by widgetBayViewModel.isLoadingHarnesses.collectAsState()
-                val isLoadingServices by widgetBayViewModel.isLoadingServices.collectAsState()
+                
+                // CLI Agents state
+                val cliUiState by cliAgentsViewModel.uiState.collectAsState()
+                val cliConnected by cliAgentsViewModel.isConnected.collectAsState()
+                
+                // Activity feed state
+                val activityUiState by activityFeedViewModel.uiState.collectAsState()
+                
+                // Parked agents state
+                val parkedUiState by parkedAgentsViewModel.uiState.collectAsState()
+                
+                // Network monitor state
+                val networkState by networkMonitorViewModel.currentState.collectAsState()
+                val networkMeasurements by networkMonitorViewModel.measurements.collectAsState(initial = emptyList())
+                val networkStats by networkMonitorViewModel.stats.collectAsState()
+                val selectedTimeRange by networkMonitorViewModel.selectedTimeRange.collectAsState()
+                
+                // Offline state
+                val offlineState by offlineViewModel.uiState.collectAsState()
+                
+                // Orchestrator mode state (from dialog or settings)
+                val orchestratorMode by dialogViewModel.orchestratorMode.collectAsState()
                 
                 // Settings states
                 val savedServerUrl by dialogViewModel.savedServerUrl.collectAsState()
@@ -174,59 +223,51 @@ class MainActivity : ComponentActivity() {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route
                 
+                // List of screens for bottom nav
+                val bottomNavScreens = listOf(
+                    Screen.Dashboard,
+                    Screen.Dialog,
+                    Screen.CLIAgents,
+                    Screen.Activity,
+                    Screen.Settings
+                )
+                
                 Scaffold(
                     bottomBar = {
                         NavigationBar {
-                            NavigationBarItem(
-                                icon = { Icon(Icons.Default.Home, contentDescription = "Dashboard") },
-                                label = { Text("Dashboard") },
-                                selected = currentRoute == Screen.Dashboard.route,
-                                onClick = {
-                                    navController.navigate(Screen.Dashboard.route) {
-                                        popUpTo(navController.graph.startDestinationId)
-                                        launchSingleTop = true
-                                    }
-                                }
-                            )
-                            NavigationBarItem(
-                                icon = { 
-                                    BadgedBox(
-                                        badge = {
-                                            if (dialogState.queueCount > 0 || dialogState.activeDialog != null) {
-                                                Badge { 
-                                                    Text(
-                                                        if (dialogState.activeDialog != null) "!" 
-                                                        else dialogState.queueCount.toString()
-                                                    )
+                            bottomNavScreens.forEach { screen ->
+                                val isSelected = currentRoute == screen.route
+                                NavigationBarItem(
+                                    icon = { 
+                                        if (screen == Screen.Dialog) {
+                                            BadgedBox(
+                                                badge = {
+                                                    if (dialogState.queueCount > 0 || dialogState.activeDialog != null) {
+                                                        Badge { 
+                                                            Text(
+                                                                if (dialogState.activeDialog != null) "!" 
+                                                                else dialogState.queueCount.toString()
+                                                            )
+                                                        }
+                                                    }
                                                 }
+                                            ) {
+                                                Icon(screen.icon, contentDescription = screen.title)
                                             }
+                                        } else {
+                                            Icon(screen.icon, contentDescription = screen.title)
                                         }
-                                    ) {
-                                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Dialog")
+                                    },
+                                    label = { Text(screen.title) },
+                                    selected = isSelected,
+                                    onClick = {
+                                        navController.navigate(screen.route) {
+                                            popUpTo(navController.graph.startDestinationId)
+                                            launchSingleTop = true
+                                        }
                                     }
-                                },
-                                label = { Text("Dialog") },
-                                selected = currentRoute == Screen.Dialog.route,
-                                onClick = {
-                                    navController.navigate(Screen.Dialog.route) {
-                                        popUpTo(navController.graph.startDestinationId)
-                                        launchSingleTop = true
-                                    }
-                                }
-                            )
-                            NavigationBarItem(
-                                icon = { 
-                                    Icon(Icons.Default.Groups, contentDescription = "Coordination")
-                                },
-                                label = { Text("Agents") },
-                                selected = currentRoute == Screen.Coordination.route,
-                                onClick = {
-                                    navController.navigate(Screen.Coordination.route) {
-                                        popUpTo(navController.graph.startDestinationId)
-                                        launchSingleTop = true
-                                    }
-                                }
-                            )
+                                )
+                            }
                         }
                     }
                 ) { innerPadding ->
@@ -242,25 +283,68 @@ class MainActivity : ComponentActivity() {
                             enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) },
                             exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) }
                         ) {
+                            val widgetBayState = WidgetBayState.fromViewModels(
+                                dialogConnected = connectionState.isConnected,
+                                cliConnected = cliConnected,
+                                cliAgents = cliUiState.agents,
+                                activeDialog = dialogState.activeDialog,
+                                queueCount = dialogState.queueCount,
+                                activityEvents = activityUiState.events,
+                                mode = orchestratorMode,
+                                networkState = networkState,
+                                networkMeasurements = networkMeasurements,
+                                networkStats = networkStats,
+                                selectedTimeRange = selectedTimeRange,
+                                pendingOps = offlineState.pendingCount,
+                                parkedCount = parkedUiState.agents.size
+                            )
+                            
                             WidgetBayScreen(
                                 bayConfig = bayConfig,
-                                connectionState = connectionState,
-                                dialogState = dialogState,
-                                harnesses = harnesses,
-                                services = services,
-                                isLoadingHarnesses = isLoadingHarnesses,
-                                isLoadingServices = isLoadingServices,
+                                state = widgetBayState,
                                 onAddWidget = widgetBayViewModel::addWidget,
                                 onRemoveWidget = widgetBayViewModel::removeWidget,
                                 onRefresh = { 
-                                    if (connectionState.isConnected) {
-                                        widgetBayViewModel.refreshAll(connectionState.serverUrl)
+                                    networkMonitorViewModel.performSinglePing()
+                                    cliAgentsViewModel.refresh()
+                                    parkedAgentsViewModel.refresh()
+                                },
+                                onNavigateToAgents = {
+                                    navController.navigate(Screen.CLIAgents.route) {
+                                        launchSingleTop = true
                                     }
                                 },
                                 onNavigateToDialog = {
                                     navController.navigate(Screen.Dialog.route) {
                                         launchSingleTop = true
                                     }
+                                },
+                                onNavigateToActivity = {
+                                    navController.navigate(Screen.Activity.route) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onNavigateToParked = {
+                                    navController.navigate(Screen.Parked.route) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onNavigateToSettings = {
+                                    navController.navigate(Screen.Settings.route) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onModeChange = { mode ->
+                                    dialogViewModel.setOrchestratorMode(mode)
+                                },
+                                onTimeRangeChange = { range ->
+                                    networkMonitorViewModel.setTimeRange(range)
+                                },
+                                onNetworkRefresh = {
+                                    networkMonitorViewModel.performSinglePing()
+                                },
+                                onQuickRespond = { dialogId, optionValue ->
+                                    dialogViewModel.quickRespond(dialogId, optionValue)
                                 },
                                 onQuickAction = { action ->
                                     dialogViewModel.executeAction(action)
@@ -344,6 +428,38 @@ class MainActivity : ComponentActivity() {
                             CoordinationDashboard(
                                 viewModel = coordinationViewModel
                             )
+                        }
+                        
+                        composable(
+                            Screen.CLIAgents.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            CLIAgentsScreen(viewModel = cliAgentsViewModel)
+                        }
+                        
+                        composable(
+                            Screen.Activity.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            ActivityFeedScreen(viewModel = activityFeedViewModel)
+                        }
+                        
+                        composable(
+                            Screen.Parked.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            ParkedAgentsScreen(viewModel = parkedAgentsViewModel)
+                        }
+                        
+                        composable(
+                            Screen.Settings.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            SettingsScreen()
                         }
                     }
                 }

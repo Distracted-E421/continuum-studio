@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Continuum Studio</string>
+    <string name="widget_description">Orchestrator controls: mode toggle, dialog count, and agent status</string>
+    <string name="widget_name">Orchestrator</string>
 </resources>
