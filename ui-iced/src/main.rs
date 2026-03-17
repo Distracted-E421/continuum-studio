@@ -258,6 +258,12 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
         cli_agents_subscription(
             state.current_view == View::Cursor && state.cursor_tab == CursorTab::CLIAgents,
         ),
+        // Orchestrator WebSocket (active on Orchestrator tab for real-time triage updates)
+        orchestrator_ws_subscription(
+            state.current_view == View::Cursor && state.cursor_tab == CursorTab::Orchestrator,
+        ),
+        // Keyboard shortcuts subscription (always active)
+        keyboard_shortcut_subscription(),
         // Agent dialog polling (active on CLI Agents OR Orchestrator tabs)
         dialog_polling_subscription(
             state.current_view == View::Cursor
@@ -579,6 +585,81 @@ fn cli_agents_websocket_worker() -> impl iced::futures::Stream<Item = Message> {
             }
         },
     )
+}
+
+/// Orchestrator WebSocket subscription for real-time dialog/triage updates
+fn orchestrator_ws_subscription(active: bool) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
+    iced::Subscription::run(orchestrator_ws_worker)
+}
+
+/// Orchestrator WebSocket worker
+fn orchestrator_ws_worker() -> impl iced::futures::Stream<Item = Message> {
+    use continuum_studio_iced::cli_agents_client::spawn_orchestrator_websocket;
+
+    iced::stream::channel(
+        100,
+        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use iced::futures::SinkExt;
+
+            let mut rx = spawn_orchestrator_websocket(None).await;
+
+            while let Some(event) = rx.recv().await {
+                let _ = output.send(Message::OrchestratorWsEvent(event)).await;
+            }
+        },
+    )
+}
+
+/// Keyboard shortcuts subscription for quick orchestrator actions
+fn keyboard_shortcut_subscription() -> iced::Subscription<Message> {
+    use iced::event::{self, Event};
+    use iced::keyboard::{self, Key, Modifiers};
+
+    event::listen_with(|event, _status, _id| match event {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key,
+            modifiers,
+            ..
+        }) => {
+            let ctrl = modifiers.contains(Modifiers::CTRL);
+
+            match (ctrl, &key) {
+                // Ctrl+1: UserActive mode
+                (true, Key::Character(c)) if c.as_str() == "1" => {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::SetModeUserActive))
+                }
+                // Ctrl+2: UserDelegate mode
+                (true, Key::Character(c)) if c.as_str() == "2" => {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::SetModeUserDelegate))
+                }
+                // Ctrl+3: Spectator mode
+                (true, Key::Character(c)) if c.as_str() == "3" => {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::SetModeSpectator))
+                }
+                // Ctrl+4: Autonomous mode
+                (true, Key::Character(c)) if c.as_str() == "4" => {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::SetModeAutonomous))
+                }
+                // Ctrl+H: Toggle history
+                (true, Key::Character(c)) if c.as_str() == "h" => {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::ToggleHistory))
+                }
+                // Ctrl+R: Refresh view
+                (true, Key::Character(c)) if c.as_str() == "r" => {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::RefreshView))
+                }
+                // Ctrl+Z: Undo (context-dependent)
+                (true, Key::Character(c)) if c.as_str() == "z" => {
+                    Some(Message::KeyboardShortcut(KeyboardShortcut::UndoDecision))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    })
 }
 
 /// Agent dialog polling subscription
@@ -1158,6 +1239,10 @@ enum Message {
     CLIAgentAction(CLIAgentMessage),
     /// Orchestrator panel actions (mode switching, triage decisions)
     OrchestratorAction(OrchestratorMessage),
+    /// Orchestrator WebSocket events (real-time dialog updates)
+    OrchestratorWsEvent(continuum_studio_iced::cli_agents_client::OrchestratorWsEvent),
+    /// Keyboard shortcut pressed
+    KeyboardShortcut(KeyboardShortcut),
     /// Parked agents panel actions
     ParkedAgentAction(ParkedMessage),
     /// Agent activity feed actions (FileEdit, Command, ToolCall, Dialog events)
@@ -1194,6 +1279,25 @@ enum Message {
     ZoneAction(ZoneMsg),
     /// No-op message (for ignoring errors gracefully)
     NoOp,
+}
+
+/// Keyboard shortcuts for quick actions
+#[derive(Debug, Clone)]
+enum KeyboardShortcut {
+    /// Set orchestrator mode to UserActive (Ctrl+1)
+    SetModeUserActive,
+    /// Set orchestrator mode to UserDelegate (Ctrl+2)
+    SetModeUserDelegate,
+    /// Set orchestrator mode to Spectator (Ctrl+3)
+    SetModeSpectator,
+    /// Set orchestrator mode to Autonomous (Ctrl+4)
+    SetModeAutonomous,
+    /// Toggle history panel (Ctrl+H)
+    ToggleHistory,
+    /// Undo last decision (Ctrl+Z when on Orchestrator tab)
+    UndoDecision,
+    /// Refresh current view (Ctrl+R)
+    RefreshView,
 }
 
 /// Zone manager sub-messages
@@ -1902,6 +2006,12 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::OrchestratorAction(msg) => {
             return handle_orchestrator_message(state, msg);
+        }
+        Message::OrchestratorWsEvent(event) => {
+            return handle_orchestrator_ws_event(state, event);
+        }
+        Message::KeyboardShortcut(shortcut) => {
+            return handle_keyboard_shortcut(state, shortcut);
         }
         Message::ParkedAgentAction(msg) => {
             return handle_parked_agent_message(state, msg);
@@ -11994,6 +12104,229 @@ fn handle_orchestrator_message(
                 Err(e) => {
                     log::error!("Failed to send triage response for {}: {}", dialog_id, e);
                 }
+            }
+            Task::none()
+        }
+        RequestModeChange(mode) => {
+            log::info!("Requesting mode change to {:?} (pending confirmation)", mode);
+            state.orchestrator_state.pending_mode_change = Some(mode);
+            Task::none()
+        }
+        ConfirmModeChange => {
+            if let Some(mode) = state.orchestrator_state.pending_mode_change.take() {
+                log::info!("Confirming mode change to {:?}", mode);
+                let mode_str = mode.as_str().to_string();
+                Task::perform(
+                    async move {
+                        use continuum_studio_iced::dialog_client::DialogClient;
+                        let mut client = DialogClient::new();
+                        if client.connect().await.is_ok() {
+                            match client.set_orchestrator_mode(OrchestratorMode::from_str(&mode_str)).await {
+                                Ok(new_mode) => Ok(new_mode),
+                                Err(e) => Err(e),
+                            }
+                        } else {
+                            Err("Failed to connect to daemon".to_string())
+                        }
+                    },
+                    |result| Message::OrchestratorAction(ModeSetResult(result)),
+                )
+            } else {
+                Task::none()
+            }
+        }
+        CancelModeChange => {
+            log::info!("Cancelled mode change");
+            state.orchestrator_state.pending_mode_change = None;
+            Task::none()
+        }
+        SelectDecision(decision_id) => {
+            state.orchestrator_state.selected_decision = decision_id;
+            Task::none()
+        }
+    }
+}
+
+/// Handle orchestrator WebSocket events (real-time dialog updates)
+fn handle_orchestrator_ws_event(
+    state: &mut ContinuumStudio,
+    event: continuum_studio_iced::cli_agents_client::OrchestratorWsEvent,
+) -> Task<Message> {
+    use continuum_studio_iced::cli_agents_client::OrchestratorWsEvent;
+    use continuum_studio_iced::decision_engine::{DecisionResult, TriageState};
+
+    match event {
+        OrchestratorWsEvent::Connected => {
+            log::info!("Orchestrator WebSocket connected");
+            state.orchestrator_state.daemon_connected = true;
+            Task::none()
+        }
+        OrchestratorWsEvent::DialogCreated { dialog } => {
+            let pending_dialog = dialog.into_pending_dialog();
+            log::info!(
+                "New dialog from orchestrator WS: {} (priority: {:?})",
+                pending_dialog.id,
+                pending_dialog.priority
+            );
+
+            // Evaluate the dialog using the decision engine
+            let result = state.orchestrator_state.engine.evaluate(&pending_dialog);
+            match result {
+                DecisionResult::AutoHandle { response, reasoning } => {
+                    log::info!("Auto-handling dialog {}: {}", pending_dialog.id, reasoning);
+                    // Update stats
+                    state.orchestrator_state.stats.dialogs_today += 1;
+                    state.orchestrator_state.stats.auto_handled_today += 1;
+
+                    // Send auto response
+                    let dialog_id = pending_dialog.id.clone();
+                    let client = state.cli_agents_http.clone();
+                    Task::perform(
+                        async move {
+                            client
+                                .respond_to_dialog(&dialog_id, &response, Some(reasoning))
+                                .await
+                        },
+                        |result| {
+                            if let Err(e) = result {
+                                log::error!("Failed to auto-respond to dialog: {}", e);
+                            }
+                            Message::NoOp
+                        },
+                    )
+                }
+                DecisionResult::RequireUser { reasoning } => {
+                    log::info!("Dialog requires user: {}", reasoning);
+                    state.orchestrator_state.stats.dialogs_today += 1;
+                    // Add to CLI agents pending dialogs for display
+                    state.cli_agents_state.pending_dialogs.push(pending_dialog);
+                    Task::none()
+                }
+                DecisionResult::Triage {
+                    state: triage_state,
+                    suggested_response,
+                    reasoning,
+                    timeout,
+                } => {
+                    log::info!(
+                        "Dialog triaged: {:?} - {} (timeout: {:?})",
+                        triage_state,
+                        reasoning,
+                        timeout
+                    );
+                    state.orchestrator_state.stats.dialogs_today += 1;
+                    // Add to triage queue with full parameters
+                    state.orchestrator_state.add_to_triage_full(
+                        pending_dialog.clone(),
+                        triage_state,
+                        reasoning.clone(),
+                        suggested_response,
+                        timeout,
+                    );
+                    // Also add to pending dialogs list for display
+                    state.cli_agents_state.pending_dialogs.push(pending_dialog);
+                    Task::none()
+                }
+            }
+        }
+        OrchestratorWsEvent::DialogAnswered { dialog_id } => {
+            log::info!("Dialog answered: {}", dialog_id);
+            // Remove from triage queue if present
+            state.orchestrator_state.engine.remove_from_triage(&dialog_id);
+            // Remove from pending dialogs
+            state
+                .cli_agents_state
+                .pending_dialogs
+                .retain(|d| d.id != dialog_id);
+            Task::none()
+        }
+        OrchestratorWsEvent::DialogEscalated { dialog_id } => {
+            log::info!("Dialog escalated: {}", dialog_id);
+            // Update triage state to Manual (requires user)
+            state
+                .orchestrator_state
+                .engine
+                .set_triage_state(&dialog_id, TriageState::Manual);
+            Task::none()
+        }
+        OrchestratorWsEvent::Ping => {
+            // Heartbeat - no action needed
+            Task::none()
+        }
+    }
+}
+
+/// Handle keyboard shortcuts
+fn handle_keyboard_shortcut(
+    state: &mut ContinuumStudio,
+    shortcut: KeyboardShortcut,
+) -> Task<Message> {
+    use OrchestratorMessage::*;
+
+    // Only process orchestrator shortcuts when on the Orchestrator tab
+    let on_orchestrator_tab =
+        state.current_view == View::Cursor && state.cursor_tab == CursorTab::Orchestrator;
+
+    match shortcut {
+        KeyboardShortcut::SetModeUserActive => {
+            if on_orchestrator_tab {
+                log::info!("Keyboard shortcut: Set mode to UserActive (Ctrl+1)");
+                return handle_orchestrator_message(
+                    state,
+                    SetMode(OrchestratorMode::UserActive),
+                );
+            }
+            Task::none()
+        }
+        KeyboardShortcut::SetModeUserDelegate => {
+            if on_orchestrator_tab {
+                log::info!("Keyboard shortcut: Set mode to UserDelegate (Ctrl+2)");
+                return handle_orchestrator_message(
+                    state,
+                    SetMode(OrchestratorMode::UserDelegate),
+                );
+            }
+            Task::none()
+        }
+        KeyboardShortcut::SetModeSpectator => {
+            if on_orchestrator_tab {
+                log::info!("Keyboard shortcut: Request Spectator mode (Ctrl+3)");
+                return handle_orchestrator_message(
+                    state,
+                    RequestModeChange(OrchestratorMode::Spectator),
+                );
+            }
+            Task::none()
+        }
+        KeyboardShortcut::SetModeAutonomous => {
+            if on_orchestrator_tab {
+                log::info!("Keyboard shortcut: Request Autonomous mode (Ctrl+4)");
+                return handle_orchestrator_message(
+                    state,
+                    RequestModeChange(OrchestratorMode::Autonomous),
+                );
+            }
+            Task::none()
+        }
+        KeyboardShortcut::ToggleHistory => {
+            if on_orchestrator_tab {
+                log::info!("Keyboard shortcut: Toggle history (Ctrl+H)");
+                return handle_orchestrator_message(state, ToggleHistory);
+            }
+            Task::none()
+        }
+        KeyboardShortcut::UndoDecision => {
+            if on_orchestrator_tab {
+                log::info!("Keyboard shortcut: Undo decision (Ctrl+Z)");
+                return handle_orchestrator_message(state, UndoLastDecision);
+            }
+            Task::none()
+        }
+        KeyboardShortcut::RefreshView => {
+            // Refresh based on current view
+            if on_orchestrator_tab {
+                log::info!("Keyboard shortcut: Refresh mode (Ctrl+R)");
+                return handle_orchestrator_message(state, RefreshMode);
             }
             Task::none()
         }

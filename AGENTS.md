@@ -379,3 +379,128 @@ Full preset and snippet system for agent prompts:
 
 - HTTP API endpoint (`GET /api/agents/parked`) requires daemon refactor to share state
 - Full WebSocket event streaming for activity feed
+
+## March 17, 2026
+
+### CLI Agents Preset Selection UI Improvements
+
+**Enhanced preset selector in `cli_agents.rs`:**
+
+- Category grouping with BTreeMap for organized display
+- Scrollable preset buttons (150px height) with selection state
+- Preset info card showing:
+  - Name with checkmark icon
+  - Category badge
+  - Description
+  - Prefix/suffix line counts
+  - Edit/Delete buttons for custom presets
+  - "Built-in preset" label for system presets
+- Enhanced prompt preview with collapsible sections:
+  - PREFIX section (green header)
+  - YOUR TASK section (blue header)
+  - SUFFIX section (orange header)
+  - Character and line count totals
+  - Truncation for >500 char sections
+- `build_preview_section()` helper function for reusable section rendering
+
+### Orchestrator Panel Improvements (`orchestrator_panel.rs`)
+
+**New State Fields:**
+
+- `pending_mode_change: Option<OrchestratorMode>` - Confirmation dialog state
+- `stats: OrchestratorStats` - Daily dialog/handling statistics
+
+**New Message Types:**
+
+- `RequestModeChange` - Triggers confirmation for dangerous modes
+- `ConfirmModeChange` - Confirms pending mode change
+- `CancelModeChange` - Cancels pending mode change
+- `SelectDecision` - Selects history item for details
+
+**New View Functions:**
+
+- `view_mode_confirm_dialog()` - Confirmation dialog for Spectator/Autonomous modes
+- `view_decision_history()` - Scrollable history panel with last 10 decisions
+- Stats row in mode selector (dialogs today, auto/manual counts)
+
+**Features:**
+
+- Mode switching confirmation for dangerous modes (Spectator, Autonomous)
+- Warning text specific to each mode
+- Decision history toggle button
+- History items show: priority emoji, dialog ID, auto/manual badge, timestamp, response preview
+- `format_timestamp()` helper for relative time display
+
+**Unit Tests (10 tests):**
+
+- `test_orchestrator_state_default`
+- `test_set_mode_updates_engine`
+- `test_add_to_triage_basic`
+- `test_add_to_triage_full`
+- `test_mode_duration`
+- `test_stats_default`
+- `test_format_duration`
+- `test_format_timestamp_recent`
+- `test_pending_mode_change_workflow`
+- `test_cancel_mode_change`
+
+### Orchestrator WebSocket Integration (`main.rs`)
+
+**New Subscription:**
+
+- `orchestrator_ws_subscription()` - Active on Orchestrator tab
+- `orchestrator_ws_worker()` - WebSocket consumer using `spawn_orchestrator_websocket`
+
+**New Handler:**
+
+- `handle_orchestrator_ws_event()` - Processes real-time dialog events
+
+**Event Handling:**
+
+| Event | Action |
+|-------|--------|
+| `Connected` | Sets `daemon_connected = true` |
+| `DialogCreated` | Evaluates via DecisionEngine, auto-handles or triages |
+| `DialogAnswered` | Removes from triage queue and pending dialogs |
+| `DialogEscalated` | Sets triage state to Manual |
+| `Ping` | No-op heartbeat |
+
+**Stats Tracking:**
+
+- `dialogs_today` incremented on new dialogs
+- `auto_handled_today` incremented on auto-responses
+- `user_handled_today` available for manual responses
+
+### Keyboard Shortcuts (`main.rs`)
+
+**New Types:**
+
+- `KeyboardShortcut` enum with 7 variants
+
+**Subscription:**
+
+- `keyboard_shortcut_subscription()` using `iced::event::listen_with`
+
+**Handler:**
+
+- `handle_keyboard_shortcut()` - Dispatches to appropriate message handlers
+
+**Shortcuts (active on Orchestrator tab):**
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+1 | Set mode to UserActive |
+| Ctrl+2 | Set mode to UserDelegate |
+| Ctrl+3 | Request Spectator mode (with confirmation) |
+| Ctrl+4 | Request Autonomous mode (with confirmation) |
+| Ctrl+H | Toggle history panel |
+| Ctrl+R | Refresh mode from daemon |
+| Ctrl+Z | Undo last decision |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `ui-iced/src/cli_agents.rs` | +363 lines - Enhanced preset selector, prompt preview |
+| `ui-iced/src/orchestrator_panel.rs` | +200 lines - Confirmation, history, stats, tests |
+| `ui-iced/src/main.rs` | +150 lines - WebSocket handler, keyboard shortcuts |

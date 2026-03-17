@@ -4,9 +4,7 @@
 //! Supports single agent spawning, batch processing, and real-time event monitoring.
 
 use chrono::{DateTime, Utc};
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, text, text_input, Space,
-};
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Element, Length};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -1719,7 +1717,6 @@ where
     let form = &state.launch_form;
     let to_message1 = to_message.clone();
     let to_message2 = to_message.clone();
-    let to_message3 = to_message.clone();
 
     let workspace_input = column![
         text("Workspace:").size(12),
@@ -1729,29 +1726,138 @@ where
     ]
     .spacing(4);
 
-    // Preset selector (above prompt per UI design)
-    let preset_options: Vec<Preset> = state.presets.clone();
-    let selected_preset = state
-        .selected_preset
-        .as_ref()
-        .and_then(|id| state.presets.iter().find(|p| &p.id == id))
-        .cloned();
+    // Enhanced preset selector with category grouping
+    // Group presets by category
+    let mut categories: std::collections::BTreeMap<String, Vec<&Preset>> =
+        std::collections::BTreeMap::new();
+    for preset in &state.presets {
+        categories
+            .entry(preset.category.clone())
+            .or_default()
+            .push(preset);
+    }
+
+    // Build category-organized preset buttons
+    let preset_buttons: Vec<Element<'a, M>> = categories
+        .iter()
+        .flat_map(|(category, presets)| {
+            let mut items: Vec<Element<'a, M>> = vec![
+                // Category header
+                container(
+                    text(format!("─ {} ─", category.to_uppercase()))
+                        .size(9)
+                        .color(iced::Color::from_rgb(0.4, 0.5, 0.6)),
+                )
+                .padding([4, 8])
+                .into(),
+            ];
+
+            // Preset buttons in this category
+            for preset in presets {
+                let is_selected = state.selected_preset.as_ref() == Some(&preset.id);
+                let preset_id = preset.id.clone();
+                let to_msg = to_message.clone();
+
+                let btn = button(
+                    row![
+                        text(if preset.is_builtin { "📦" } else { "✏️" }).size(12),
+                        Space::new().width(6),
+                        column![
+                            text(&preset.name).size(12),
+                            if let Some(ref desc) = preset.description {
+                                text(if desc.len() > 40 {
+                                    format!("{}...", &desc[..40])
+                                } else {
+                                    desc.clone()
+                                })
+                                .size(9)
+                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+                            } else {
+                                text("").size(0)
+                            },
+                        ]
+                        .spacing(1),
+                    ]
+                    .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
+                .padding([6, 10])
+                .on_press(to_msg(CLIAgentMessage::SelectPreset(Some(preset_id))))
+                .style(move |_theme, status| {
+                    let bg = if is_selected {
+                        iced::Color::from_rgb(0.2, 0.4, 0.5)
+                    } else {
+                        match status {
+                            button::Status::Hovered => iced::Color::from_rgb(0.18, 0.18, 0.22),
+                            _ => iced::Color::from_rgb(0.13, 0.13, 0.16),
+                        }
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: if is_selected {
+                            iced::Color::WHITE
+                        } else {
+                            iced::Color::from_rgb(0.8, 0.8, 0.8)
+                        },
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            width: if is_selected { 1.0 } else { 0.0 },
+                            color: iced::Color::from_rgb(0.3, 0.5, 0.6),
+                        },
+                        ..Default::default()
+                    }
+                });
+
+                items.push(btn.into());
+            }
+
+            items
+        })
+        .collect();
+
+    // Preset selector container with scrollable list
+    let preset_list_container = container(
+        scrollable(column(preset_buttons).spacing(2)).height(Length::Fixed(150.0)),
+    )
+    .padding(8)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.1, 0.1, 0.12,
+        ))),
+        border: iced::Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.2, 0.2, 0.25),
+        },
+        ..Default::default()
+    });
 
     let preset_selector = column![
         row![
-            text("Prompt Preset:").size(12),
+            text("📋 Prompt Preset").size(13),
             Space::new().width(Length::Fill),
             button(text("+ New").size(10))
-                .padding([2, 6])
-                .on_press(to_message(CLIAgentMessage::OpenPresetEditor(None))),
+                .padding([3, 8])
+                .on_press(to_message(CLIAgentMessage::OpenPresetEditor(None)))
+                .style(|_theme, status| {
+                    let bg = match status {
+                        button::Status::Hovered => iced::Color::from_rgb(0.25, 0.4, 0.3),
+                        _ => iced::Color::from_rgb(0.2, 0.35, 0.25),
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: iced::Color::WHITE,
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                }),
         ]
         .align_y(Alignment::Center),
-        Space::new().height(4),
-        pick_list(preset_options, selected_preset, move |preset| to_message3(
-            CLIAgentMessage::SelectPreset(Some(preset.id.clone()))
-        ))
-        .padding(8)
-        .width(Length::Fill),
+        Space::new().height(6),
+        preset_list_container,
     ]
     .spacing(2);
 
@@ -1763,39 +1869,130 @@ where
     ]
     .spacing(4);
 
-    // Preset description (if one is selected)
+    // Preset info card (if one is selected)
     let preset_desc: Element<'a, M> = if let Some(preset) = state.get_selected_preset() {
         let desc = preset.description.as_deref().unwrap_or("No description");
+
         let edit_buttons: Element<'a, M> = if !preset.is_builtin {
             let to_msg_edit = to_message.clone();
             let to_msg_del = to_message.clone();
             let preset_id = preset.id.clone();
             let preset_id_del = preset.id.clone();
             row![
-                button(text("Edit").size(10))
-                    .padding([2, 6])
-                    .on_press(to_msg_edit(CLIAgentMessage::OpenPresetEditor(Some(
-                        preset_id
-                    )))),
-                Space::new().width(8),
-                button(text("Delete").size(10))
-                    .padding([2, 6])
-                    .on_press(to_msg_del(CLIAgentMessage::DeletePreset(preset_id_del))),
+                button(text("✎ Edit").size(10))
+                    .padding([3, 8])
+                    .on_press(to_msg_edit(CLIAgentMessage::OpenPresetEditor(Some(preset_id))))
+                    .style(|_theme, status| {
+                        let bg = match status {
+                            button::Status::Hovered => iced::Color::from_rgb(0.25, 0.35, 0.45),
+                            _ => iced::Color::from_rgb(0.2, 0.28, 0.38),
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            text_color: iced::Color::WHITE,
+                            border: iced::Border {
+                                radius: 3.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }
+                    }),
+                Space::new().width(6),
+                button(text("🗑 Delete").size(10))
+                    .padding([3, 8])
+                    .on_press(to_msg_del(CLIAgentMessage::DeletePreset(preset_id_del)))
+                    .style(|_theme, status| {
+                        let bg = match status {
+                            button::Status::Hovered => iced::Color::from_rgb(0.5, 0.2, 0.2),
+                            _ => iced::Color::from_rgb(0.4, 0.15, 0.15),
+                        };
+                        button::Style {
+                            background: Some(iced::Background::Color(bg)),
+                            text_color: iced::Color::from_rgb(1.0, 0.7, 0.7),
+                            border: iced::Border {
+                                radius: 3.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }
+                    }),
             ]
             .into()
         } else {
-            Space::new().height(0).into()
+            container(
+                text("Built-in preset")
+                    .size(9)
+                    .color(iced::Color::from_rgb(0.4, 0.5, 0.4)),
+            )
+            .into()
         };
-        column![
-            text(desc)
-                .size(11)
-                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
-            edit_buttons,
-        ]
-        .spacing(4)
+
+        let prefix_preview = preset.prefix.as_deref().unwrap_or("");
+        let suffix_preview = preset.suffix.as_deref().unwrap_or("");
+        let prefix_lines = prefix_preview.lines().count();
+        let suffix_lines = suffix_preview.lines().count();
+
+        container(
+            column![
+                row![
+                    text(format!("✓ {}", preset.name))
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.5, 0.8, 0.5)),
+                    Space::new().width(8),
+                    container(text(&preset.category).size(9))
+                        .padding([1, 4])
+                        .style(|_| container::Style {
+                            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                                0.2, 0.25, 0.3,
+                            ))),
+                            border: iced::Border {
+                                radius: 2.0.into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }),
+                    Space::new().width(Length::Fill),
+                    edit_buttons,
+                ]
+                .align_y(Alignment::Center),
+                Space::new().height(4),
+                text(desc)
+                    .size(11)
+                    .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
+                Space::new().height(6),
+                row![
+                    text(format!("📤 Prefix: {} lines", prefix_lines))
+                        .size(10)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    Space::new().width(16),
+                    text(format!("📥 Suffix: {} lines", suffix_lines))
+                        .size(10)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                ],
+            ]
+            .spacing(2),
+        )
+        .padding(10)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.12, 0.14, 0.12,
+            ))),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.2, 0.3, 0.2),
+            },
+            ..Default::default()
+        })
         .into()
     } else {
-        Space::new().height(0).into()
+        container(
+            text("Select a preset to see details")
+                .size(11)
+                .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+        )
+        .padding(8)
+        .into()
     };
 
     // Preview button
@@ -1810,57 +2007,94 @@ where
     .padding([4, 8])
     .on_press(to_message(CLIAgentMessage::TogglePromptPreview));
 
-    // Prompt preview (if enabled)
-    // Note: We build preview text inline to avoid lifetime issues
+    // Enhanced prompt preview with collapsible sections
     let preview_section: Element<'a, M> = if state.show_prompt_preview {
         let preset = state.get_selected_preset();
         let prefix_preview = preset
             .and_then(|p| p.prefix.as_deref())
-            .unwrap_or("[Default Prefix]");
+            .unwrap_or("[No prefix configured]");
         let suffix_preview = preset
             .and_then(|p| p.suffix.as_deref())
-            .unwrap_or("[Default Suffix]");
+            .unwrap_or("[No suffix configured]");
 
-        container(column![
-            text("Full Prompt Preview:").size(12),
-            Space::new().height(4),
-            container(
-                column![
-                    text("--- PREFIX ---")
-                        .size(9)
-                        .color(iced::Color::from_rgb(0.4, 0.6, 0.4)),
-                    text(prefix_preview).size(10).font(iced::Font::MONOSPACE),
-                    Space::new().height(8),
-                    text("--- YOUR TASK ---")
-                        .size(9)
-                        .color(iced::Color::from_rgb(0.4, 0.6, 0.4)),
-                    text(&state.launch_form.prompt)
-                        .size(10)
-                        .font(iced::Font::MONOSPACE),
-                    Space::new().height(8),
-                    text("--- SUFFIX ---")
-                        .size(9)
-                        .color(iced::Color::from_rgb(0.4, 0.6, 0.4)),
-                    text(suffix_preview).size(10).font(iced::Font::MONOSPACE),
-                ]
-                .spacing(2)
+        let total_chars =
+            prefix_preview.len() + state.launch_form.prompt.len() + suffix_preview.len();
+        let total_lines = prefix_preview.lines().count()
+            + state.launch_form.prompt.lines().count().max(1)
+            + suffix_preview.lines().count();
+
+        // Truncate long sections for preview
+        let prefix_display = if prefix_preview.len() > 500 {
+            format!(
+                "{}...\n[{} more chars]",
+                &prefix_preview[..500],
+                prefix_preview.len() - 500
             )
-            .padding(8)
-            .style(|_| container::Style {
-                background: Some(iced::Background::Color(iced::Color::from_rgb(
-                    0.05, 0.05, 0.07
-                ))),
-                ..Default::default()
-            }),
-        ])
-        .padding(8)
+        } else {
+            prefix_preview.to_string()
+        };
+
+        let suffix_display = if suffix_preview.len() > 500 {
+            format!(
+                "{}...\n[{} more chars]",
+                &suffix_preview[..500],
+                suffix_preview.len() - 500
+            )
+        } else {
+            suffix_preview.to_string()
+        };
+
+        let task_display = if state.launch_form.prompt.is_empty() {
+            "[Enter your task above]".to_string()
+        } else {
+            state.launch_form.prompt.clone()
+        };
+
+        // Build sections inline to avoid lifetime issues
+        let prefix_section = build_preview_section(
+            "PREFIX",
+            prefix_display,
+            iced::Color::from_rgb(0.3, 0.45, 0.3),
+        );
+        let task_section = build_preview_section(
+            "YOUR TASK",
+            task_display,
+            iced::Color::from_rgb(0.35, 0.45, 0.55),
+        );
+        let suffix_section = build_preview_section(
+            "SUFFIX",
+            suffix_display,
+            iced::Color::from_rgb(0.45, 0.35, 0.3),
+        );
+
+        container(
+            column![
+                row![
+                    text("📜 Full Prompt Preview").size(13),
+                    Space::new().width(Length::Fill),
+                    text(format!("~{} chars | ~{} lines", total_chars, total_lines))
+                        .size(10)
+                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                ]
+                .align_y(Alignment::Center),
+                Space::new().height(8),
+                prefix_section,
+                Space::new().height(6),
+                task_section,
+                Space::new().height(6),
+                suffix_section,
+            ]
+            .spacing(0),
+        )
+        .padding(12)
         .style(|_| container::Style {
             background: Some(iced::Background::Color(iced::Color::from_rgb(
-                0.08, 0.08, 0.1,
+                0.09, 0.09, 0.11,
             ))),
             border: iced::Border {
-                radius: 4.0.into(),
-                ..Default::default()
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.18, 0.18, 0.22),
             },
             ..Default::default()
         })
@@ -2108,6 +2342,58 @@ fn checkbox_button<'a, M: 'a + Clone>(
             ..Default::default()
         })
         .into()
+}
+
+/// Helper function to build a preview section for the prompt preview
+fn build_preview_section<'a, M: 'a + Clone>(
+    title: &'static str,
+    content: String,
+    color: iced::Color,
+) -> Element<'a, M> {
+    let content_len = content.len();
+    container(
+        column![
+            row![
+                container(text(title).size(10).color(iced::Color::WHITE))
+                    .padding([2, 6])
+                    .style(move |_| container::Style {
+                        background: Some(iced::Background::Color(color)),
+                        border: iced::Border {
+                            radius: 3.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                Space::new().width(8),
+                text(format!("{} chars", content_len))
+                    .size(9)
+                    .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+            ]
+            .align_y(Alignment::Center),
+            Space::new().height(4),
+            scrollable(
+                text(content)
+                    .size(10)
+                    .font(iced::Font::MONOSPACE)
+                    .color(iced::Color::from_rgb(0.75, 0.75, 0.75)),
+            )
+            .height(Length::Fixed(80.0)),
+        ]
+        .spacing(2),
+    )
+    .padding(8)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(iced::Color::from_rgb(
+            0.06, 0.06, 0.08,
+        ))),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: iced::Color::from_rgb(0.12, 0.12, 0.15),
+        },
+        ..Default::default()
+    })
+    .into()
 }
 
 // =============================================================================
