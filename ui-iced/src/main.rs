@@ -270,6 +270,10 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
                 && (state.cursor_tab == CursorTab::CLIAgents
                     || state.cursor_tab == CursorTab::Orchestrator),
         ),
+        // Triage timeout processing (active on Orchestrator tab)
+        triage_timeout_subscription(
+            state.current_view == View::Cursor && state.cursor_tab == CursorTab::Orchestrator,
+        ),
         // Window close events
         window::close_events().map(Message::WindowClosed),
     ])
@@ -660,6 +664,17 @@ fn keyboard_shortcut_subscription() -> iced::Subscription<Message> {
         }
         _ => None,
     })
+}
+
+/// Triage timeout subscription - processes expired triage items
+fn triage_timeout_subscription(active: bool) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
+
+    // Check every second for triage items that need auto-handling
+    iced::time::every(std::time::Duration::from_secs(1))
+        .map(|_| Message::ProcessTriageTimeouts)
 }
 
 /// Agent dialog polling subscription
@@ -1243,6 +1258,8 @@ enum Message {
     OrchestratorWsEvent(continuum_studio_iced::cli_agents_client::OrchestratorWsEvent),
     /// Keyboard shortcut pressed
     KeyboardShortcut(KeyboardShortcut),
+    /// Process triage timeouts (tick every second)
+    ProcessTriageTimeouts,
     /// Parked agents panel actions
     ParkedAgentAction(ParkedMessage),
     /// Agent activity feed actions (FileEdit, Command, ToolCall, Dialog events)
@@ -2012,6 +2029,9 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::KeyboardShortcut(shortcut) => {
             return handle_keyboard_shortcut(state, shortcut);
+        }
+        Message::ProcessTriageTimeouts => {
+            return process_triage_timeouts(state);
         }
         Message::ParkedAgentAction(msg) => {
             return handle_parked_agent_message(state, msg);
@@ -12330,6 +12350,118 @@ fn handle_keyboard_shortcut(
             }
             Task::none()
         }
+    }
+}
+
+/// Process triage timeouts - auto-handle items that have timed out
+fn process_triage_timeouts(state: &mut ContinuumStudio) -> Task<Message> {
+    // Get items that have timed out
+    let expired = state.orchestrator_state.engine.process_triage_timeouts();
+
+    if expired.is_empty() {
+        return Task::none();
+    }
+
+    // Process each expired item
+    let mut tasks = Vec::new();
+    for (dialog, triage_state, response) in expired {
+        match triage_state {
+            continuum_studio_iced::decision_engine::TriageState::AutoApprove => {
+                log::info!(
+                    "Triage timeout: Auto-approving dialog {} with response: {}",
+                    dialog.id,
+                    response
+                );
+                state.orchestrator_state.stats.auto_handled_today += 1;
+
+                let dialog_id = dialog.id.clone();
+                let client = state.cli_agents_http.clone();
+                let response_clone = response.clone();
+                tasks.push(Task::perform(
+                    async move {
+                        client
+                            .respond_to_dialog(
+                                &dialog_id,
+                                &response_clone,
+                                Some("Auto-approved on timeout".to_string()),
+                            )
+                            .await
+                    },
+                    |result| {
+                        if let Err(e) = result {
+                            log::error!("Failed to auto-respond on timeout: {}", e);
+                        }
+                        Message::NoOp
+                    },
+                ));
+
+                // Remove from pending dialogs
+                state
+                    .cli_agents_state
+                    .pending_dialogs
+                    .retain(|d| d.id != dialog.id);
+            }
+            continuum_studio_iced::decision_engine::TriageState::AutoDecline => {
+                log::info!("Triage timeout: Auto-declining dialog {}", dialog.id);
+                state.orchestrator_state.stats.auto_handled_today += 1;
+
+                let dialog_id = dialog.id.clone();
+                let client = state.cli_agents_http.clone();
+                // Find a cancel/decline option
+                let decline_response = dialog
+                    .options
+                    .as_ref()
+                    .and_then(|opts| {
+                        opts.iter()
+                            .find(|opt| {
+                                let v = opt.value.to_lowercase();
+                                v.contains("cancel")
+                                    || v.contains("decline")
+                                    || v.contains("no")
+                                    || v.contains("stop")
+                            })
+                            .map(|opt| opt.value.clone())
+                    })
+                    .unwrap_or_else(|| "cancelled".to_string());
+
+                tasks.push(Task::perform(
+                    async move {
+                        client
+                            .respond_to_dialog(
+                                &dialog_id,
+                                &decline_response,
+                                Some("Auto-declined on timeout".to_string()),
+                            )
+                            .await
+                    },
+                    |result| {
+                        if let Err(e) = result {
+                            log::error!("Failed to auto-decline on timeout: {}", e);
+                        }
+                        Message::NoOp
+                    },
+                ));
+
+                // Remove from pending dialogs
+                state
+                    .cli_agents_state
+                    .pending_dialogs
+                    .retain(|d| d.id != dialog.id);
+            }
+            _ => {
+                // Manual or Paused - shouldn't happen but log it
+                log::warn!(
+                    "Unexpected triage state {:?} in timeout processing",
+                    triage_state
+                );
+            }
+        }
+    }
+
+    if tasks.is_empty() {
+        Task::none()
+    } else {
+        Task::batch(tasks)
     }
 }
 
