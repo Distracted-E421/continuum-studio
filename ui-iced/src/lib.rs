@@ -18,6 +18,7 @@ pub mod monitoring;
 pub mod offline;
 pub mod orchestrator_panel;
 pub mod parked_agents;
+pub mod profiling;
 pub mod parked_agents_client;
 pub mod services;
 pub mod sessions;

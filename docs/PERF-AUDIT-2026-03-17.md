@@ -100,13 +100,16 @@ No obvious optimization opportunities without significant refactoring.
    - `max_triage_size: 100` added to `DecisionEngineConfig`
    - `add_to_triage()` drops oldest items when at capacity
 
-### P2 - Medium Priority
+### ✅ P2 - Partial
 
-3. **Profile with `tracing` spans:**
-   - Add spans to view functions
-   - Identify slow renders
+3. **Profile spans:** ✅
+   - `ui-iced/src/profiling.rs` - Lightweight span utility
+   - `profile_span!` macro for view/update functions
+   - Logs to existing log infrastructure
+   - Usage: `RUST_LOG=continuum_studio_iced::profiling=debug`
+   - Thresholds: 16ms (frame), 8ms (fast), 0ms (always)
 
-4. **Lazy WebSocket connections:**
+4. **Lazy WebSocket connections:** (deferred)
    - Only connect when tab becomes active
    - Currently always connecting
 

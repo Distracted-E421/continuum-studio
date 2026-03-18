@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
+use continuum_studio_iced::profile_span;
+
 use continuum_studio_iced::chat_pipeline::{
     fmt_bytes,
     fmt_num,
@@ -1746,6 +1748,7 @@ enum AuthMessage {
 }
 
 fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
+    profile_span!("update");
     match message {
         Message::NavigateTo(view) => {
             state.current_view = view;
@@ -2889,6 +2892,7 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
 
 /// Multi-window view dispatcher
 fn view_for_window(state: &ContinuumStudio, window_id: window::Id) -> Element<'_, Message> {
+    profile_span!("view_for_window");
     // Get the window type for this ID
     let window_state = state.windows.get(&window_id);
 
@@ -12357,6 +12361,7 @@ fn handle_keyboard_shortcut(
 
 /// Process triage timeouts - auto-handle items that have timed out
 fn process_triage_timeouts(state: &mut ContinuumStudio) -> Task<Message> {
+    profile_span!("process_triage_timeouts", 5);
     // Get items that have timed out
     let expired = state.orchestrator_state.engine.process_triage_timeouts();
 
