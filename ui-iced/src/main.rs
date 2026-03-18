@@ -270,9 +270,10 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
                 && (state.cursor_tab == CursorTab::CLIAgents
                     || state.cursor_tab == CursorTab::Orchestrator),
         ),
-        // Triage timeout processing (active on Orchestrator tab)
+        // Triage timeout processing (active on Orchestrator tab when queue non-empty)
         triage_timeout_subscription(
             state.current_view == View::Cursor && state.cursor_tab == CursorTab::Orchestrator,
+            !state.orchestrator_state.engine.triage_queue().is_empty(),
         ),
         // Window close events
         window::close_events().map(Message::WindowClosed),
@@ -667,8 +668,9 @@ fn keyboard_shortcut_subscription() -> iced::Subscription<Message> {
 }
 
 /// Triage timeout subscription - processes expired triage items
-fn triage_timeout_subscription(active: bool) -> iced::Subscription<Message> {
-    if !active {
+/// Only polls when there are items in the triage queue (P1 optimization)
+fn triage_timeout_subscription(active: bool, has_triage_items: bool) -> iced::Subscription<Message> {
+    if !active || !has_triage_items {
         return iced::Subscription::none();
     }
 

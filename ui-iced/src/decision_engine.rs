@@ -78,6 +78,8 @@ pub struct DecisionEngineConfig {
     pub undo_window_secs: u64,
     /// Maximum decisions to keep in history
     pub max_history_size: usize,
+    /// Maximum triage queue size (P1 optimization)
+    pub max_triage_size: usize,
     /// Keywords that indicate CRITICAL priority
     pub critical_keywords: Vec<String>,
     /// Agent-specific timeout overrides
@@ -90,6 +92,7 @@ impl Default for DecisionEngineConfig {
             default_triage_timeout_secs: 30,
             undo_window_secs: 10,
             max_history_size: 1000,
+            max_triage_size: 100,
             critical_keywords: vec![
                 "delete".to_string(),
                 "remove".to_string(),
@@ -400,8 +403,16 @@ impl DecisionEngine {
             .collect()
     }
 
-    /// Add item to triage queue
+    /// Add item to triage queue (enforces max_triage_size limit)
     pub fn add_to_triage(&mut self, item: TriageItem) {
+        if self.triage_queue.len() >= self.config.max_triage_size {
+            self.triage_queue.sort_by_key(|i| i.added_at);
+            self.triage_queue.remove(0);
+            log::warn!(
+                "Triage queue at capacity ({}), dropping oldest item",
+                self.config.max_triage_size
+            );
+        }
         self.triage_queue.push(item);
     }
 

@@ -30,15 +30,17 @@ Quick audit of Continuum Studio desktop (iced) performance characteristics.
 - Replaced entirely on update (not appended)
 - Location: `ui-iced/src/main.rs:2569, 2578, 2582`
 
-### ⚠️ Minor Concerns
+### ✅ Fixed
 
 **Triage Queue:**
-- Unbounded `Vec<TriageItem>`
-- Mitigated by 30s default timeout (items self-expire)
-- Consider adding max_triage_size limit
+- ~~Unbounded `Vec<TriageItem>`~~ → **Limited to 100 items** via `max_triage_size`
+- Drops oldest item when at capacity (sorts by `added_at`)
+- Location: `ui-iced/src/decision_engine.rs:404-413`
+
+### ⚠️ Minor Concerns
 
 **Undoable Decisions:**
-- Also unbounded `Vec<(DecisionRecord, Instant)>`
+- Unbounded `Vec<(DecisionRecord, Instant)>`
 - Mitigated by 10s undo window with `cleanup_undoable()`
 
 ## Subscription Efficiency
@@ -60,13 +62,12 @@ Quick audit of Continuum Studio desktop (iced) performance characteristics.
 | triage_timeout_subscription | 1s | Orchestrator tab |
 | dialog_polling_subscription | 5s | CLI/Orchestrator tabs |
 
-### ⚠️ Potential Issues
+### ✅ Fixed
 
 **1-Second Triage Timeout:**
-- Polls every 1 second when on Orchestrator tab
-- `process_triage_timeouts()` is O(n) on queue size
-- Usually n=0 so O(1) in practice
-- Consider: Only poll if queue non-empty
+- ~~Polls every 1 second when on Orchestrator tab~~ → **Only polls when queue non-empty**
+- `triage_timeout_subscription(active, has_triage_items)` checks both conditions
+- Location: `ui-iced/src/main.rs:274-276, 670-679`
 
 ## Clone Usage
 
@@ -89,22 +90,15 @@ No obvious optimization opportunities without significant refactoring.
 
 ## Recommendations
 
-### P1 - Quick Wins
+### ✅ P1 - Implemented
 
-1. **Conditional triage polling:**
-   ```rust
-   fn triage_timeout_subscription(active: bool) -> iced::Subscription<Message> {
-       if !active || state.orchestrator_state.engine.triage_queue().is_empty() {
-           return iced::Subscription::none();
-       }
-       iced::time::every(Duration::from_secs(1))...
-   }
-   ```
+1. **Conditional triage polling:** ✅
+   - `triage_timeout_subscription` now takes `has_triage_items` parameter
+   - Only polls when queue is non-empty
 
-2. **Add triage queue limit:**
-   ```rust
-   const MAX_TRIAGE_QUEUE: usize = 100;
-   ```
+2. **Triage queue limit:** ✅
+   - `max_triage_size: 100` added to `DecisionEngineConfig`
+   - `add_to_triage()` drops oldest items when at capacity
 
 ### P2 - Medium Priority
 
