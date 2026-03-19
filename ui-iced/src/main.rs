@@ -239,6 +239,10 @@ fn window_title(state: &ContinuumStudio, window_id: window::Id) -> String {
 
 /// Combined subscription for all windows
 fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
+    // Lazy WebSocket optimization: only connect when tab is visible
+    let on_activity_tab =
+        state.current_view == View::Cursor && state.cursor_tab == CursorTab::AgentActivity;
+    
     Subscription::batch([
         // Core IPC connection
         core_subscription(),
@@ -246,16 +250,16 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
         subagent_subscription(
             state.current_view == View::Cursor && state.cursor_tab == CursorTab::SubAgents,
         ),
-        // Task queue WebSocket connection (always active for real-time updates)
-        task_queue_subscription(true), // Always active now for multi-window support
+        // Task queue WebSocket connection (always active for multi-window support)
+        task_queue_subscription(true),
         // Dialog daemon monitor (always active for dialog panel)
         dialog_daemon_subscription(),
-        // Activity feed WebSocket connection (always active for real-time feed)
-        activity_feed_subscription(),
-        // Agent activity stream from dialog daemon (commands, dialogs)
-        activity_stream_subscription(),
-        // Agent coordinator polling (periodic refresh)
-        coordinator_poll_subscription(),
+        // Activity feed WebSocket connection (lazy: only when on AgentActivity tab)
+        activity_feed_subscription(on_activity_tab),
+        // Agent activity stream from dialog daemon (lazy: only when on AgentActivity tab)
+        activity_stream_subscription(on_activity_tab),
+        // Agent coordinator polling (lazy: only when on Dashboard view)
+        coordinator_poll_subscription(state.current_view == View::Dashboard),
         // CLI agents WebSocket (only when on Cursor view + CLIAgents tab)
         cli_agents_subscription(
             state.current_view == View::Cursor && state.cursor_tab == CursorTab::CLIAgents,
@@ -279,7 +283,15 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
         ),
         // Window close events
         window::close_events().map(Message::WindowClosed),
+        // Memory stats logging (every 60 seconds)
+        memory_stats_subscription(),
     ])
+}
+
+/// Memory stats logging subscription (every 60 seconds)
+fn memory_stats_subscription() -> iced::Subscription<Message> {
+    iced::time::every(std::time::Duration::from_secs(60))
+        .map(|_| Message::UpdateMemoryStats)
 }
 
 /// Subscription to monitor dialog daemon status
@@ -431,12 +443,20 @@ fn task_queue_websocket_worker() -> impl iced::futures::Stream<Item = Message> {
 }
 
 /// Activity feed WebSocket subscription
-fn activity_feed_subscription() -> iced::Subscription<Message> {
+/// Only active when on AgentActivity tab (lazy connection optimization)
+fn activity_feed_subscription(active: bool) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
     iced::Subscription::run(activity_feed_worker)
 }
 
 /// Agent activity stream subscription (dialog daemon port 8080)
-fn activity_stream_subscription() -> iced::Subscription<Message> {
+/// Only active when on AgentActivity tab (lazy connection optimization)
+fn activity_stream_subscription(active: bool) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
     iced::Subscription::run(activity_stream_worker)
 }
 
@@ -491,7 +511,11 @@ fn activity_feed_worker() -> impl iced::futures::Stream<Item = Message> {
 }
 
 /// Coordinator polling subscription (refreshes every 10 seconds)
-fn coordinator_poll_subscription() -> iced::Subscription<Message> {
+/// Only active when on Dashboard view (lazy connection optimization)
+fn coordinator_poll_subscription(active: bool) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
     iced::Subscription::run(coordinator_poll_worker)
 }
 
@@ -882,6 +906,7 @@ impl ContinuumStudio {
                 parked_agents_state: continuum_studio_iced::parked_agents::ParkedAgentsPanelState::default(),
                 parked_agents_http: ParkedAgentsHttpClient::new(),
                 agent_activity_state: ActivityFeedState::new(),
+                memory_stats: MemoryStats::default(),
             },
             startup_task,
         )
@@ -1104,6 +1129,43 @@ struct ContinuumStudio {
     parked_agents_http: ParkedAgentsHttpClient,
     /// Agent activity feed state (FileEdit, Command, ToolCall, Dialog events)
     agent_activity_state: ActivityFeedState,
+    /// Memory statistics for performance monitoring
+    memory_stats: MemoryStats,
+}
+
+/// Memory statistics for monitoring app state growth
+#[derive(Debug, Clone, Default)]
+struct MemoryStats {
+    /// Number of agents being tracked
+    agents_tracked: usize,
+    /// Number of dialogs cached in state
+    dialogs_cached: usize,
+    /// Number of activity feed items
+    activity_items: usize,
+    /// Decision history size
+    decision_history: usize,
+    /// Triage queue size
+    triage_queue: usize,
+    /// Last update time (unix seconds)
+    updated_at: u64,
+}
+
+impl MemoryStats {
+    /// Compute current stats from app state
+    fn compute(state: &ContinuumStudio) -> Self {
+        Self {
+            agents_tracked: state.cli_agents_state.agents.len()
+                + state.coordinator_agents.len(),
+            dialogs_cached: state.cli_agents_state.pending_dialogs.len(),
+            activity_items: state.agent_activity_state.events.len(),
+            decision_history: state.orchestrator_state.engine.recent_history(usize::MAX).len(),
+            triage_queue: state.orchestrator_state.engine.triage_queue().len(),
+            updated_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        }
+    }
 }
 
 /// Available views in the application
@@ -1264,6 +1326,8 @@ enum Message {
     KeyboardShortcut(KeyboardShortcut),
     /// Process triage timeouts (tick every second)
     ProcessTriageTimeouts,
+    /// Update memory stats (periodic)
+    UpdateMemoryStats,
     /// Parked agents panel actions
     ParkedAgentAction(ParkedMessage),
     /// Agent activity feed actions (FileEdit, Command, ToolCall, Dialog events)
@@ -2037,6 +2101,18 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::ProcessTriageTimeouts => {
             return process_triage_timeouts(state);
+        }
+        Message::UpdateMemoryStats => {
+            state.memory_stats = MemoryStats::compute(state);
+            log::debug!(
+                "[PERF] Memory stats: agents={}, dialogs={}, activity={}, history={}, triage={}",
+                state.memory_stats.agents_tracked,
+                state.memory_stats.dialogs_cached,
+                state.memory_stats.activity_items,
+                state.memory_stats.decision_history,
+                state.memory_stats.triage_queue,
+            );
+            return Task::none();
         }
         Message::ParkedAgentAction(msg) => {
             return handle_parked_agent_message(state, msg);
@@ -4904,6 +4980,7 @@ fn nav_button(label: &'static str, view: View, current: View) -> Element<'static
 
 /// Dashboard view with cards
 fn view_dashboard(state: &ContinuumStudio) -> Element<'_, Message> {
+    profile_span!("view_dashboard");
     let colors = &state.colors;
 
     // Status card
@@ -6763,6 +6840,7 @@ fn view_auth(state: &ContinuumStudio) -> Element<'_, Message> {
 
 /// Sessions view with detected running Cursor instances and real-time monitoring
 fn view_sessions(state: &ContinuumStudio) -> Element<'_, Message> {
+    profile_span!("view_sessions");
     // Header card with stats and controls
     let header_card = container(
         row![
@@ -13108,11 +13186,13 @@ fn handle_dialog_message(state: &mut ContinuumStudio, msg: DialogMsg) -> Task<Me
 
 /// View for CLI agent management (headless Cursor CLI orchestration)
 fn view_cli_agents(state: &ContinuumStudio) -> Element<'_, Message> {
+    profile_span!("view_cli_agents");
     view_cli_agents_tab(&state.cli_agents_state, Message::CLIAgentAction)
 }
 
 /// View for orchestrator panel (mode switching, dialog triage)
 fn view_orchestrator(state: &ContinuumStudio) -> Element<'_, Message> {
+    profile_span!("view_orchestrator");
     view_orchestrator_panel(&state.orchestrator_state, Message::OrchestratorAction)
 }
 

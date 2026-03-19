@@ -12,6 +12,24 @@ Quick audit of Continuum Studio desktop (iced) performance characteristics.
 | WebSocket latency | < 100ms | Not measured |
 | Memory | Stable | ✅ Bounded |
 
+## Memory Tracking
+
+**New:** `MemoryStats` struct added for runtime monitoring:
+
+```rust
+struct MemoryStats {
+    agents_tracked: usize,
+    dialogs_cached: usize,
+    activity_items: usize,
+    decision_history: usize,
+    triage_queue: usize,
+    updated_at: u64,
+}
+```
+
+Logged every 60 seconds via `memory_stats_subscription()`.
+View with: `RUST_LOG=continuum_studio_iced=debug`
+
 ## Memory Management
 
 ### ✅ Good Patterns
@@ -45,22 +63,24 @@ Quick audit of Continuum Studio desktop (iced) performance characteristics.
 
 ## Subscription Efficiency
 
-### Active Subscriptions (11 total)
+### Active Subscriptions (12 total)
 
 | Subscription | Interval | Active When |
 |-------------|----------|-------------|
 | core_subscription | Continuous | Always |
 | subagent_subscription | 2s | SubAgents tab |
-| task_queue_subscription | Continuous | Always |
+| task_queue_subscription | Continuous | Always (multi-window) |
 | dialog_daemon_subscription | Continuous | Always |
-| activity_feed_subscription | Continuous | Always |
-| activity_stream_subscription | Continuous | Always |
-| coordinator_poll_subscription | 10s | Always |
+| activity_feed_subscription | Continuous | **AgentActivity tab** ✅ |
+| activity_stream_subscription | Continuous | **AgentActivity tab** ✅ |
+| coordinator_poll_subscription | 10s | **Dashboard view** ✅ |
 | cli_agents_subscription | Continuous | CLIAgents tab |
 | orchestrator_ws_subscription | Continuous | Orchestrator tab |
 | keyboard_shortcut_subscription | Event-driven | Always |
 | triage_timeout_subscription | 1s | Orchestrator tab |
 | dialog_polling_subscription | 5s | CLI/Orchestrator tabs |
+
+**Lazy subscriptions (✅):** 3 connections now only active when viewing relevant content.
 
 ### ✅ Fixed
 
@@ -100,7 +120,7 @@ No obvious optimization opportunities without significant refactoring.
    - `max_triage_size: 100` added to `DecisionEngineConfig`
    - `add_to_triage()` drops oldest items when at capacity
 
-### ✅ P2 - Partial
+### ✅ P2 - Complete
 
 3. **Profile spans:** ✅
    - `ui-iced/src/profiling.rs` - Lightweight span utility
@@ -108,10 +128,20 @@ No obvious optimization opportunities without significant refactoring.
    - Logs to existing log infrastructure
    - Usage: `RUST_LOG=continuum_studio_iced::profiling=debug`
    - Thresholds: 16ms (frame), 8ms (fast), 0ms (always)
+   - Instrumented functions:
+     - `update()` - Main update loop
+     - `view_dashboard()` - Dashboard rendering
+     - `view_sessions()` - Sessions tab
+     - `view_cli_agents()` - CLI agents tab
+     - `view_orchestrator()` - Orchestrator panel
+     - `process_triage_timeouts()` - Triage processing
 
-4. **Lazy WebSocket connections:** (deferred)
-   - Only connect when tab becomes active
-   - Currently always connecting
+4. **Lazy WebSocket connections:** ✅
+   - `activity_feed_subscription(active)` - Only connects when on AgentActivity tab
+   - `activity_stream_subscription(active)` - Only connects when on AgentActivity tab
+   - `coordinator_poll_subscription(active)` - Only polls when on Dashboard view
+   - Saves 3 background connections when not on relevant views
+   - Location: `ui-iced/src/main.rs:244-263, 437-451, 456-463, 509-516`
 
 ### P3 - Future
 
