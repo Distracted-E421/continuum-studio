@@ -322,4 +322,26 @@ class RefreshAction : ActionCallback {
 
 class OrchestratorWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = OrchestratorWidget()
+    
+    override fun onEnabled(context: Context) {
+        super.onEnabled(context)
+        // Start periodic updates when first widget is added
+        WidgetUpdateWorker.schedule(context)
+    }
+    
+    override fun onDisabled(context: Context) {
+        super.onDisabled(context)
+        // Stop updates when last widget is removed
+        WidgetUpdateWorker.cancel(context)
+    }
+    
+    override fun onUpdate(
+        context: Context,
+        appWidgetManager: android.appwidget.AppWidgetManager,
+        appWidgetIds: IntArray
+    ) {
+        super.onUpdate(context, appWidgetManager, appWidgetIds)
+        // Trigger an immediate update
+        WidgetUpdateWorker.updateNow(context)
+    }
 }
