@@ -403,6 +403,20 @@ impl DecisionEngine {
             .collect()
     }
 
+    /// Undo the most recent decision within the undo window
+    /// Returns the undone DecisionRecord if successful
+    pub fn undo_last(&mut self) -> Option<DecisionRecord> {
+        let undo_window = Duration::from_secs(self.config.undo_window_secs);
+        let now = Instant::now();
+        
+        // Clean up expired entries first
+        self.undoable_decisions
+            .retain(|(_, instant)| now.duration_since(*instant) < undo_window);
+        
+        // Pop the most recent undoable decision
+        self.undoable_decisions.pop().map(|(record, _)| record)
+    }
+
     /// Add item to triage queue (enforces max_triage_size limit)
     pub fn add_to_triage(&mut self, item: TriageItem) {
         if self.triage_queue.len() >= self.config.max_triage_size {

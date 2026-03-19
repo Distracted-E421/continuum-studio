@@ -12081,9 +12081,41 @@ fn handle_orchestrator_message(
             Task::none()
         }
         UndoLastDecision => {
-            let undoable = state.orchestrator_state.engine.undoable_decisions();
-            if let Some(recent) = undoable.last() {
-                log::info!("Undoing decision: {}", recent.dialog_id);
+            if let Some(record) = state.orchestrator_state.engine.undo_last() {
+                log::info!(
+                    "Undoing decision: {} (was: {})",
+                    record.dialog_id,
+                    record.response
+                );
+                
+                // Decrement auto-handled count if it was auto-handled
+                if record.auto_handled && state.orchestrator_state.stats.auto_handled_today > 0 {
+                    state.orchestrator_state.stats.auto_handled_today -= 1;
+                }
+                
+                // Re-create the PendingDialog from the record and add to pending for user review
+                let pending = continuum_studio_iced::cli_agents::PendingDialog {
+                    id: record.dialog_id.clone(),
+                    title: format!("[UNDO] {}", record.dialog_id),
+                    prompt: format!(
+                        "Previous response '{}' was undone.\nOriginal reasoning: {}",
+                        record.response, record.reasoning
+                    ),
+                    dialog_type: "choice".to_string(),
+                    options: None,
+                    created_at: None,
+                    agent_id: record.agent_id.clone(),
+                    source: record.source.clone(),
+                    priority: record.priority.clone(),
+                    workspace: record.workspace.clone(),
+                    orchestrator_id: None,
+                };
+                
+                // Add to pending dialogs for manual review
+                state.cli_agents_state.pending_dialogs.push(pending);
+                state.orchestrator_state.stats.user_handled_today += 1;
+            } else {
+                log::info!("No decisions available to undo");
             }
             Task::none()
         }
@@ -12203,6 +12235,27 @@ fn handle_orchestrator_ws_event(
                     // Update stats
                     state.orchestrator_state.stats.dialogs_today += 1;
                     state.orchestrator_state.stats.auto_handled_today += 1;
+
+                    // Record the decision for history and undo
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    state.orchestrator_state.engine.record_decision(
+                        continuum_studio_iced::decision_engine::DecisionRecord {
+                            dialog_id: pending_dialog.id.clone(),
+                            agent_id: pending_dialog.agent_id.clone(),
+                            workspace: pending_dialog.workspace.clone(),
+                            source: pending_dialog.source.clone(),
+                            priority: pending_dialog.priority.clone(),
+                            response: response.clone(),
+                            reasoning: reasoning.clone(),
+                            auto_handled: true,
+                            timestamp,
+                            mode: state.orchestrator_state.mode.as_str().to_string(),
+                            undoable: true,
+                        },
+                    );
 
                     // Send auto response
                     let dialog_id = pending_dialog.id.clone();
@@ -12381,6 +12434,27 @@ fn process_triage_timeouts(state: &mut ContinuumStudio) -> Task<Message> {
                 );
                 state.orchestrator_state.stats.auto_handled_today += 1;
 
+                // Record the decision for history and undo
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                state.orchestrator_state.engine.record_decision(
+                    continuum_studio_iced::decision_engine::DecisionRecord {
+                        dialog_id: dialog.id.clone(),
+                        agent_id: dialog.agent_id.clone(),
+                        workspace: dialog.workspace.clone(),
+                        source: dialog.source.clone(),
+                        priority: dialog.priority.clone(),
+                        response: response.clone(),
+                        reasoning: "Auto-approved on triage timeout".to_string(),
+                        auto_handled: true,
+                        timestamp,
+                        mode: state.orchestrator_state.mode.as_str().to_string(),
+                        undoable: true,
+                    },
+                );
+
                 let dialog_id = dialog.id.clone();
                 let client = state.cli_agents_http.clone();
                 let response_clone = response.clone();
@@ -12412,8 +12486,6 @@ fn process_triage_timeouts(state: &mut ContinuumStudio) -> Task<Message> {
                 log::info!("Triage timeout: Auto-declining dialog {}", dialog.id);
                 state.orchestrator_state.stats.auto_handled_today += 1;
 
-                let dialog_id = dialog.id.clone();
-                let client = state.cli_agents_http.clone();
                 // Find a cancel/decline option
                 let decline_response = dialog
                     .options
@@ -12431,6 +12503,29 @@ fn process_triage_timeouts(state: &mut ContinuumStudio) -> Task<Message> {
                     })
                     .unwrap_or_else(|| "cancelled".to_string());
 
+                // Record the decision for history and undo
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                state.orchestrator_state.engine.record_decision(
+                    continuum_studio_iced::decision_engine::DecisionRecord {
+                        dialog_id: dialog.id.clone(),
+                        agent_id: dialog.agent_id.clone(),
+                        workspace: dialog.workspace.clone(),
+                        source: dialog.source.clone(),
+                        priority: dialog.priority.clone(),
+                        response: decline_response.clone(),
+                        reasoning: "Auto-declined on triage timeout".to_string(),
+                        auto_handled: true,
+                        timestamp,
+                        mode: state.orchestrator_state.mode.as_str().to_string(),
+                        undoable: true,
+                    },
+                );
+
+                let dialog_id = dialog.id.clone();
+                let client = state.cli_agents_http.clone();
                 tasks.push(Task::perform(
                     async move {
                         client
