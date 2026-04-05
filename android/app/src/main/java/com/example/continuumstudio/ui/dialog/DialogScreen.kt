@@ -27,7 +27,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -47,6 +51,7 @@ import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.VpnKey
 import com.example.continuumstudio.data.*
+import com.example.continuumstudio.ui.widgets.*
 
 /**
  * Tab options for main navigation
@@ -109,6 +114,17 @@ fun DialogScreen(
     var serverUrlInput by remember { mutableStateOf(savedServerUrl) }
     var showSettings by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(MainTab.DIALOG) }
+    
+    // Radial menu state
+    var showRadialMenu by remember { mutableStateOf(false) }
+    
+    // Connection status for FAB
+    val connectionStatus = when {
+        connectionState.isConnected -> ConnectionStatus.CONNECTED
+        connectionState.isConnecting -> ConnectionStatus.CONNECTING
+        connectionState.errorMessage != null -> ConnectionStatus.ERROR
+        else -> ConnectionStatus.DISCONNECTED
+    }
     
     // Update serverUrlInput when savedServerUrl changes (e.g., on first load from DataStore)
     LaunchedEffect(savedServerUrl) {
@@ -247,6 +263,23 @@ fun DialogScreen(
                         )
                     }
             }
+        },
+        floatingActionButton = {
+            ContextAwareFAB(
+                connectionStatus = connectionStatus,
+                hasPendingDialog = dialogState.activeDialog != null,
+                onTap = {
+                    if (connectionState.isConnected) {
+                        onRefresh()
+                    } else {
+                        onConnect(serverUrlInput)
+                    }
+                },
+                onLongPress = {
+                    showRadialMenu = true
+                },
+                modifier = Modifier.padding(16.dp)
+            )
         }
     ) { padding ->
         Column(
@@ -377,6 +410,42 @@ fun DialogScreen(
                 }
             }
         }
+    }
+    
+    // Radial Menu Overlay
+    if (showRadialMenu) {
+        QuickActionsRadialMenu(
+            isVisible = showRadialMenu,
+            onRefresh = {
+                showRadialMenu = false
+                onRefresh()
+            },
+            onSwitchEndpoint = {
+                showRadialMenu = false
+                selectedTab = MainTab.SETTINGS
+            },
+            onSettings = {
+                showRadialMenu = false
+                selectedTab = MainTab.SETTINGS
+            },
+            onTestAll = {
+                showRadialMenu = false
+                onTestAllEndpoints()
+            },
+            onViewLogs = {
+                showRadialMenu = false
+                selectedTab = MainTab.HISTORY
+                onFetchHistory()
+            },
+            onDismiss = {
+                showRadialMenu = false
+            },
+            accentColor = when (connectionStatus) {
+                ConnectionStatus.CONNECTED -> Color(0xFF4CAF50)
+                ConnectionStatus.CONNECTING -> Color(0xFFFFC107)
+                else -> MaterialTheme.colorScheme.primary
+            }
+        )
     }
 }
 
@@ -719,7 +788,20 @@ fun SettingsView(
                         }
                     }
                     
-                    // Quick add Tailscale
+                    // Quick add Tailscale - zen1 (primary)
+                    TextButton(
+                        onClick = {
+                            if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onAddEndpoint("Tailscale (zen1)", "100.102.101.72:8082")
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Quick Add: Tailscale (zen1)")
+                    }
+                    
+                    // Quick add Tailscale - Obsidian (backup)
                     TextButton(
                         onClick = {
                             if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1613,169 +1695,493 @@ fun ActiveDialogCard(
 ) {
     val hapticFeedback = LocalHapticFeedback.current
     
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
-    ) {
-        // Timer bar (if not paused)
-        if (!dialog.isPaused && !holdMode && dialog.timeoutMs != null) {
-            LinearProgressIndicator(
-                progress = { dialog.timeRemainingRatio },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp)),
-                color = when {
-                    dialog.timeRemainingRatio > 0.5f -> Color(0xFF4CAF50)
-                    dialog.timeRemainingRatio > 0.2f -> Color(0xFFFF9800)
-                    else -> Color(0xFFF44336)
-                },
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-
-        // Hold mode indicator
-        if (holdMode) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFFF9800).copy(alpha = 0.2f))
-                    .padding(8.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFFFF9800))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("HOLD MODE ACTIVE", fontWeight = FontWeight.Bold, color = Color(0xFFFF9800))
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-
-        // Title
-        Text(
-            text = dialog.title,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Prompt with markdown rendering
-        MarkdownText(
-            text = dialog.prompt,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        // Context data section (collapsible)
-        if (dialog.context != null) {
-            var showContext by remember { mutableStateOf(false) }
-            
-            Spacer(modifier = Modifier.height(12.dp))
-            
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showContext = !showContext }
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    if (showContext) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = if (showContext) "Hide context" else "Show context",
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    "Context Data",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            
-            if (showContext) {
-                Spacer(modifier = Modifier.height(4.dp))
-                val contextText = dialog.context.toString()
-                    .let { if (it.startsWith("\"") && it.endsWith("\"")) it.drop(1).dropLast(1) else it }
-                
-                CodeBlock(
-                    code = contextText,
-                    language = "json"
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Dialog type specific content
+    // State for radial response menu
+    var showResponseRadial by remember { mutableStateOf(false) }
+    
+    // Build radial options based on dialog type
+    val radialOptions = remember(dialog.dialogType, selectedValue, selectedOptions, sliderValue) {
         when (dialog.dialogType.type) {
-            "choice" -> ChoiceContent(
-                options = dialog.dialogType.options ?: emptyList(),
-                allowMultiple = dialog.dialogType.allowMultiple ?: false,
-                selectedValue = selectedValue,
-                selectedOptions = selectedOptions,
-                onSelectOption = onSelectOption,
-                onToggleOption = onToggleOption,
-            )
-            "text" -> TextInputContent(
-                placeholder = dialog.dialogType.placeholder,
-                multiline = dialog.dialogType.multiline ?: false,
-                value = selectedValue,
-                onValueChange = onTextChange,
-            )
-            "confirm" -> ConfirmationContent(
-                yesLabel = dialog.dialogType.yesLabel ?: "Yes",
-                noLabel = dialog.dialogType.noLabel ?: "No",
-                selectedValue = selectedValue,
-                onConfirm = onConfirm,
-            )
-            "slider" -> SliderContent(
-                min = dialog.dialogType.min ?: 0f,
-                max = dialog.dialogType.max ?: 100f,
-                step = dialog.dialogType.step ?: 1f,
-                unit = dialog.dialogType.unit ?: "",
-                value = sliderValue,
-                onValueChange = onSliderChange,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Comment field
-        OutlinedTextField(
-            value = comment,
-            onValueChange = onCommentChange,
-            label = { Text("Comment (optional)") },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 2,
-            maxLines = 4,
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Submit button
-        Button(
-            onClick = {
-                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                onSubmit()
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = when (dialog.dialogType.type) {
-                "choice" -> if (dialog.dialogType.allowMultiple == true) 
-                    selectedOptions.isNotEmpty() else selectedValue.isNotBlank()
-                "text" -> selectedValue.isNotBlank()
-                "confirm" -> selectedValue.isNotBlank()
-                "slider" -> true
-                else -> true
+            "choice" -> {
+                if (dialog.dialogType.allowMultiple == true) {
+                    // Multi-select: show "Submit Selection" if any selected
+                    if (selectedOptions.isNotEmpty()) {
+                        listOf("__submit__" to "Submit (${selectedOptions.size})")
+                    } else {
+                        emptyList()
+                    }
+                } else {
+                    // Single select: show all options
+                    (dialog.dialogType.options ?: emptyList()).map { opt ->
+                        opt.value to (opt.label ?: opt.value)
+                    }
+                }
             }
-        ) {
-            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Submit")
+            "confirm" -> listOf(
+                "true" to (dialog.dialogType.yesLabel ?: "Yes"),
+                "false" to (dialog.dialogType.noLabel ?: "No"),
+            )
+            "text" -> {
+                if (selectedValue.isNotBlank()) {
+                    listOf("__submit__" to "Submit")
+                } else {
+                    emptyList()
+                }
+            }
+            "slider" -> listOf("__submit__" to "Submit")
+            else -> listOf("__submit__" to "Submit")
         }
+    }
+    
+    // Handler for radial selection
+    val handleRadialSelection: (String) -> Unit = { optionId ->
+        when (dialog.dialogType.type) {
+            "choice" -> {
+                if (optionId == "__submit__") {
+                    onSubmit()
+                } else {
+                    onSelectOption(optionId)
+                    onSubmit()
+                }
+            }
+            "confirm" -> {
+                onConfirm(optionId == "true")
+                onSubmit()
+            }
+            "text", "slider" -> {
+                if (optionId == "__submit__") {
+                    onSubmit()
+                }
+            }
+            else -> onSubmit()
+        }
+        showResponseRadial = false
+    }
+    
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Main card content with dark background and long-press gesture
+        Card(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 4.dp, vertical = 8.dp)
+                .pointerInput(radialOptions) {
+                    detectTapGestures(
+                        onLongPress = {
+                            if (radialOptions.isNotEmpty()) {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showResponseRadial = true
+                            }
+                        }
+                    )
+                },
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFF1A1A1A), // High contrast dark
+            ),
+            shape = RoundedCornerShape(16.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp)
+            ) {
+                // Timer bar (if not paused)
+                if (!dialog.isPaused && !holdMode && dialog.timeoutMs != null) {
+                    LinearProgressIndicator(
+                        progress = { dialog.timeRemainingRatio },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = when {
+                            dialog.timeRemainingRatio > 0.5f -> Color(0xFF4CAF50)
+                            dialog.timeRemainingRatio > 0.2f -> Color(0xFFFF9800)
+                            else -> Color(0xFFF44336)
+                        },
+                        trackColor = Color(0xFF333333),
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                // Hold mode indicator
+                if (holdMode) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFFF9800).copy(alpha = 0.2f))
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFFFF9800))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("HOLD MODE ACTIVE", fontWeight = FontWeight.Bold, color = Color(0xFFFF9800))
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                // Title - 24sp, bold, high contrast
+                Text(
+                    text = dialog.title,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    lineHeight = 30.sp,
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Prompt with markdown rendering - 18sp
+                MarkdownText(
+                    text = dialog.prompt,
+                    modifier = Modifier.fillMaxWidth(),
+                    baseFontSize = 18.sp,
+                    textColor = Color(0xFFE0E0E0),
+                )
+
+                // Context data section (collapsible)
+                if (dialog.context != null) {
+                    var showContext by remember { mutableStateOf(false) }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF252525))
+                            .clickable { showContext = !showContext }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (showContext) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (showContext) "Hide context" else "Show context",
+                            modifier = Modifier.size(20.dp),
+                            tint = Color(0xFF9E9E9E)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Context Data",
+                            fontSize = 14.sp,
+                            color = Color(0xFF9E9E9E)
+                        )
+                    }
+                    
+                    if (showContext) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val contextText = dialog.context.toString()
+                            .let { if (it.startsWith("\"") && it.endsWith("\"")) it.drop(1).dropLast(1) else it }
+                        
+                        CodeBlock(
+                            code = contextText,
+                            language = "json"
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Dialog type specific content (choice/text/confirm/slider)
+                when (dialog.dialogType.type) {
+                    "choice" -> ChoiceContentRedesigned(
+                        options = dialog.dialogType.options ?: emptyList(),
+                        allowMultiple = dialog.dialogType.allowMultiple ?: false,
+                        selectedValue = selectedValue,
+                        selectedOptions = selectedOptions,
+                        onSelectOption = onSelectOption,
+                        onToggleOption = onToggleOption,
+                    )
+                    "text" -> TextInputContentRedesigned(
+                        placeholder = dialog.dialogType.placeholder,
+                        multiline = dialog.dialogType.multiline ?: false,
+                        value = selectedValue,
+                        onValueChange = onTextChange,
+                    )
+                    "confirm" -> {
+                        // Show hint instead of buttons
+                        Text(
+                            text = "Hold card to respond",
+                            fontSize = 14.sp,
+                            color = Color(0xFF757575),
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                    "slider" -> SliderContentRedesigned(
+                        min = dialog.dialogType.min ?: 0f,
+                        max = dialog.dialogType.max ?: 100f,
+                        step = dialog.dialogType.step ?: 1f,
+                        unit = dialog.dialogType.unit ?: "",
+                        value = sliderValue,
+                        onValueChange = onSliderChange,
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Comment field - redesigned
+                OutlinedTextField(
+                    value = comment,
+                    onValueChange = onCommentChange,
+                    label = { Text("Comment (optional)", color = Color(0xFF757575)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 4,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color(0xFFBDBDBD),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = Color(0xFF424242),
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
+                        unfocusedLabelColor = Color(0xFF757575),
+                    ),
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Interaction hint (replaces submit button)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF252525))
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Default.TouchApp,
+                        contentDescription = null,
+                        tint = Color(0xFF757575),
+                        modifier = Modifier.size(24.dp),
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "Hold anywhere to respond",
+                        fontSize = 16.sp,
+                        color = Color(0xFF9E9E9E),
+                    )
+                }
+            }
+        }
+        
+        // Radial response menu overlay
+        if (radialOptions.isNotEmpty()) {
+            DialogResponseRadialMenu(
+                isVisible = showResponseRadial,
+                options = radialOptions,
+                onSelectOption = handleRadialSelection,
+                onCancel = { showResponseRadial = false },
+                onDismiss = { showResponseRadial = false },
+            )
+        }
+    }
+}
+
+@Composable
+fun ChoiceContentRedesigned(
+    options: List<ChoiceOption>,
+    allowMultiple: Boolean,
+    selectedValue: String,
+    selectedOptions: Set<String>,
+    onSelectOption: (String) -> Unit,
+    onToggleOption: (String) -> Unit,
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+    
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Header with selection hint
+        if (!allowMultiple) {
+            Text(
+                text = "Hold card to select option",
+                fontSize = 14.sp,
+                color = Color(0xFF757575),
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        
+        options.forEach { option ->
+            val isSelected = if (allowMultiple) {
+                selectedOptions.contains(option.value)
+            } else {
+                selectedValue == option.value
+            }
+            
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                        else Color(0xFF252525)
+                    )
+                    .then(
+                        if (allowMultiple) {
+                            Modifier.clickable {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onToggleOption(option.value)
+                            }
+                        } else {
+                            Modifier // Single-select uses radial
+                        }
+                    )
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (allowMultiple) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { onToggleOption(option.value) },
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = MaterialTheme.colorScheme.primary,
+                            uncheckedColor = Color(0xFF757575),
+                            checkmarkColor = Color.White,
+                        )
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                } else if (isSelected) {
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp),
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
+                
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = option.label ?: option.value,
+                        fontSize = 18.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isSelected) Color.White else Color(0xFFBDBDBD),
+                    )
+                    if (!option.description.isNullOrBlank()) {
+                        Text(
+                            text = option.description,
+                            fontSize = 14.sp,
+                            color = Color(0xFF757575),
+                        )
+                    }
+                }
+            }
+        }
+        
+        if (allowMultiple && selectedOptions.isNotEmpty()) {
+            Text(
+                text = "${selectedOptions.size} selected • Hold to submit",
+                fontSize = 14.sp,
+                color = Color(0xFF9E9E9E),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+@Composable
+fun TextInputContentRedesigned(
+    placeholder: String?,
+    multiline: Boolean,
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = { 
+            Text(
+                placeholder ?: "Enter your response...",
+                color = Color(0xFF616161)
+            )
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = if (multiline) 120.dp else 56.dp),
+        minLines = if (multiline) 4 else 1,
+        maxLines = if (multiline) 10 else 1,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color(0xFFBDBDBD),
+            focusedBorderColor = MaterialTheme.colorScheme.primary,
+            unfocusedBorderColor = Color(0xFF424242),
+            cursorColor = MaterialTheme.colorScheme.primary,
+        ),
+    )
+    
+    if (value.isNotBlank()) {
+        Text(
+            text = "Hold card to submit",
+            fontSize = 14.sp,
+            color = Color(0xFF757575),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+fun SliderContentRedesigned(
+    min: Float,
+    max: Float,
+    step: Float,
+    unit: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+) {
+    Column {
+        // Value display - large and prominent
+        Text(
+            text = "${value.toInt()}$unit",
+            fontSize = 36.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
+        
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        // Range labels
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("${min.toInt()}$unit", fontSize = 14.sp, color = Color(0xFF757575))
+            Text("${max.toInt()}$unit", fontSize = 14.sp, color = Color(0xFF757575))
+        }
+        
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = min..max,
+            steps = ((max - min) / step).toInt() - 1,
+            modifier = Modifier.fillMaxWidth(),
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+                inactiveTrackColor = Color(0xFF424242),
+            )
+        )
+        
+        Text(
+            text = "Hold card to submit",
+            fontSize = 14.sp,
+            color = Color(0xFF757575),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -1985,6 +2391,8 @@ fun SliderContent(
 fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
+    baseFontSize: TextUnit = 16.sp,
+    textColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
     val lines = text.lines()
     
@@ -2025,7 +2433,7 @@ fun MarkdownText(
             if (headerMatch != null) {
                 val level = headerMatch.groupValues[1].length
                 val content = headerMatch.groupValues[2]
-                MarkdownHeader(level = level, text = content)
+                MarkdownHeader(level = level, text = content, baseSize = baseFontSize, textColor = textColor)
                 i++
                 continue
             }
@@ -2037,7 +2445,7 @@ fun MarkdownText(
                     quoteLines.add(lines[i].trim().removePrefix(">").trim())
                     i++
                 }
-                MarkdownBlockQuote(text = quoteLines.joinToString("\n"))
+                MarkdownBlockQuote(text = quoteLines.joinToString("\n"), textColor = textColor)
                 continue
             }
             
@@ -2048,7 +2456,7 @@ fun MarkdownText(
                     listItems.add(lines[i].trim().replaceFirst(Regex("^[-*+]\\s+"), ""))
                     i++
                 }
-                MarkdownUnorderedList(items = listItems)
+                MarkdownUnorderedList(items = listItems, textColor = textColor, fontSize = baseFontSize)
                 continue
             }
             
@@ -2059,7 +2467,7 @@ fun MarkdownText(
                     listItems.add(lines[i].trim().replaceFirst(Regex("^\\d+\\.\\s+"), ""))
                     i++
                 }
-                MarkdownOrderedList(items = listItems)
+                MarkdownOrderedList(items = listItems, textColor = textColor, fontSize = baseFontSize)
                 continue
             }
             
@@ -2070,8 +2478,9 @@ fun MarkdownText(
                 SelectionContainer {
                     Text(
                         text = parseInlineMarkdown(line),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontSize = baseFontSize,
+                        lineHeight = baseFontSize * 1.4f,
+                        color = textColor
                     )
                 }
             }
@@ -2081,25 +2490,35 @@ fun MarkdownText(
 }
 
 @Composable
-fun MarkdownHeader(level: Int, text: String) {
-    val style = when (level) {
-        1 -> MaterialTheme.typography.headlineLarge
-        2 -> MaterialTheme.typography.headlineMedium
-        3 -> MaterialTheme.typography.headlineSmall
-        4 -> MaterialTheme.typography.titleLarge
-        5 -> MaterialTheme.typography.titleMedium
-        else -> MaterialTheme.typography.titleSmall
+fun MarkdownHeader(
+    level: Int, 
+    text: String,
+    baseSize: TextUnit = 16.sp,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    // Scale header sizes relative to base size
+    val fontSize = when (level) {
+        1 -> baseSize * 1.5f
+        2 -> baseSize * 1.35f
+        3 -> baseSize * 1.2f
+        4 -> baseSize * 1.1f
+        5 -> baseSize * 1.05f
+        else -> baseSize
     }
     Text(
         text = parseInlineMarkdown(text),
-        style = style,
-        color = MaterialTheme.colorScheme.onSurface,
+        fontSize = fontSize,
+        fontWeight = FontWeight.Bold,
+        color = textColor,
         modifier = Modifier.padding(top = if (level <= 2) 8.dp else 4.dp, bottom = 4.dp)
     )
 }
 
 @Composable
-fun MarkdownBlockQuote(text: String) {
+fun MarkdownBlockQuote(
+    text: String,
+    textColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -2117,28 +2536,32 @@ fun MarkdownBlockQuote(text: String) {
             Text(
                 text = parseInlineMarkdown(text),
                 style = MaterialTheme.typography.bodyLarge.copy(fontStyle = FontStyle.Italic),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+                color = textColor.copy(alpha = 0.9f)
             )
         }
     }
 }
 
 @Composable
-fun MarkdownUnorderedList(items: List<String>) {
+fun MarkdownUnorderedList(
+    items: List<String>,
+    textColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    fontSize: TextUnit = 16.sp,
+) {
     Column(modifier = Modifier.padding(start = 8.dp)) {
         items.forEach { item ->
             Row(modifier = Modifier.padding(vertical = 2.dp)) {
                 Text(
                     text = "•",
-                    style = MaterialTheme.typography.bodyLarge,
+                    fontSize = fontSize,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.width(16.dp)
                 )
                 SelectionContainer {
                     Text(
                         text = parseInlineMarkdown(item),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontSize = fontSize,
+                        color = textColor
                     )
                 }
             }
@@ -2147,21 +2570,25 @@ fun MarkdownUnorderedList(items: List<String>) {
 }
 
 @Composable
-fun MarkdownOrderedList(items: List<String>) {
+fun MarkdownOrderedList(
+    items: List<String>,
+    textColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    fontSize: TextUnit = 16.sp,
+) {
     Column(modifier = Modifier.padding(start = 8.dp)) {
         items.forEachIndexed { index, item ->
             Row(modifier = Modifier.padding(vertical = 2.dp)) {
                 Text(
                     text = "${index + 1}.",
-                    style = MaterialTheme.typography.bodyLarge,
+                    fontSize = fontSize,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.width(24.dp)
                 )
                 SelectionContainer {
                     Text(
                         text = parseInlineMarkdown(item),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontSize = fontSize,
+                        color = textColor
                     )
                 }
             }

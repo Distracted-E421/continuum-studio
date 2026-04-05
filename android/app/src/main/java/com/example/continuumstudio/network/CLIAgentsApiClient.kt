@@ -24,8 +24,8 @@ class CLIAgentsApiClient(
 ) {
     companion object {
         // Use Obsidian's Tailscale IP for Android connectivity
-        const val DEFAULT_CLI_AGENTS_URL = "http://100.109.236.61:4001"
-        const val DEFAULT_DIALOG_URL = "http://100.109.236.61:8080"
+        const val DEFAULT_CLI_AGENTS_URL = "http://100.102.101.72:4001"
+        const val DEFAULT_DIALOG_URL = "http://100.102.101.72:8082"
     }
     
     private val json = Json {

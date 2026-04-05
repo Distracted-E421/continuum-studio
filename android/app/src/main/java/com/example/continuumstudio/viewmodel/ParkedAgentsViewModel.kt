@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
 class ParkedAgentsViewModel(application: Application) : AndroidViewModel(application) {
     
     companion object {
-        private const val DEFAULT_BASE_URL = "http://100.109.236.61:8080"
+        private const val DEFAULT_BASE_URL = "http://100.102.101.72:8082"
         private const val POLL_INTERVAL_MS = 10000L
     }
     

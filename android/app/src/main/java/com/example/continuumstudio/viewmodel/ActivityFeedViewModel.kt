@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 class ActivityFeedViewModel(application: Application) : AndroidViewModel(application) {
     
     companion object {
-        private const val DEFAULT_WS_URL = "ws://100.109.236.61:8080/ws/activity"
+        private const val DEFAULT_WS_URL = "ws://100.102.101.72:8082/ws/activity"
         private const val MAX_EVENTS = 100
         private const val RECONNECT_DELAY_MS = 5000L
     }

@@ -168,6 +168,13 @@ class MainActivity : ComponentActivity() {
                     dialogViewModel.events.collect { event ->
                         when (event) {
                             is DialogEvent.Connected -> {
+                                // Sync endpoint to other ViewModels
+                                val baseUrl = dialogViewModel.getActiveEndpointBaseUrl()
+                                val wsUrl = dialogViewModel.getActiveEndpointWsUrl()
+                                activityFeedViewModel.updateServerUrl("$wsUrl/ws/activity")
+                                parkedAgentsViewModel.updateServerUrl(baseUrl)
+                                cliAgentsViewModel.updateServerUrl(baseUrl)
+                                
                                 // Fetch widget data on connection
                                 widgetBayViewModel.refreshAll(connectionState.serverUrl)
                                 dialogViewModel.showToast("Connected to server")
@@ -182,6 +189,10 @@ class MainActivity : ComponentActivity() {
                                 if (!isInForeground) {
                                     DialogNotificationService.notifyConnectionLost(this@MainActivity)
                                 }
+                                // Try falling back to next endpoint
+                                if (endpointFallbackEnabled) {
+                                    dialogViewModel.tryFallbackEndpoint()
+                                }
                             }
                             is DialogEvent.Reconnecting -> {
                                 val delaySeconds = event.delayMs / 1000
@@ -189,6 +200,10 @@ class MainActivity : ComponentActivity() {
                             }
                             is DialogEvent.Error -> {
                                 dialogViewModel.showToast("Error: ${event.message}")
+                                // Try falling back to next endpoint on connection errors
+                                if (endpointFallbackEnabled && event.message.contains("connect", ignoreCase = true)) {
+                                    dialogViewModel.tryFallbackEndpoint()
+                                }
                             }
                             is DialogEvent.NewDialog -> {
                                 // Show toast

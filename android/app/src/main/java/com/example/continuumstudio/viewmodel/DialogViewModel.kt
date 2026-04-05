@@ -76,11 +76,22 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         val ENDPOINT_FALLBACK_ENABLED = booleanPreferencesKey("endpoint_fallback_enabled")
     }
 
-    // Default endpoints
+    // Default endpoints - ordered by preference for failover
+    // zen1 is primary since Framework is offline (March 2026)
     private val defaultEndpoints = listOf(
         ServerEndpoint(
-            name = "Tailscale (Obsidian)",
+            name = "zen1 (Primary)",
+            url = "100.102.101.72:8082",
+            type = EndpointType.TAILSCALE
+        ),
+        ServerEndpoint(
+            name = "Obsidian (Direct)",
             url = "100.109.236.61:8080",
+            type = EndpointType.TAILSCALE
+        ),
+        ServerEndpoint(
+            name = "zen1 Proxy",
+            url = "100.102.101.72:8081",
             type = EndpointType.TAILSCALE
         ),
         ServerEndpoint(
@@ -163,8 +174,12 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         }
         
         // Auto-connect on startup to active endpoint
+        // Delay gives time for:
+        // 1. Endpoints to load from DataStore
+        // 2. Network stack to initialize
+        // 3. Tailscale routes to establish (can take 1-3s on mobile)
         viewModelScope.launch {
-            kotlinx.coroutines.delay(500) // Wait for endpoints to load
+            kotlinx.coroutines.delay(1500) // 1.5s startup delay for network stability
             connectToActiveEndpoint()
         }
 
@@ -200,6 +215,32 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
             return eps[index]
         }
         return eps.firstOrNull { it.enabled }
+    }
+    
+    /**
+     * Get the base URL of the active endpoint (for use by other ViewModels)
+     * Returns the URL in HTTP format (not WebSocket)
+     */
+    fun getActiveEndpointBaseUrl(): String {
+        val endpoint = getActiveEndpoint()
+        return if (endpoint != null) {
+            wsClient.buildHttpUrlForTest(endpoint.url)
+        } else {
+            "http://100.102.101.72:8082" // zen1 fallback
+        }
+    }
+    
+    /**
+     * Get the WebSocket URL of the active endpoint (for use by other ViewModels)
+     */
+    fun getActiveEndpointWsUrl(): String {
+        val endpoint = getActiveEndpoint()
+        if (endpoint == null) return "ws://100.102.101.72:8082"
+        val url = endpoint.url
+            .removePrefix("https://").removePrefix("http://")
+            .removePrefix("wss://").removePrefix("ws://")
+        val secure = url.contains("datapunk.dev") || url.contains("cloudflare")
+        return if (secure) "wss://$url" else "ws://$url"
     }
     
     /**

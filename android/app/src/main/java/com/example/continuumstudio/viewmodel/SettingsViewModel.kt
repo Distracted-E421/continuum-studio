@@ -13,8 +13,8 @@ import kotlinx.coroutines.launch
 private val Context.appSettingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "app_settings")
 
 data class SettingsUiState(
-    val dialogServerUrl: String = "http://100.109.236.61:8080",
-    val cliAgentsServerUrl: String = "http://100.109.236.61:4001",
+    val dialogServerUrl: String = "http://100.102.101.72:8082",
+    val cliAgentsServerUrl: String = "http://100.102.101.72:4001",
     val cfAccessClientId: String = "",
     val cfAccessClientSecret: String = "",
     val notificationsEnabled: Boolean = true,
@@ -52,9 +52,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         val KEY_TRIAGE_TIMEOUT_SECS = longPreferencesKey("triage_timeout_secs")
         val KEY_UNDO_WINDOW_SECS = longPreferencesKey("undo_window_secs")
         
-        // Defaults - Use Obsidian's Tailscale IP for Android connectivity
-        const val DEFAULT_DIALOG_SERVER_URL = "http://100.109.236.61:8080"
-        const val DEFAULT_CLI_AGENTS_SERVER_URL = "http://100.109.236.61:4001"
+        // Defaults - Use zen1's Tailscale IP for Android connectivity (primary)
+        const val DEFAULT_DIALOG_SERVER_URL = "http://100.102.101.72:8082"
+        const val DEFAULT_CLI_AGENTS_SERVER_URL = "http://100.102.101.72:4001"
         const val DEFAULT_TRIAGE_TIMEOUT_SECS = 30L
         const val DEFAULT_UNDO_WINDOW_SECS = 10L
     }

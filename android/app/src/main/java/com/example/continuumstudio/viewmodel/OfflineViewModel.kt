@@ -43,8 +43,8 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
         .readTimeout(5, TimeUnit.SECONDS)
         .build()
     
-    private var dialogBaseUrl = "http://100.109.236.61:8080"
-    private var cliAgentsBaseUrl = "http://100.109.236.61:4001"
+    private var dialogBaseUrl = "http://100.102.101.72:8082"
+    private var cliAgentsBaseUrl = "http://100.102.101.72:4001"
     
     private val _uiState = MutableStateFlow(OfflineUiState())
     val uiState: StateFlow<OfflineUiState> = _uiState.asStateFlow()

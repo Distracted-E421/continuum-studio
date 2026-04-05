@@ -31,8 +31,8 @@ class CLIAgentsViewModel(application: Application) : AndroidViewModel(applicatio
         private val CF_CLIENT_ID_KEY = stringPreferencesKey("cf_access_client_id")
         private val CF_CLIENT_SECRET_KEY = stringPreferencesKey("cf_access_client_secret")
         
-        private const val DEFAULT_API_HOST = "http://100.109.236.61:4001"
-        private const val DEFAULT_DIALOG_HOST = "http://100.109.236.61:8080"
+        private const val DEFAULT_API_HOST = "http://100.102.101.72:4001"
+        private const val DEFAULT_DIALOG_HOST = "http://100.102.101.72:8082"
         private const val POLL_INTERVAL_MS = 5000L
     }
     
@@ -75,6 +75,26 @@ class CLIAgentsViewModel(application: Application) : AndroidViewModel(applicatio
                     cfAccessClientId = cfClientId,
                     cfAccessClientSecret = cfClientSecret
                 )
+            }
+        }
+    }
+    
+    /**
+     * Update the server URL dynamically (for failover sync from DialogViewModel)
+     */
+    fun updateServerUrl(baseUrl: String) {
+        val dialogUrl = baseUrl
+        val apiUrl = baseUrl.replace(":8080", ":4001").replace(":8082", ":4001")
+        
+        apiClient = CLIAgentsApiClient(
+            baseUrl = apiUrl,
+            dialogBaseUrl = dialogUrl
+        )
+        
+        viewModelScope.launch {
+            dataStore.edit { preferences ->
+                preferences[API_HOST_KEY] = apiUrl
+                preferences[DIALOG_HOST_KEY] = dialogUrl
             }
         }
     }

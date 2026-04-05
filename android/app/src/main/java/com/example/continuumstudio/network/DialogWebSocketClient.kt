@@ -39,7 +39,7 @@ class DialogWebSocketClient(
     private var reconnectJob: Job? = null
     private var shouldReconnect = false
     private var wasEverConnected = false // Track if we successfully connected before
-    private val maxInitialAttempts = 3 // Max retries for initial connection
+    private val maxInitialAttempts = 8 // Max retries for initial connection (increased for Tailscale route establishment)
     
     // Cloudflare Access credentials (stored for reconnection)
     private var cfAccessClientId: String = ""

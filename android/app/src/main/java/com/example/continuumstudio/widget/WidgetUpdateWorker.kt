@@ -117,7 +117,7 @@ class WidgetUpdateWorker(
     private fun fetchMode(client: OkHttpClient): String {
         return try {
             val request = Request.Builder()
-                .url("http://100.109.236.61:8080/api/orchestrator/mode")
+                .url("http://100.102.101.72:8082/api/orchestrator/mode")
                 .get()
                 .build()
             
@@ -138,7 +138,7 @@ class WidgetUpdateWorker(
     private fun fetchPendingDialogs(client: OkHttpClient): Int {
         return try {
             val request = Request.Builder()
-                .url("http://100.109.236.61:8080/api/agent-dialogs")
+                .url("http://100.102.101.72:8082/api/agent-dialogs")
                 .get()
                 .build()
             
@@ -158,7 +158,7 @@ class WidgetUpdateWorker(
     private fun fetchRunningAgents(client: OkHttpClient): Int {
         return try {
             val request = Request.Builder()
-                .url("http://100.109.236.61:4001/api/cli-agents")
+                .url("http://100.102.101.72:4001/api/cli-agents")
                 .get()
                 .build()
             

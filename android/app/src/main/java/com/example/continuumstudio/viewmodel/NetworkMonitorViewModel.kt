@@ -63,7 +63,7 @@ class NetworkMonitorViewModel(application: Application) : AndroidViewModel(appli
     
     private val measurementHistory = mutableListOf<NetworkMeasurement>()
     
-    private val _serverUrl = MutableStateFlow("http://100.109.236.61:8080")
+    private val _serverUrl = MutableStateFlow("http://100.102.101.72:8082")
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
     
     private val _currentState = MutableStateFlow(CurrentNetworkState())

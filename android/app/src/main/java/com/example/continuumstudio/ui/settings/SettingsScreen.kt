@@ -77,7 +77,7 @@ fun SettingsScreen(
                     label = "Dialog Server URL",
                     value = uiState.dialogServerUrl,
                     onValueChange = { viewModel.updateDialogServerUrl(it) },
-                    placeholder = "http://100.109.236.61:8080"
+                    placeholder = "http://100.102.101.72:8082"
                 )
             }
             
@@ -86,7 +86,7 @@ fun SettingsScreen(
                     label = "CLI Agents Server URL",
                     value = uiState.cliAgentsServerUrl,
                     onValueChange = { viewModel.updateCliAgentsServerUrl(it) },
-                    placeholder = "http://100.109.236.61:4001"
+                    placeholder = "http://100.102.101.72:4001"
                 )
             }
             
