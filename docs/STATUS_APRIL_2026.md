@@ -106,16 +106,25 @@ Continuum Studio continues active development. This month focused on performance
 
 ## Known TODOs
 
-| Location | Description | Priority |
-|----------|-------------|----------|
-| `main.rs:725` | Detect system theme preference | Low |
-| `main.rs:2766` | Add delete profile to Core API | Medium |
-| `main.rs:4491` | Integrate agent tracking from task queue widget | High |
-| `cli_agents.rs:770` | Fetch full agent details for each ID | Medium |
+| Location | Description | Priority | Status |
+|----------|-------------|----------|--------|
+| `main.rs:725` | Detect system theme preference | Low | ✅ Resolved |
+| `main.rs:2766` | Add delete profile to Core API | Medium | Open |
+| `main.rs:4491` | Integrate agent tracking from task queue widget | High | Open |
+| `cli_agents.rs:770` | Fetch full agent details for each ID | Medium | Open |
+| `DialogScreen.kt:1245` | Handle link click in Android | Low | ✅ Resolved |
 
 ## Technical Debt
 
-**Type Duplication**: `task_queue_client.rs` and `widgets/task_queue.rs` both define Priority, TaskStatus, Task, QueueStats. Widget should import from client.
+~~**Type Duplication**: `task_queue_client.rs` and `widgets/task_queue.rs` both define Priority, TaskStatus, Task, QueueStats.~~ ✅ **Resolved** - Widget now imports from client module.
+
+## Recent Code Quality Session (April 7)
+
+- Fixed `view_for_window` unwrap pattern (main.rs)
+- Added proper error handling for diagram path conversion
+- Fixed awkward `is_err()/unwrap()` pattern in services.rs
+- Added link click handler to Android QuickLinkRow
+- System theme detection via dark-light crate
 
 ## Related Documentation
 
@@ -126,6 +135,6 @@ Continuum Studio continues active development. This month focused on performance
 ## Next Steps
 
 1. Complete agent tracking integration (main.rs TODO)
-2. Add system theme detection (dark-light crate)
-3. Consolidate duplicated types
+2. Add delete profile to Core API
+3. Fetch full agent details on load
 4. Continue Android enhancements
