@@ -176,3 +176,142 @@ pub fn init_logger(level: LevelFilter) -> LogBuffer {
     
     buffer
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_buffer_new() {
+        let buffer = LogBuffer::new();
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn test_log_buffer_push_and_entries() {
+        let buffer = LogBuffer::new();
+        
+        buffer.push(LogEntry {
+            timestamp: SystemTime::now(),
+            level: Level::Info,
+            target: "test".to_string(),
+            message: "Hello".to_string(),
+        });
+        
+        assert_eq!(buffer.len(), 1);
+        assert!(!buffer.is_empty());
+        
+        let entries = buffer.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, "Hello");
+    }
+
+    #[test]
+    fn test_log_buffer_clear() {
+        let buffer = LogBuffer::new();
+        
+        buffer.push(LogEntry {
+            timestamp: SystemTime::now(),
+            level: Level::Info,
+            target: "test".to_string(),
+            message: "Hello".to_string(),
+        });
+        
+        assert_eq!(buffer.len(), 1);
+        buffer.clear();
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_log_buffer_max_entries() {
+        let buffer = LogBuffer::new();
+        
+        for i in 0..MAX_LOG_ENTRIES + 100 {
+            buffer.push(LogEntry {
+                timestamp: SystemTime::now(),
+                level: Level::Info,
+                target: "test".to_string(),
+                message: format!("Message {}", i),
+            });
+        }
+        
+        assert_eq!(buffer.len(), MAX_LOG_ENTRIES);
+        let entries = buffer.entries();
+        assert_eq!(entries[0].message, "Message 100");
+    }
+
+    #[test]
+    fn test_log_buffer_level_filter() {
+        let buffer = LogBuffer::new();
+        
+        buffer.push(LogEntry {
+            timestamp: SystemTime::now(),
+            level: Level::Error,
+            target: "test".to_string(),
+            message: "Error".to_string(),
+        });
+        buffer.push(LogEntry {
+            timestamp: SystemTime::now(),
+            level: Level::Warn,
+            target: "test".to_string(),
+            message: "Warning".to_string(),
+        });
+        buffer.push(LogEntry {
+            timestamp: SystemTime::now(),
+            level: Level::Info,
+            target: "test".to_string(),
+            message: "Info".to_string(),
+        });
+        buffer.push(LogEntry {
+            timestamp: SystemTime::now(),
+            level: Level::Debug,
+            target: "test".to_string(),
+            message: "Debug".to_string(),
+        });
+        
+        let filtered = buffer.entries_filtered(Level::Warn);
+        assert_eq!(filtered.len(), 2);
+        
+        let filtered = buffer.entries_filtered(Level::Info);
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn test_log_entry_format() {
+        let entry = LogEntry {
+            timestamp: SystemTime::UNIX_EPOCH,
+            level: Level::Info,
+            target: "mymodule".to_string(),
+            message: "Test message".to_string(),
+        };
+        
+        let formatted = entry.format();
+        assert!(formatted.contains("INFO"));
+        assert!(formatted.contains("mymodule"));
+        assert!(formatted.contains("Test message"));
+    }
+
+    #[test]
+    fn test_format_all() {
+        let buffer = LogBuffer::new();
+        
+        buffer.push(LogEntry {
+            timestamp: SystemTime::UNIX_EPOCH,
+            level: Level::Info,
+            target: "test".to_string(),
+            message: "First".to_string(),
+        });
+        buffer.push(LogEntry {
+            timestamp: SystemTime::UNIX_EPOCH,
+            level: Level::Error,
+            target: "test".to_string(),
+            message: "Second".to_string(),
+        });
+        
+        let all = buffer.format_all();
+        assert!(all.contains("First"));
+        assert!(all.contains("Second"));
+        assert!(all.contains("\n"));
+    }
+}
