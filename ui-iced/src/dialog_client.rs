@@ -385,7 +385,7 @@ impl DialogClient {
             .as_str()
             .ok_or_else(|| "Missing new_mode in response".to_string())?;
         
-        Ok(OrchestratorMode::from_str(new_mode))
+        Ok(new_mode.parse().unwrap())
     }
 
     /// Get detailed orchestrator mode info
@@ -413,7 +413,7 @@ impl DialogClient {
             serde_json::from_str(&result).map_err(|e| format!("Failed to parse info: {}", e))?;
 
         Ok(OrchestratorModeInfo {
-            mode: OrchestratorMode::from_str(json["mode"].as_str().unwrap_or("user_active")),
+            mode: json["mode"].as_str().unwrap_or("user_active").parse().unwrap(),
             since_secs: json["since_secs"].as_u64().unwrap_or(0),
             inactivity_timeout_secs: json["inactivity_timeout_secs"].as_u64().unwrap_or(300),
             spectator_claim_timeout_secs: json["spectator_claim_timeout_secs"].as_u64().unwrap_or(30),

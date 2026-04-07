@@ -12018,7 +12018,7 @@ fn handle_orchestrator_message(
                     use continuum_studio_iced::dialog_client::DialogClient;
                     let mut client = DialogClient::new();
                     if client.connect().await.is_ok() {
-                        match client.set_orchestrator_mode(OrchestratorMode::from_str(&mode_str)).await {
+                        match client.set_orchestrator_mode(mode_str.parse().unwrap()).await {
                             Ok(new_mode) => Ok(new_mode),
                             Err(e) => Err(e),
                         }
@@ -12268,7 +12268,7 @@ fn handle_orchestrator_message(
                         use continuum_studio_iced::dialog_client::DialogClient;
                         let mut client = DialogClient::new();
                         if client.connect().await.is_ok() {
-                            match client.set_orchestrator_mode(OrchestratorMode::from_str(&mode_str)).await {
+                            match client.set_orchestrator_mode(mode_str.parse().unwrap()).await {
                                 Ok(new_mode) => Ok(new_mode),
                                 Err(e) => Err(e),
                             }
