@@ -76,6 +76,7 @@ Features:
 - VS Code theme compatibility
 - Self-update system
 - Settings management
+- **System theme detection** - XDG Desktop Portal integration for automatic dark/light mode
 - **Diagram rendering** - Mermaid and D2 via CLI tools
 - **Full offline mode** - Operation queue with auto-sync
 - **Orchestrator mode** - Decision engine for automated dialog handling
@@ -83,7 +84,10 @@ Features:
   - Preset/snippet system for prompt templates
   - Batch launch across workspaces
   - Dialog inbox for worker agent responses
+- **Parked Agents** - Monitor and assign tasks to idle agents
+- **Subagents Panel** - Terminal command monitoring via D-Bus
 - **Task Queue** - Synapsix integration for persistent task management
+- **Agent Coordination** - Multi-agent conflict resolution and context sharing
 - **XX-Zones** - Deterministic window positioning (Wayland protocol prep)
 - **Profiling** - Performance timing spans with threshold logging
 - **Activity Feed** - Real-time event streaming from agents
