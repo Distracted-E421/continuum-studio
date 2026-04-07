@@ -1240,3 +1240,26 @@ Extended prompt preview functionality to the batch launch form:
 - 2 additional tests (`test_toggle_batch_preview`, `test_copy_batch_prompt_task`)
 
 Committed in `ad6870e`.
+
+### Toast Notification System
+
+Added ephemeral toast notifications for user feedback:
+
+**Types:**
+- `Toast` struct: message, level, shown_at timestamp
+- `ToastLevel` enum: Success (green), Info (blue), Warning (orange), Error (red)
+
+**Messages:**
+- `ShowToast(String, ToastLevel)` - Display a toast
+- `DismissToast` - Hide the current toast
+
+**Features:**
+- Auto-dismiss after 3 seconds via subscription
+- Bottom-center positioning
+- Color-coded with icons per level
+- Manual dismiss button
+
+**Integration:**
+- Clipboard copy now shows success/error toast instead of just logging
+
+Committed in `086b498`.
