@@ -745,13 +745,13 @@ Complete task management widget with multiple panels.
 
 ### Known TODOs
 
-| Location | Description | Priority | Effort |
-|----------|-------------|----------|--------|
-| `main.rs:725` | Detect system theme preference | Low | S - Add dark-light crate |
-| `main.rs:2767` | Add delete profile to Core API | Medium | M - Elixir + Rust changes |
-| `main.rs:4492` | Integrate agent tracking from task queue | High | L - WebSocket state sync |
-| `cli_agents.rs:770` | Fetch full agent details for each ID | Medium | S - HTTP call in handler |
-| `DialogScreen.kt:1245` | Handle link click in Android | Low | S - Add click handler |
+| Location | Description | Priority | Effort | Status |
+|----------|-------------|----------|--------|--------|
+| `main.rs:725` | Detect system theme preference | Low | S | ✅ Resolved - dark-light crate added |
+| `main.rs:2767` | Add delete profile to Core API | Medium | M - Elixir + Rust changes | Open |
+| `main.rs:4492` | Integrate agent tracking from task queue | High | L - WebSocket state sync | Open |
+| `cli_agents.rs:770` | Fetch full agent details for each ID | Medium | S - HTTP call in handler | Open |
+| `DialogScreen.kt:1245` | Handle link click in Android | Low | S | ✅ Resolved - Added LocalUriHandler |
 
 **Size Legend:** S = Small (< 1 hour), M = Medium (1-4 hours), L = Large (> 4 hours)
 
@@ -1146,3 +1146,23 @@ if !mix_available { ... }
 - All 55 tests pass
 - No new clippy warnings introduced
 - Changes committed in `9cd64b1` and `701368e`
+
+### Android Fix (DialogScreen.kt)
+
+Resolved the link click TODO by adding `LocalUriHandler` integration:
+
+```kotlin
+// Before: Empty click handler
+.clickable { /* TODO: Handle link click */ }
+
+// After: Opens URL in browser
+val uriHandler = LocalUriHandler.current
+.clickable { uriHandler.openUri(url) }
+```
+
+Updated `QuickLinkRow` composable to accept a `url` parameter and linked the quick access buttons to actual URLs:
+- Web Interface → https://dialog.datapunk.dev
+- Source Code → https://codeberg.org/Distracted/continuum-studio
+- Documentation → https://codeberg.org/Distracted/continuum-studio/wiki
+
+Committed in `d83f245`.
