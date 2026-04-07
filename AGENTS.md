@@ -749,7 +749,7 @@ Complete task management widget with multiple panels.
 |----------|-------------|----------|--------|--------|
 | `main.rs:725` | Detect system theme preference | Low | S | ✅ Resolved - dark-light crate added |
 | `main.rs:2767` | Add delete profile to Core API | Medium | M - Elixir + Rust changes | Open |
-| `main.rs:4492` | Integrate agent tracking from task queue | High | L - WebSocket state sync | Open |
+| `main.rs:4502` | Integrate agent tracking from task queue | High | L - WebSocket state sync | ✅ Resolved - Using coordinator_agents and cli_agents_state |
 | `cli_agents.rs:770` | Fetch full agent details for each ID | Medium | S - HTTP call in handler | ✅ Resolved - Added FetchAgentDetails task |
 | `DialogScreen.kt:1245` | Handle link click in Android | Low | S | ✅ Resolved - Added LocalUriHandler |
 
