@@ -326,3 +326,137 @@ impl Default for CoordinatorHttpClient {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_agent_type_icon() {
+        assert_eq!(AgentType::SessionAgent.icon(), "🖥️");
+        assert_eq!(AgentType::SubAgent.icon(), "🔧");
+        assert_eq!(AgentType::Unknown.icon(), "❓");
+    }
+
+    #[test]
+    fn test_agent_type_label() {
+        assert_eq!(AgentType::SessionAgent.label(), "Session");
+        assert_eq!(AgentType::SubAgent.label(), "Sub-agent");
+        assert_eq!(AgentType::Unknown.label(), "Unknown");
+    }
+
+    #[test]
+    fn test_agent_status_icon() {
+        assert_eq!(AgentStatus::Active.icon(), "🟢");
+        assert_eq!(AgentStatus::Idle.icon(), "🟡");
+        assert_eq!(AgentStatus::Waiting.icon(), "🔵");
+        assert_eq!(AgentStatus::Completed.icon(), "✅");
+        assert_eq!(AgentStatus::Disconnected.icon(), "🔴");
+        assert_eq!(AgentStatus::Unknown.icon(), "⚪");
+    }
+
+    #[test]
+    fn test_agent_status_label() {
+        assert_eq!(AgentStatus::Active.label(), "active");
+        assert_eq!(AgentStatus::Idle.label(), "idle");
+        assert_eq!(AgentStatus::Waiting.label(), "waiting");
+        assert_eq!(AgentStatus::Completed.label(), "completed");
+        assert_eq!(AgentStatus::Disconnected.label(), "disconnected");
+        assert_eq!(AgentStatus::Unknown.label(), "unknown");
+    }
+
+    #[test]
+    fn test_agent_type_serialization() {
+        let json = serde_json::to_string(&AgentType::SessionAgent).unwrap();
+        assert_eq!(json, "\"session_agent\"");
+        
+        let json = serde_json::to_string(&AgentType::SubAgent).unwrap();
+        assert_eq!(json, "\"sub_agent\"");
+    }
+
+    #[test]
+    fn test_agent_type_deserialization() {
+        let t: AgentType = serde_json::from_str("\"session_agent\"").unwrap();
+        assert_eq!(t, AgentType::SessionAgent);
+        
+        let t: AgentType = serde_json::from_str("\"sub_agent\"").unwrap();
+        assert_eq!(t, AgentType::SubAgent);
+        
+        // Unknown values should deserialize to Unknown
+        let t: AgentType = serde_json::from_str("\"something_else\"").unwrap();
+        assert_eq!(t, AgentType::Unknown);
+    }
+
+    #[test]
+    fn test_agent_focus_default() {
+        let focus = AgentFocus::default();
+        assert!(focus.repos.is_empty());
+        assert!(focus.files.is_empty());
+        assert!(focus.area.is_none());
+        assert!(focus.description.is_none());
+    }
+
+    #[test]
+    fn test_agent_serialization() {
+        let agent = Agent {
+            id: "test-agent-123".to_string(),
+            agent_type: AgentType::SessionAgent,
+            parent_id: None,
+            status: AgentStatus::Active,
+            current_task_id: Some("task-456".to_string()),
+            focus: AgentFocus {
+                repos: vec!["continuum-studio".to_string()],
+                files: vec!["main.rs".to_string()],
+                area: Some("UI".to_string()),
+                description: Some("Working on tests".to_string()),
+            },
+            workspace: Some("/home/user/project".to_string()),
+            session_id: Some("session-789".to_string()),
+            capabilities: vec!["fast_shell".to_string()],
+            registered_at: Some("2026-04-07T12:00:00Z".to_string()),
+            last_activity: Some("2026-04-07T12:30:00Z".to_string()),
+            file_claims: vec!["src/main.rs".to_string()],
+        };
+        
+        let json = serde_json::to_string(&agent);
+        assert!(json.is_ok());
+        
+        let deserialized: Result<Agent, _> = serde_json::from_str(&json.unwrap());
+        assert!(deserialized.is_ok());
+        
+        let restored = deserialized.unwrap();
+        assert_eq!(restored.id, "test-agent-123");
+        assert_eq!(restored.agent_type, AgentType::SessionAgent);
+        assert_eq!(restored.status, AgentStatus::Active);
+    }
+
+    #[test]
+    fn test_conflict_serialization() {
+        let conflict = Conflict {
+            id: "conflict-001".to_string(),
+            conflict_type: "file_claim".to_string(),
+            agents: vec!["agent-1".to_string(), "agent-2".to_string()],
+            resource: "src/main.rs".to_string(),
+            detected_at: "2026-04-07T12:00:00Z".to_string(),
+            resolved: false,
+            resolution: None,
+        };
+        
+        let json = serde_json::to_string(&conflict);
+        assert!(json.is_ok());
+        
+        let deserialized: Result<Conflict, _> = serde_json::from_str(&json.unwrap());
+        assert!(deserialized.is_ok());
+        
+        let restored = deserialized.unwrap();
+        assert_eq!(restored.id, "conflict-001");
+        assert_eq!(restored.agents.len(), 2);
+        assert!(!restored.resolved);
+    }
+
+    #[test]
+    fn test_coordinator_http_client_default() {
+        let client = CoordinatorHttpClient::default();
+        assert!(!client.base_url.is_empty());
+    }
+}
