@@ -504,3 +504,250 @@ Full preset and snippet system for agent prompts:
 | `ui-iced/src/cli_agents.rs` | +363 lines - Enhanced preset selector, prompt preview |
 | `ui-iced/src/orchestrator_panel.rs` | +200 lines - Confirmation, history, stats, tests |
 | `ui-iced/src/main.rs` | +150 lines - WebSocket handler, keyboard shortcuts |
+
+## April 2026 Documentation Audit
+
+### Recent Commits (March 17 - April 7, 2026)
+
+| Commit | Description |
+|--------|-------------|
+| `4a97079` | feat(android): Context-aware FAB and radial menu |
+| `5003e61` | feat(android): Add WorkManager for periodic widget updates |
+| `c60b856` | perf(ui): Add lazy WebSocket connections and memory stats tracking |
+| `2318937` | feat(ui): Complete orchestrator panel integration |
+| `d1b73fe` | refactor: migrate to flake-parts architecture |
+| `1df1463` | perf(ui): Add profiling module for performance monitoring (P2) |
+| `bfc6925` | perf(ui): Implement P1 optimizations from performance audit |
+| `bfc4c56` | docs: Add desktop performance audit (CS-PERF-001) |
+
+### Undocumented Modules (Now Documented)
+
+#### Subagents Panel (`ui-iced/src/subagents.rs`)
+
+Real-time sub-agent monitoring via synapsix-terminal-monitor D-Bus service.
+
+**Core Types:**
+
+- `SubagentPanelState` - Panel state with service availability, stats, command history
+- `CommandRecord` - Terminal command with timing, exit code, error detection
+- `MonitorStats` - Aggregate stats (total/active/failed commands, error rate)
+- `ErrorDetection` - Detected error patterns with category, suggestion, confidence
+- `AgentCodeName` - NATO phonetic + color code names (e.g., "Alpha-Red")
+- `CodeNameRegistry` - Hash-based code name assignment for terminals
+
+**D-Bus Integration:**
+
+| Constant | Value |
+|----------|-------|
+| `DBUS_SERVICE` | `sh.synapsix.TerminalMonitor` |
+| `DBUS_PATH` | `/sh/synapsix/TerminalMonitor` |
+| `DBUS_INTERFACE` | `sh.synapsix.TerminalMonitor1` |
+
+**D-Bus Methods (via `dbus_client` module):**
+
+- `get_stats()` - Monitor statistics
+- `get_recent()` - Recent commands
+- `get_subagents()` - Sub-agent commands specifically
+- `get_running()` - Currently running commands
+- `check_service()` - Service availability
+
+#### XX-Zones Window Positioning (`ui-iced/src/zones.rs`)
+
+Deterministic window positioning using logical zones (Phase 1: Iced native APIs).
+
+**Core Types:**
+
+- `ZoneManager` - Tracks windows, positions, and layouts
+- `ZoneLayout` - Presets: MainWithSidePanel, SplitHorizontal/Vertical, ThreeColumn, Dashboard, FreeForm
+- `Zone` - Logical screen region with handle, position, dimensions
+- `WindowPlacement` - Window position within a zone
+- `ZoneSnapshot` - JSON-serializable state for Phosphor capture
+
+**Layout Methods:**
+
+- `layout_main_with_side_panel()` - Main window + 500px side panel
+- `layout_dashboard()` - Centered main (65%) + side panel
+- `calculate_layout()` → `LayoutApplication` with main/side_panel configs
+- `export_snapshot()` - Write to `/tmp/continuum-studio-zones.json`
+
+**Future:** Upgrade to xx-zones Wayland protocol when compositor support available.
+
+#### Task Queue Client (`ui-iced/src/task_queue_client.rs`)
+
+HTTP and WebSocket client for Synapsix persistent task queue.
+
+**API Endpoints:**
+
+| Constant | Value |
+|----------|-------|
+| `DEFAULT_API_URL` | `http://localhost:4001/api/tasks` |
+| `DEFAULT_WS_URL` | `ws://localhost:4001/ws/tasks` |
+
+**Core Types:**
+
+- `Task` - Task with id, content, priority, status, creator info
+- `Priority` - Critical, High, Medium, Low, Backlog (with emoji)
+- `TaskStatus` - Pending, Claimed, InProgress, Completed, Cancelled
+- `Creator` - User, Agent, Cli, Unknown
+- `QueueStats` - Count by status
+
+**HTTP Methods (`TaskQueueHttpClient`):**
+
+- `add_task()` / `add_task_with_creator()` - Create task
+- `update_priority()`, `update_notes()` - Modify task
+- `start_task()`, `complete_task()`, `cancel_task()` - State transitions
+- `delete_task()` - Remove task
+- `get_subtasks()`, `add_subtask()` - Hierarchical tasks
+- `add_blocker()`, `remove_blocker()`, `get_blockers()` - Dependencies
+
+**WebSocket Events (`TaskQueueEvent`):**
+
+- `Connected`, `Disconnected`
+- `InitialState { tasks, stats, current_task }`
+- `TaskAdded`, `TaskUpdated`, `TaskStarted`, `TaskCompleted`, `TaskCancelled`
+- `TaskClaimed { task, agent_id }`, `TaskReleased`, `TaskRemoved`
+
+#### Coordinator Client (`ui-iced/src/coordinator_client.rs`)
+
+HTTP client for Agent Coordinator service (multi-agent conflict resolution).
+
+**API Endpoint:** `http://localhost:4001/api/coordination/agents`
+
+**Core Types:**
+
+- `Agent` - Registered agent with type, status, focus, capabilities, file claims
+- `AgentType` - SessionAgent, SubAgent
+- `AgentStatus` - Active, Idle, Waiting, Completed, Disconnected
+- `AgentFocus` - repos, files, area, description
+- `Conflict` - Detected conflict between agents
+
+**HTTP Methods (`CoordinatorHttpClient`):**
+
+- `list_agents()`, `get_agent()` - Query agents
+- `register_agent()` - Register new agent
+- `set_focus()` - Update agent focus
+- `heartbeat()` - Keep-alive
+- `get_conflicts()`, `resolve_conflict()` - Conflict management
+- `get_context()` - Get coordination context for an agent
+- `suggest_agent()` - Suggest agent for a task
+
+#### Feed Client (`ui-iced/src/feed_client.rs`)
+
+Activity Feed HTTP/WebSocket client for real-time updates.
+
+**API Endpoints:**
+
+| Constant | Value |
+|----------|-------|
+| `DEFAULT_API_URL` | `http://localhost:4001/api/feed` |
+| `DEFAULT_WS_URL` | `ws://localhost:4001/ws/feed` |
+
+**Core Types:**
+
+- `FeedEntry` - Activity entry with source, event_type, title, body, links, metadata
+- `FeedSource` - Git, FileChange, Agent, TaskQueue, Nesy, System
+- `FeedLink` - Hyperlink in entry
+- `FeedStats` - Entry counts by source/type
+
+**HTTP Methods (`FeedHttpClient`):**
+
+- `post_update()` - Post agent NL update
+- `get_summary()` - Get feed summary for context injection
+- `get_stats()` - Feed statistics
+- `trigger_git_poll()` - Trigger git repository poll
+
+#### Profiling Module (`ui-iced/src/profiling.rs`)
+
+Lightweight performance profiling for timing spans.
+
+**Usage:**
+
+```rust
+use continuum_studio_iced::profiling::ProfileSpan;
+
+// Default 16ms threshold (one frame at 60 FPS)
+let _span = ProfileSpan::frame("render_view");
+
+// 8ms threshold (120 FPS)
+let _span = ProfileSpan::fast("hot_path");
+
+// Always log
+let _span = ProfileSpan::always("debug_timing");
+
+// Custom threshold
+let _span = ProfileSpan::new("operation", 50);
+```
+
+**Macros:**
+
+- `profile_span!("name")` - Frame threshold (16ms)
+- `profile_span!("name", 100)` - Custom threshold
+- `profile_always!("name")` - Always log
+
+**Enable:** `RUST_LOG=continuum_studio_iced::profiling=debug`
+
+#### TaskQueue Widget (`ui-iced/src/widgets/task_queue.rs`)
+
+Complete task management widget with multiple panels.
+
+**Widget Sizes:**
+
+- `Compact` - Badge with current task
+- `Standard` - Current + pending list
+- `Full` / `Extended` - Full features with quick-add
+
+**Panel Layouts:**
+
+- `Single(panel)` - One panel
+- `SideBySide(left, right)` - Two columns
+- `Stacked(top, bottom)` - Two rows
+- `ThreeColumn(left, center, right)` - Three panels
+
+**Active Panels:** Tasks, Agents, History
+
+**Features:**
+
+- Real-time WebSocket updates
+- Agent tracking with status icons
+- Task history with duration
+- Quick-add input
+- Priority sorting
+
+### Updated Key Files Table
+
+| Feature | File |
+|---------|------|
+| Diagram rendering | `ui-iced/src/widgets/diagram.rs` |
+| Offline mode | `ui-iced/src/offline.rs` |
+| CLI agents | `ui-iced/src/cli_agents.rs` |
+| CLI agents client | `ui-iced/src/cli_agents_client.rs` |
+| Decision engine | `ui-iced/src/decision_engine.rs` |
+| Orchestrator panel | `ui-iced/src/orchestrator_panel.rs` |
+| Dialog client | `ui-iced/src/dialog_client.rs` |
+| Module exports | `ui-iced/src/lib.rs` |
+| Parked agents panel | `ui-iced/src/parked_agents.rs` |
+| Parked agents client | `ui-iced/src/parked_agents_client.rs` |
+| Activity feed | `ui-iced/src/activity_feed.rs` |
+| Activity stream client | `ui-iced/src/activity_stream_client.rs` |
+| **Subagents panel** | `ui-iced/src/subagents.rs` |
+| **XX-Zones positioning** | `ui-iced/src/zones.rs` |
+| **Task queue client** | `ui-iced/src/task_queue_client.rs` |
+| **Coordinator client** | `ui-iced/src/coordinator_client.rs` |
+| **Feed client** | `ui-iced/src/feed_client.rs` |
+| **Profiling** | `ui-iced/src/profiling.rs` |
+| **TaskQueue widget** | `ui-iced/src/widgets/task_queue.rs` |
+
+### Known TODOs
+
+| Location | Description | Priority |
+|----------|-------------|----------|
+| `main.rs:725` | Detect system theme preference | Low |
+| `main.rs:2766` | Add delete profile to Core API | Medium |
+| `main.rs:4491` | Integrate actual agent tracking from task queue widget | High |
+| `cli_agents.rs:770` | Fetch full agent details for each ID | Medium |
+
+### Crates Directory
+
+Only one shared crate exists:
+
+- `crates/synapsix-theme/` - Shared theming for COSMIC/VS Code integration
