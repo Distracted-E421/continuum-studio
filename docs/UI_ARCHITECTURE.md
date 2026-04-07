@@ -1,15 +1,17 @@
 # Continuum Studio UI Architecture
 
-This document describes the architecture of the Continuum Studio User Interface, built with Rust and egui.
+This document describes the architecture of the Continuum Studio User Interface, built with Rust and iced 0.14.
+
+> **Note:** The UI migrated from egui to iced in early 2026. Legacy egui code is archived in `ui/`.
 
 ## Overview
 
-The UI is designed as a **modular widget system** that communicates with the Studio Core (Elixir) backend via IPC. Key design principles:
+The UI follows iced's **Elm architecture** (Model-View-Update) with COSMIC desktop styling. Key design principles:
 
-1. **Widget Independence**: Each widget is self-contained and communicates via events
-2. **Theme Consistency**: VS Code-compatible theming across all components
-3. **Platform Native**: Wayland/X11 support via eframe
-4. **Test-Driven**: Built-in test harness for UI development
+1. **Component Independence**: Each component manages its own state via messages
+2. **Theme Consistency**: COSMIC-inspired theming with VS Code compatibility
+3. **Platform Native**: Wayland-first with GPU acceleration via wgpu
+4. **Subscription-Based Updates**: Async operations via iced subscriptions
 
 ## Architecture Layers
 
@@ -17,22 +19,22 @@ The UI is designed as a **modular widget system** that communicates with the Stu
 ┌─────────────────────────────────────────────────────────────┐
 │                    Presentation Layer                       │
 │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │
-│  │ TabBar  │ │ Diagram │ │Terminal │ │CodeView │ ...      │
+│  │Sessions │ │Orchestr.│ │CLI Agents│ │Settings │ ...      │
 │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘          │
 │       └───────────┴───────────┴───────────┘                │
 │                           │                                 │
 ├───────────────────────────┼─────────────────────────────────┤
-│                    Widget Runtime                           │
+│                    iced Runtime                             │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │                  Event Bus                            │  │
-│  │  WidgetEvent::AgentMessage, DiagramNodeSelected, ... │  │
+│  │   Message Pipeline (update → view → subscription)    │  │
+│  │   ContinuumStudio struct + Message enum              │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                           │                                 │
 ├───────────────────────────┼─────────────────────────────────┤
-│                    IPC Layer                                │
+│                    Communication Layer                      │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐          │
-│  │ Unix Socket │ │ D-Bus/CLI   │ │ WebSocket   │          │
-│  │ (Core)      │ │ (Dialog)    │ │ (Future)    │          │
+│  │ Unix Socket │ │ D-Bus       │ │ WebSocket   │          │
+│  │ (Core IPC)  │ │ (Dialog)    │ │ (Real-time) │          │
 │  └─────────────┘ └─────────────┘ └─────────────┘          │
 │                           │                                 │
 └───────────────────────────┼─────────────────────────────────┘
@@ -46,242 +48,306 @@ The UI is designed as a **modular widget system** that communicates with the Stu
 ## Module Structure
 
 ```
-continuum-studio-ui/
-├── src/
-│   ├── main.rs           # Application entry point
-│   ├── lib.rs            # Library exports
-│   ├── theme/
-│   │   └── mod.rs        # VS Code-compatible theming
-│   ├── widgets/
-│   │   ├── mod.rs        # Widget trait & manager
-│   │   ├── tab_bar.rs    # Tabbed interface
-│   │   ├── diagram.rs    # D2 diagram viewer
-│   │   ├── code_view.rs  # Syntax-highlighted code
-│   │   └── terminal.rs   # ANSI terminal output
-│   ├── ipc/
-│   │   ├── mod.rs        # IPC module
-│   │   └── dbus.rs       # Dialog daemon client
-│   ├── approval/
-│   │   └── mod.rs        # User approval workflows
-│   └── test_harness.rs   # Mock server for testing
-└── Cargo.toml
+ui-iced/src/
+├── main.rs               # Application entry, ContinuumStudio struct
+├── lib.rs                # Library exports
+├── theme/                # COSMIC/VS Code theming
+│   ├── mod.rs            # AppColors, SemanticColors
+│   ├── cosmic.rs         # COSMIC presets
+│   └── vscode.rs         # VS Code theme parsing
+├── widgets/              # Reusable components
+│   ├── mod.rs            # Widget exports
+│   ├── diagram.rs        # Mermaid/D2 rendering
+│   ├── task_queue.rs     # Task management widget
+│   ├── cosmic_style.rs   # COSMIC button/container styles
+│   └── helpers.rs        # Layout utilities
+├── core.rs               # Elixir IPC client
+├── dialog_client.rs      # D-Bus dialog integration
+├── cli_agents.rs         # CLI agent management UI
+├── cli_agents_client.rs  # Agent HTTP/WebSocket client
+├── orchestrator_panel.rs # Mode control UI
+├── decision_engine.rs    # Auto dialog handling
+├── task_queue_client.rs  # Task queue HTTP/WebSocket
+├── activity_feed.rs      # Real-time event display
+├── monitoring.rs         # Session metrics
+├── offline.rs            # Offline operation queue
+├── profiling.rs          # Performance timing
+├── sessions.rs           # Cursor session tracking
+├── settings.rs           # App configuration
+├── subagents.rs          # Sub-agent monitoring
+├── zones.rs              # Window positioning
+└── updater.rs            # Self-update system
 ```
 
-## Widget System
+## Elm Architecture
 
-### Widget Trait
+### Model (ContinuumStudio)
 
-All widgets implement the `Widget` trait:
+The main application state:
 
 ```rust
-pub trait Widget {
-    /// Render the widget UI
-    fn ui(&mut self, ui: &mut Ui) -> Result<Vec<WidgetEvent>>;
+struct ContinuumStudio {
+    // Navigation
+    current_tab: CursorTab,
     
-    /// Get the widget's display title
-    fn title(&self) -> String;
+    // Theme
+    theme: Theme,
+    colors: AppColors,
     
-    /// Get the widget's unique identifier
-    fn id(&self) -> String;
+    // Core connection
+    core_state: ConnectionState,
+    core_tx: Option<mpsc::Sender<CoreRequest>>,
+    
+    // Component states
+    sessions: Vec<CursorSession>,
+    cli_agents_state: CLIAgentsState,
+    orchestrator_state: OrchestratorPanelState,
+    activity_feed_state: ActivityFeedState,
+    // ... more state
+    
+    // Offline support
+    offline_queue: OfflineQueue,
+    connection_tracker: ConnectionTracker,
 }
 ```
 
-### Available Widgets
+### Messages
 
-| Widget | Description | Key Features |
-|--------|-------------|--------------|
-| `TabBarWidget` | Tabbed container | Closable tabs, drag-reorder, overflow handling |
-| `DiagramWidget` | D2 diagram viewer | Zoom/pan, node selection, live reload |
-| `CodeViewWidget` | Code display | Syntax highlighting, line numbers, selection |
-| `TerminalWidget` | Terminal output | ANSI colors, auto-scroll, history |
-| `AgentStreamWidget` | Agent conversation | Message roles, timestamps, markdown |
-| `HarnessPanelWidget` | Harness status | Start/stop, status indicators |
-
-### Widget Events
-
-Widgets communicate via `WidgetEvent`:
+The central message type:
 
 ```rust
-pub enum WidgetEvent {
-    NavigateTo { file: String, line: Option<usize>, column: Option<usize> },
-    DiagramNodeSelected(String),
-    DiagramNodeStatusChanged { node_id: String, status: NodeStatus },
-    TerminalCommand(String),
-    TerminalOutput(String),
-    CodeSelectionChanged { file: String, start_line: usize, end_line: usize },
-    OpenWidget { widget_type: String, config: serde_json::Value },
-    CloseWidget(String),
-    HarnessStatusUpdate { harness_id: String, status: String },
-    AgentMessage { role: String, content: String },
+enum Message {
+    // Navigation
+    TabSelected(CursorTab),
+    
+    // Core events
+    CoreConnected,
+    CoreDisconnected,
+    CoreResponse(CoreResponse),
+    
+    // Component messages
+    CLIAgent(CLIAgentMessage),
+    Orchestrator(OrchestratorMessage),
+    ActivityFeed(ActivityMessage),
+    // ... more variants
+    
+    // System
+    Tick,
+    KeyboardShortcut(KeyboardShortcut),
 }
 ```
 
-## IPC Architecture
+### Update
 
-### Studio Core Communication
-
-The UI communicates with Studio Core via Unix sockets using ETF-framed messages:
-
-```
-┌────────┬────────────────┐
-│ length │ ETF payload    │
-│ 4 bytes│ variable       │
-└────────┴────────────────┘
-```
-
-**Commands (UI → Core):**
-- `HarnessStart { harness_type: String }`
-- `HarnessStop { harness_type: String }`
-- `StateSet { path: Vec<String>, value: Value }`
-- `AgentMessage { text: String, provider: String }`
-
-**Events (Core → UI):**
-- `HarnessStatus { harness: String, status: String }`
-- `StateChanged { path: Vec<String>, value: Value }`
-- `AgentResponse { content: String, role: String }`
-
-### Dialog Daemon Integration
-
-For user dialogs, the UI uses `continuum-dialog-cli`:
+The central update function:
 
 ```rust
-let mut client = DialogClient::new();
-client.connect()?;
+fn update(&mut self, message: Message) -> Task<Message> {
+    match message {
+        Message::TabSelected(tab) => {
+            self.current_tab = tab;
+            Task::none()
+        }
+        Message::CLIAgent(msg) => {
+            self.cli_agents_state.handle_message(msg)
+        }
+        // ... dispatch to appropriate handlers
+    }
+}
+```
 
-let response = client.show_choice(
-    "Select Option",
-    "Choose an action:",
-    &[
-        ChoiceOption::new("save", "Save Changes"),
-        ChoiceOption::new("discard", "Discard"),
-    ],
-    Some("save"),
-)?;
+### View
+
+Tab-based layout:
+
+```rust
+fn view(&self) -> Element<'_, Message> {
+    let content = match self.current_tab {
+        CursorTab::Dashboard => self.view_dashboard(),
+        CursorTab::Sessions => self.view_sessions(),
+        CursorTab::CLIAgents => view_cli_agents_tab(&self.cli_agents_state),
+        CursorTab::Orchestrator => view_orchestrator_panel(&self.orchestrator_state),
+        // ... more tabs
+    };
+    
+    column![
+        self.view_sidebar(),
+        content
+    ].into()
+}
+```
+
+### Subscriptions
+
+Async event sources:
+
+```rust
+fn subscription(&self) -> Subscription<Message> {
+    Subscription::batch([
+        // Core IPC
+        core_subscription(self.core_rx.clone())
+            .map(Message::CoreResponse),
+        
+        // CLI Agents WebSocket (lazy - only when viewing tab)
+        if self.current_tab == CursorTab::CLIAgents {
+            cli_agents_ws_subscription()
+        } else {
+            Subscription::none()
+        },
+        
+        // Activity feed (always active)
+        activity_feed_subscription(),
+        
+        // Keyboard shortcuts
+        keyboard_shortcut_subscription(),
+    ])
+}
+```
+
+## Communication Patterns
+
+### Core IPC (Unix Socket)
+
+```rust
+// Send request
+core_tx.send(CoreRequest::GetVersions).await?;
+
+// Receive response (via subscription)
+fn handle_core_response(&mut self, response: CoreResponse) -> Task<Message> {
+    match response {
+        CoreResponse::Versions(versions) => {
+            self.versions = versions;
+            Task::none()
+        }
+        // ...
+    }
+}
+```
+
+### D-Bus (Dialog Daemon)
+
+```rust
+let client = DialogClient::new()?;
+
+// Get orchestrator mode
+let mode = client.get_orchestrator_mode().await?;
+
+// Set mode
+client.set_orchestrator_mode(OrchestratorMode::Spectator).await?;
+```
+
+### WebSocket (Real-time Updates)
+
+```rust
+fn spawn_cli_agents_websocket() -> impl Stream<Item = CLIAgentWsEvent> {
+    async_stream::stream! {
+        let url = "ws://localhost:4001/ws/cli-agents";
+        let (ws_stream, _) = connect_async(url).await?;
+        
+        while let Some(msg) = ws_stream.next().await {
+            if let Ok(text) = msg?.into_text() {
+                if let Ok(event) = serde_json::from_str(&text) {
+                    yield event;
+                }
+            }
+        }
+    }
+}
 ```
 
 ## Theme System
 
-Themes are VS Code-compatible, supporting both light and dark modes:
+COSMIC-inspired theming:
 
 ```rust
-pub struct Theme {
-    // Background colors
-    pub bg: Color32,
-    pub bg_secondary: Color32,
-    pub sidebar_bg: Color32,
-    pub activitybar_bg: Color32,
-    pub statusbar_bg: Color32,
+pub struct AppColors {
+    // Backgrounds
+    pub base: Color,
+    pub surface: Color,
+    pub surface_elevated: Color,
     
-    // Foreground colors
-    pub fg: Color32,
-    pub fg_dim: Color32,
-    pub fg_muted: Color32,
+    // Text
+    pub text_primary: Color,
+    pub text_secondary: Color,
+    pub text_disabled: Color,
     
-    // Accent colors
-    pub accent: Color32,
-    pub accent_hover: Color32,
-    pub success: Color32,
-    pub warning: Color32,
-    pub error: Color32,
+    // Semantic
+    pub success: Color,
+    pub warning: Color,
+    pub danger: Color,
+    pub info: Color,
     
-    // Syntax highlighting
-    pub syntax_keyword: Color32,
-    pub syntax_string: Color32,
-    pub syntax_number: Color32,
-    // ... more syntax colors
+    // Accent
+    pub accent: Color,
+    pub accent_hover: Color,
+}
+
+pub enum CosmicThemePreset {
+    Dark,
+    Light,
+    PopOrange,
+    WarmAmber,
+    CoolBlue,
+    Mint,
 }
 ```
 
-Load a VS Code theme:
+## Keyboard Shortcuts
 
 ```rust
-let theme = Theme::from_vscode_file(Path::new("mytheme.json"))
-    .unwrap_or_else(Theme::dark);
+pub enum KeyboardShortcut {
+    SetModeUserActive,    // Ctrl+1
+    SetModeDelegate,      // Ctrl+2
+    SetModeSpectator,     // Ctrl+3
+    SetModeAutonomous,    // Ctrl+4
+    ToggleHistory,        // Ctrl+H
+    RefreshMode,          // Ctrl+R
+    UndoDecision,         // Ctrl+Z
+}
 ```
 
-## Test Harness
+## Performance Considerations
 
-The UI includes a built-in test harness for development:
-
-### Running the Test Harness
-
-```bash
-# Terminal 1: Start the mock server
-cargo run --bin test-harness
-
-# Terminal 2: Start the UI
-cargo run --bin continuum-studio
-```
-
-### Mock Events
-
-The test harness simulates backend events:
+1. **Lazy WebSocket Connections**: Only connect when viewing relevant tabs
+2. **Conditional Polling**: Triage queue polling only when non-empty
+3. **Memory Limits**: Decision history capped at 1000, triage at 100
+4. **Profiling Spans**: Frame-time aware logging for hot paths
 
 ```rust
-harness.send_event(MockEvent::HarnessStatus {
-    harness: "cursor".to_string(),
-    status: "running".to_string(),
-});
-
-harness.send_event(MockEvent::AgentMessage {
-    role: "assistant".to_string(),
-    content: "Task completed successfully!".to_string(),
-});
+// Example profiling usage
+let _span = ProfileSpan::frame("render_view");
+// ... render code
+// Logs if > 16ms (one frame at 60 FPS)
 ```
-
-## KDE/Wayland Considerations
-
-The UI is designed for KDE Plasma with Wayland:
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Wayland Native | ✅ | Via eframe with `wayland` feature |
-| X11 Fallback | ✅ | Via eframe with `x11` feature |
-| HiDPI | ✅ | Automatic scaling |
-| Keyboard Shortcuts | ✅ | Standard egui input handling |
-| System Theme | 🔄 | Future: detect system preference |
-
-### Complexity by Component
-
-| Component | Complexity | Reason |
-|-----------|------------|--------|
-| TabBarWidget | Low | Pure egui, no platform calls |
-| DiagramWidget | Medium | Custom rendering, coordinate math |
-| CodeViewWidget | Medium | Syntax highlighting logic |
-| TerminalWidget | Low | ANSI parsing is self-contained |
-| IPC/Socket | Low | Standard tokio networking |
-| IPC/D-Bus | Low | Via CLI, no direct D-Bus |
-
-## Future Enhancements
-
-1. **Direct D-Bus Integration**: Replace CLI calls with `zbus` proxy
-2. **WebSocket Support**: For remote/browser-based connections
-3. **Plugin System**: Load custom widgets dynamically
-4. **Layout Persistence**: Save/restore widget layouts
-5. **Keyboard Navigation**: Full keyboard control for accessibility
 
 ## Building
 
 ```bash
 # Development
-cargo build
+cd ui-iced && cargo build
 
 # Release
-cargo build --release
+cd ui-iced && cargo build --release
 
-# With specific features
-cargo build --features "wayland"
+# With NixOS (handles library paths)
+./run-gui.sh
 ```
 
 ## Dependencies
 
 | Crate | Purpose |
 |-------|---------|
-| eframe | Native window management |
-| egui | Immediate-mode GUI |
+| iced 0.14 | GUI framework (Elm architecture) |
 | tokio | Async runtime |
+| tokio-tungstenite | WebSocket client |
+| zbus | D-Bus integration |
+| reqwest | HTTP client |
 | serde | Serialization |
-| zbus | D-Bus client (future) |
-| anyhow | Error handling |
-| tracing | Logging |
+| chrono | Time handling |
+| synapsix-theme | Shared COSMIC theming |
 
+## Related Documents
+
+- `AGENTS.md` - Agent memory with module details
+- `docs/PERF-AUDIT-2026-03-17.md` - Performance optimization audit
+- `docs/STATUS_APRIL_2026.md` - Current status
