@@ -794,3 +794,194 @@ ThemePreference::System => {
     }
 }
 ```
+
+## April 7, 2026 - Documentation Continued
+
+### Additional Undocumented Modules (Now Documented)
+
+#### Core IPC Client (`ui-iced/src/core.rs`)
+
+Unix socket client for communicating with the Elixir backend (Studio Core).
+
+**Socket Path:** `/tmp/continuum-studio.sock`
+
+**Core Types:**
+
+- `ReconnectConfig` - Backoff configuration (initial/max delay, heartbeat interval)
+- `ConnectionState` - Disconnected, Connecting, Connected, Reconnecting
+- `CoreRequest` - Outbound commands to Elixir
+- `CoreResponse` - Inbound events from Elixir
+- `CoreClient` - High-level client wrapper
+- `CursorVersion` - Version info with status, era, notes
+- `VersionStatus` - Available, Installed, Running, Downloading
+- `AuthStatus` / `AuthState` / `AuthProfile` - Authentication management
+- `Workspace` / `GitStats` - Workspace tracking with git info
+- `Session` / `VersionStats` / `InstalledVersion` - Version management
+
+**Request Types (`CoreRequest`):**
+
+| Request | Purpose |
+|---------|---------|
+| `GetVersions` | List all versions |
+| `GetInstalled` | List installed only |
+| `LaunchVersion` | Run a Cursor version |
+| `InstallVersion` / `UninstallVersion` | Version management |
+| `BatchUninstallVersions` | Bulk uninstall |
+| `GetDiskUsageAll` | Disk usage stats |
+| `GetSessions` / `GetStats` | Session and version stats |
+| `GetWorkspaces` / `RegisterWorkspace` | Workspace management |
+| `GetAuthStatus` / `GetAuthStatuses` | Auth status queries |
+| `ExtractAuth` / `ApplyAuth` / `ListProfiles` | Auth profile management |
+| `Ping` | Health check |
+
+**Connection Function:**
+
+```rust
+let (request_tx, response_rx, state_rx) = spawn_core_connection(socket_path);
+```
+
+#### Session Monitoring (`ui-iced/src/monitoring.rs`)
+
+Real-time metrics collection for running Cursor sessions via `/proc` filesystem.
+
+**Core Types:**
+
+- `SessionMetrics` - Point-in-time metrics (CPU, memory, threads, FDs, health)
+- `HealthStatus` - Healthy, Warning, Critical, Unknown (with RGB colors)
+- `SessionHistory` - Rolling history (60 data points) with VecDeque buffers
+- `SessionMonitor` - Collector with CPU delta calculation
+- `DashboardData` - Aggregate stats for UI display
+
+**Metrics Collected:**
+
+| Metric | Source | Thresholds |
+|--------|--------|------------|
+| CPU % | `/proc/[pid]/stat` | >50% Warning, >90% Critical |
+| Memory | `/proc/[pid]/statm` | >4GB Warning, >8GB Critical |
+| Threads | `/proc/[pid]/stat` | >100 Warning |
+| File descriptors | `/proc/[pid]/fd` count | >5000 Warning, >10000 Critical |
+| Process state | `/proc/[pid]/stat` | R/S/D/Z |
+
+**Usage:**
+
+```rust
+let mut monitor = SessionMonitor::new();
+let metrics = monitor.collect_all_metrics(&[pid1, pid2]);
+let dashboard = DashboardData::from_metrics(&metrics);
+```
+
+#### Chat Pipeline (`ui-iced/src/chat_pipeline.rs`)
+
+HTTP client and types for the Synapsix Chat Pipeline API (message history, search, export).
+
+**API Base:** `http://localhost:4001/api/chat`
+
+**Core Types:**
+
+- `ChatStats` / `StoreStats` / `SummarizerStats` - Pipeline statistics
+- `Conversation` / `ConversationDetail` / `ChatMessage` - Conversation data
+- `Topic` / `TopicList` - Topic clustering
+- `SearchResults` / `SearchResult` - Semantic/keyword search
+- `ScanLocations` / `ScanLocation` - Database scan paths
+- `WatcherStatus` / `PipelineInfo` - Real-time watcher status
+- `ExportFormat` - Markdown, JSON, HTML, Text
+- `TrainingFormat` - OpenAI, Alpaca, ShareGPT (for fine-tuning export)
+- `TrainingFilters` / `SanitizationOptions` / `AugmentationOptions` - Training export config
+
+**Sub-Views (`ChatSubView`):**
+
+- `Dashboard` - Stats overview
+- `Scanner` - Database locations
+- `Conversations` - Browse conversations
+- `Topics` - Topic clusters
+- `Search` - Search interface
+- `Export` - Single conversation export
+- `Watcher` - Real-time watcher status
+
+**API Methods (`ChatApiClient`):**
+
+| Method | Purpose |
+|--------|---------|
+| `fetch_stats()` | Pipeline statistics |
+| `fetch_conversations(limit)` | List conversations |
+| `fetch_conversation(id)` | Get conversation detail |
+| `fetch_topics()` | Topic list |
+| `search(query, mode)` | Search (keyword/semantic) |
+| `batch_ingest()` | Trigger ingestion |
+| `export_conversation(id, format)` | Export single |
+| `fetch_training_stats(filters)` | Training export stats |
+| `training_export(request)` | Full training export |
+
+#### Service Management (`ui-iced/src/services.rs`)
+
+Manages starting, stopping, and monitoring external services.
+
+**Core Types:**
+
+- `ServiceConfig` - Paths and ports for managed services
+- `ServiceStatus` - Running, Stopped, Unknown, Starting, Failed
+- `ServiceInfo` - Service metadata with start/check commands
+- `ServiceManager` - Service lifecycle management
+
+**Managed Services:**
+
+| Service | Description | Default Port |
+|---------|-------------|--------------|
+| Studio Core | Elixir/OTP backend | Unix socket |
+| synapsix-dialog-daemon | Interactive dialogs | 8080 |
+
+**Default Paths:**
+
+```rust
+core_path: "/home/e421/continuum-studio/core/studio_core"
+core_socket: "/tmp/continuum-studio.sock"
+dialog_web_port: 8080
+```
+
+#### Theme Module (`ui-iced/src/theme/`)
+
+COSMIC and VS Code theme integration for consistent styling.
+
+**Files:**
+
+| File | Purpose |
+|------|---------|
+| `mod.rs` | Re-exports, `AppColors`, `SemanticColors` |
+| `cosmic.rs` | COSMIC desktop presets (Dark, Light, PopOrange, WarmAmber, CoolBlue, Mint) |
+| `vscode.rs` | VS Code theme parsing and conversion |
+
+**Exports:**
+
+- `AppColors` - Primary application color palette
+- `CosmicPalette` - COSMIC-specific colors
+- `CosmicThemePreset` - Preset configurations
+- `SemanticColors` - Semantic color mappings (success, warning, error)
+
+### Updated Key Files Table (Complete)
+
+| Category | File | Purpose |
+|----------|------|---------|
+| **Core IPC** | `core.rs` | Elixir backend communication |
+| **Monitoring** | `monitoring.rs` | Session metrics collection |
+| **Chat** | `chat_pipeline.rs` | Chat history and export |
+| **Services** | `services.rs` | Service lifecycle management |
+| **Theme** | `theme/` | COSMIC/VS Code theming |
+| **Diagrams** | `widgets/diagram.rs` | Mermaid/D2 rendering |
+| **Offline** | `offline.rs` | Operation queue |
+| **CLI Agents** | `cli_agents.rs` | Agent management UI |
+| **CLI Client** | `cli_agents_client.rs` | Agent HTTP/WebSocket |
+| **Decision** | `decision_engine.rs` | Auto dialog handling |
+| **Orchestrator** | `orchestrator_panel.rs` | Mode control UI |
+| **Dialog** | `dialog_client.rs` | D-Bus dialogs |
+| **Exports** | `lib.rs` | Public API |
+| **Parked** | `parked_agents.rs` | Agent parking UI |
+| **Parked Client** | `parked_agents_client.rs` | Parking HTTP |
+| **Activity** | `activity_feed.rs` | Event display |
+| **Activity Client** | `activity_stream_client.rs` | Event streaming |
+| **Subagents** | `subagents.rs` | Sub-agent monitoring |
+| **Zones** | `zones.rs` | Window positioning |
+| **Task Queue** | `task_queue_client.rs` | Task HTTP/WebSocket |
+| **Coordinator** | `coordinator_client.rs` | Agent coordination |
+| **Feed** | `feed_client.rs` | Activity feed HTTP |
+| **Profiling** | `profiling.rs` | Performance spans |
+| **TaskQueue Widget** | `widgets/task_queue.rs` | Task management widget |
