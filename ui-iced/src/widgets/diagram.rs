@@ -359,7 +359,7 @@ pub fn extract_diagrams(markdown: &str) -> Vec<(DiagramType, String, usize)> {
     let mut block_start = 0;
 
     for (line_num, line) in markdown.lines().enumerate() {
-        if line.starts_with("```") {
+        if let Some(after_fence) = line.strip_prefix("```") {
             if in_code_block {
                 // End of code block
                 if let Some(diagram_type) = DiagramType::from_language(&current_lang) {
@@ -374,7 +374,7 @@ pub fn extract_diagrams(markdown: &str) -> Vec<(DiagramType, String, usize)> {
                 in_code_block = false;
             } else {
                 // Start of code block
-                current_lang = line[3..].trim().to_string();
+                current_lang = after_fence.trim().to_string();
                 block_start = line_num;
                 in_code_block = true;
             }
