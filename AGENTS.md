@@ -18,7 +18,7 @@ Continuum Studio
 
 ## Current Status
 
-**Branch**: `iced-migration` (4 commits ahead of origin)
+**Branch**: `iced-migration` (9 commits ahead of origin)
 
 ### Desktop UI (`ui-iced/`)
 
