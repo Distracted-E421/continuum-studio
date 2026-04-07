@@ -901,7 +901,8 @@ mod tests {
             version: "0.44.11".to_string(),
         };
         let json = req.to_json();
-        assert!(json.contains("\"command\":\"auth_status\""));
+        assert!(json.contains("\"command\":\"auth_version_status\""));
+        assert!(json.contains("\"version\":\"0.44.11\""));
     }
 
     #[test]
