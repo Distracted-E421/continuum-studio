@@ -8,90 +8,8 @@ use iced::{Alignment, Color, Element, Length};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-// ============================================================================
-// Data Types
-// ============================================================================
-
-/// Task priority levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Priority {
-    Critical,
-    High,
-    Medium,
-    Low,
-    Backlog,
-}
-
-impl Priority {
-    pub fn emoji(&self) -> &'static str {
-        match self {
-            Priority::Critical => "🔴",
-            Priority::High => "🟠",
-            Priority::Medium => "🟡",
-            Priority::Low => "🟢",
-            Priority::Backlog => "⚪",
-        }
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            Priority::Critical => "critical",
-            Priority::High => "high",
-            Priority::Medium => "medium",
-            Priority::Low => "low",
-            Priority::Backlog => "backlog",
-        }
-    }
-}
-
-/// Task status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
-    Pending,
-    Claimed,
-    InProgress,
-    Completed,
-    Cancelled,
-}
-
-impl TaskStatus {
-    pub fn label(&self) -> &'static str {
-        match self {
-            TaskStatus::Pending => "pending",
-            TaskStatus::Claimed => "claimed",
-            TaskStatus::InProgress => "in_progress",
-            TaskStatus::Completed => "completed",
-            TaskStatus::Cancelled => "cancelled",
-        }
-    }
-
-    pub fn is_active(&self) -> bool {
-        matches!(self, TaskStatus::Pending | TaskStatus::Claimed | TaskStatus::InProgress)
-    }
-}
-
-/// A task from the queue
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Task {
-    pub id: String,
-    pub content: String,
-    pub priority: Priority,
-    pub status: TaskStatus,
-    #[serde(default)]
-    pub assigned_to: Option<String>,
-    #[serde(default)]
-    pub project: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub notes: Option<String>,
-    #[serde(default)]
-    pub started_at: Option<String>,
-    #[serde(default)]
-    pub completed_at: Option<String>,
-}
+// Re-export core types from task_queue_client to avoid duplication
+pub use crate::task_queue_client::{Priority, QueueStats, Task, TaskStatus};
 
 // ============================================================================
 // Agent Types
@@ -176,20 +94,6 @@ pub struct TaskHistoryEntry {
     pub task: Task,
     pub outcome: Option<String>,
     pub duration_secs: Option<u64>,
-}
-
-// ============================================================================
-// Statistics
-// ============================================================================
-
-/// Queue statistics
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct QueueStats {
-    pub total: usize,
-    pub pending: usize,
-    pub in_progress: usize,
-    pub completed: usize,
-    pub cancelled: usize,
 }
 
 // ============================================================================
