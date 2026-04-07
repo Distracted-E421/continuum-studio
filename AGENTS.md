@@ -1229,3 +1229,14 @@ Enhanced the CLI agent spawn form's prompt preview panel with token estimation a
 | `ui-iced/src/main.rs` | +24 lines (clipboard task handler) |
 
 Committed in `3335e1c`.
+
+### Batch Launch Preview (Follow-up)
+
+Extended prompt preview functionality to the batch launch form:
+- `show_batch_preview` state field
+- `ToggleBatchPreview` / `CopyBatchPrompt` messages
+- Same token estimation and warning thresholds
+- Same clipboard integration
+- 2 additional tests (`test_toggle_batch_preview`, `test_copy_batch_prompt_task`)
+
+Committed in `ad6870e`.
