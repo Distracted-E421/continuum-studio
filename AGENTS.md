@@ -1166,3 +1166,66 @@ Updated `QuickLinkRow` composable to accept a `url` parameter and linked the qui
 - Documentation → https://codeberg.org/Distracted/continuum-studio/wiki
 
 Committed in `d83f245`.
+
+## April 7, 2026 - Prompt Preview Enhancement
+
+### Task: CS.prompt-preview.001
+
+Enhanced the CLI agent spawn form's prompt preview panel with token estimation and clipboard support.
+
+### Features Added
+
+**Token Count Estimation:**
+- `estimate_tokens(text)` - Heuristic-based estimation (~4 chars/token for mixed text/code)
+- Per-section token breakdown (PREFIX, YOUR TASK, SUFFIX)
+- Warning thresholds:
+  - Normal: < 50,000 tokens (gray text)
+  - Warning: 50,000 - 100,000 tokens (orange with ⚠️)
+  - Critical: > 100,000 tokens (red with ⚠️)
+
+**Clipboard Integration:**
+- Added `arboard` crate (v3.4) for cross-platform clipboard support
+- Copy button in preview panel header
+- Success/error feedback messages
+
+**Helper Functions:**
+- `format_number(n)` - Human-readable formatting (1.2k, 3.4M)
+- `build_preview_section_with_tokens()` - Enhanced section builder
+
+### New Messages
+
+| Message | Purpose |
+|---------|---------|
+| `CopyFullPrompt` | Triggers clipboard copy |
+| `PromptCopied` | Success notification |
+| `PromptCopyFailed(String)` | Error handling |
+
+### New Task
+
+| Task | Purpose |
+|------|---------|
+| `CopyPromptToClipboard { prompt }` | Async clipboard operation |
+
+### Tests Added (11 total)
+
+- `test_estimate_tokens_empty`
+- `test_estimate_tokens_short_text`
+- `test_estimate_tokens_code`
+- `test_estimate_tokens_long_text`
+- `test_format_number_small`
+- `test_format_number_thousands`
+- `test_format_number_millions`
+- `test_cli_agents_state_default`
+- `test_toggle_prompt_preview`
+- `test_build_full_prompt_no_preset`
+- `test_build_full_prompt_with_preset`
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `ui-iced/Cargo.toml` | +1 dep (arboard) |
+| `ui-iced/src/cli_agents.rs` | +268 lines (token estimation, clipboard, tests) |
+| `ui-iced/src/main.rs` | +24 lines (clipboard task handler) |
+
+Committed in `3335e1c`.
