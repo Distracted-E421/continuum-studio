@@ -198,24 +198,19 @@ impl DiagramRenderer {
             .map_err(|e| format!("Failed to write input file: {}", e))?;
 
         // Build command
+        let input_str = input_file
+            .to_str()
+            .ok_or_else(|| "Invalid UTF-8 in input path".to_string())?;
+        let output_str = output_file
+            .to_str()
+            .ok_or_else(|| "Invalid UTF-8 in output path".to_string())?;
+
         let output = match diagram_type {
             DiagramType::Mermaid => Command::new("mmdc")
-                .args([
-                    "-i",
-                    input_file.to_str().unwrap(),
-                    "-o",
-                    output_file.to_str().unwrap(),
-                    "-b",
-                    "transparent",
-                ])
+                .args(["-i", input_str, "-o", output_str, "-b", "transparent"])
                 .output(),
             DiagramType::D2 => Command::new("d2")
-                .args([
-                    "--theme",
-                    "200", // Dark theme
-                    input_file.to_str().unwrap(),
-                    output_file.to_str().unwrap(),
-                ])
+                .args(["--theme", "200", input_str, output_str])
                 .output(),
         };
 

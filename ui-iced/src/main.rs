@@ -2980,17 +2980,17 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
 /// Multi-window view dispatcher
 fn view_for_window(state: &ContinuumStudio, window_id: window::Id) -> Element<'_, Message> {
     profile_span!("view_for_window");
-    // Get the window type for this ID
-    let window_state = state.windows.get(&window_id);
 
-    match window_state.map(|ws| ws.window_type) {
-        Some(WindowType::Main) | None => view_main_window(state),
-        Some(WindowType::TaskQueue) => view_task_queue_window(state),
-        Some(WindowType::DialogPanel) => view_dialog_panel_window(state),
-        Some(WindowType::TiledPanel) => {
-            let ws = window_state.unwrap();
-            view_tiled_panel_window(state, ws.vertical_split, ws.split_ratio)
-        }
+    match state.windows.get(&window_id) {
+        Some(ws) => match ws.window_type {
+            WindowType::Main => view_main_window(state),
+            WindowType::TaskQueue => view_task_queue_window(state),
+            WindowType::DialogPanel => view_dialog_panel_window(state),
+            WindowType::TiledPanel => {
+                view_tiled_panel_window(state, ws.vertical_split, ws.split_ratio)
+            }
+        },
+        None => view_main_window(state),
     }
 }
 
