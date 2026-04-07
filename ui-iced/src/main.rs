@@ -1146,7 +1146,8 @@ struct MemoryStats {
     decision_history: usize,
     /// Triage queue size
     triage_queue: usize,
-    /// Last update time (unix seconds)
+    /// Last update time (unix seconds) - reserved for future use
+    #[allow(dead_code)]
     updated_at: u64,
 }
 
