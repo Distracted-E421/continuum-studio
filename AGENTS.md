@@ -751,3 +751,25 @@ Complete task management widget with multiple panels.
 Only one shared crate exists:
 
 - `crates/synapsix-theme/` - Shared theming for COSMIC/VS Code integration
+
+### Technical Debt
+
+**Type Duplication (Priority: Medium)**
+
+`task_queue_client.rs` and `widgets/task_queue.rs` both define:
+- `Priority` enum (Critical, High, Medium, Low, Backlog)
+- `TaskStatus` enum (Pending, Claimed, InProgress, Completed, Cancelled)
+- `Task` struct
+- `QueueStats` struct
+
+The widget should import from the client module to avoid drift. Currently they're nearly identical but `task_queue_client.rs` has more fields (e.g., `created_by`, `agent_id`, `session_id`).
+
+**Recommended fix:** Have `widgets/task_queue.rs` re-export types from `task_queue_client.rs`, keeping only widget-specific additions.
+
+**System Theme Detection (Priority: Low)**
+
+`derive_theme()` in `main.rs:725` falls back to Dark for `ThemePreference::System`. Should detect via:
+- `XDG_CURRENT_DESKTOP` environment variable
+- GNOME: `gsettings get org.gnome.desktop.interface color-scheme`
+- KDE: Read plasma config
+- Fallback to system dark-mode-detection crates
