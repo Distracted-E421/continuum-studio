@@ -770,7 +770,23 @@ Only one shared crate exists:
 
 The widget should import from the client module to avoid drift. Currently they're nearly identical but `task_queue_client.rs` has more fields (e.g., `created_by`, `agent_id`, `session_id`).
 
-**Recommended fix:** Have `widgets/task_queue.rs` re-export types from `task_queue_client.rs`, keeping only widget-specific additions.
+**Detailed Fix Plan:**
+
+1. In `widgets/task_queue.rs`:
+   ```rust
+   // Replace local definitions with:
+   pub use crate::task_queue_client::{Priority, TaskStatus, Task, QueueStats};
+   ```
+
+2. In `widgets/mod.rs`:
+   - Remove `Priority`, `TaskStatus`, `Task`, `QueueStats` from task_queue re-exports
+   - Add note that these are now in `task_queue_client`
+
+3. Update `lib.rs` to avoid duplicate exports
+
+4. Test compilation and fix any type mismatches
+
+**Impact:** ~40 lines removed, API surface simplified. Widget-specific types (`Agent`, `AgentType`, `AgentStatus`, `TaskHistoryEntry`) remain in widget.
 
 **System Theme Detection (Priority: Low)**
 
