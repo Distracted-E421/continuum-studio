@@ -1099,7 +1099,7 @@ pub const ORCHESTRATOR_WS_URL: &str = "ws://localhost:8080/ws/orchestrator";
 pub enum OrchestratorWsEvent {
     /// New dialog from agent
     DialogCreated {
-        dialog: OrchestratorDialogInfo,
+        dialog: Box<OrchestratorDialogInfo>,
     },
     /// Dialog was answered
     DialogAnswered {
