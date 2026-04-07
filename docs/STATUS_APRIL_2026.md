@@ -111,7 +111,7 @@ Continuum Studio continues active development. This month focused on performance
 | `main.rs:725` | Detect system theme preference | Low | ✅ Resolved |
 | `main.rs:2766` | Add delete profile to Core API | Medium | Open |
 | `main.rs:4491` | Integrate agent tracking from task queue widget | High | Open |
-| `cli_agents.rs:770` | Fetch full agent details for each ID | Medium | Open |
+| `cli_agents.rs:770` | Fetch full agent details for each ID | Medium | ✅ Resolved |
 | `DialogScreen.kt:1245` | Handle link click in Android | Low | ✅ Resolved |
 
 ## Technical Debt
