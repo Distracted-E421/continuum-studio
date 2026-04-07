@@ -287,11 +287,13 @@ impl ServiceManager {
         }
 
         // Check if mix is available
-        let mix_check = std::process::Command::new("which")
+        let mix_available = std::process::Command::new("which")
             .arg("mix")
-            .output();
-        
-        if mix_check.is_err() || !mix_check.unwrap().status.success() {
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !mix_available {
             return Err("Elixir 'mix' command not found. Please ensure Elixir is installed.".to_string());
         }
 
