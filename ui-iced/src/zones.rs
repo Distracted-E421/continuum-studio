@@ -298,3 +298,111 @@ impl ZoneSnapshot {
         std::fs::write(ZONE_SNAPSHOT_PATH, json)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_zone_manager_new() {
+        let manager = ZoneManager::new(1920, 1080);
+        assert_eq!(manager.screen_width, 1920);
+        assert_eq!(manager.screen_height, 1080);
+        assert_eq!(manager.layout(), ZoneLayout::MainWithSidePanel);
+        assert!(manager.zones.contains_key("primary"));
+    }
+
+    #[test]
+    fn test_zone_manager_set_layout() {
+        let mut manager = ZoneManager::new(1920, 1080);
+        assert_eq!(manager.layout(), ZoneLayout::MainWithSidePanel);
+        
+        manager.set_layout(ZoneLayout::Dashboard);
+        assert_eq!(manager.layout(), ZoneLayout::Dashboard);
+        
+        manager.set_layout(ZoneLayout::SplitHorizontal);
+        assert_eq!(manager.layout(), ZoneLayout::SplitHorizontal);
+    }
+
+    #[test]
+    fn test_layout_main_with_side_panel() {
+        let manager = ZoneManager::new(1920, 1080);
+        let (main, panel) = manager.layout_main_with_side_panel();
+        
+        // Main should be on the left
+        assert!(main.x < panel.x);
+        // Panel width should be capped at screen_width / 3
+        assert!(panel.width <= 1920 / 3);
+        // Main + gap + panel should roughly equal screen width
+        assert!(main.width + panel.width < 1920);
+        // Heights should be equal
+        assert_eq!(main.height, panel.height);
+    }
+
+    #[test]
+    fn test_layout_dashboard() {
+        let manager = ZoneManager::new(1920, 1080);
+        let (main, panel) = manager.layout_dashboard();
+        
+        // Main should be roughly centered (65% of screen)
+        let expected_main_width = (1920.0 * 0.65) as i32;
+        assert_eq!(main.width, expected_main_width);
+        
+        // Panel should be to the right of main
+        assert!(panel.x > main.x);
+        
+        // Both should be vertically centered (same y)
+        assert_eq!(main.y, panel.y);
+    }
+
+    #[test]
+    fn test_calculate_layout_returns_correct_type() {
+        let manager = ZoneManager::new(1920, 1080);
+        let layout = manager.calculate_layout();
+        
+        // Should return valid positions
+        assert!(layout.main.width > 0);
+        assert!(layout.main.height > 0);
+        assert!(layout.side_panel.width > 0);
+        assert!(layout.side_panel.height > 0);
+    }
+
+    #[test]
+    fn test_snapshot_serialization() {
+        let manager = ZoneManager::new(1920, 1080);
+        let snapshot = manager.snapshot();
+        
+        // Should serialize to JSON
+        let json = serde_json::to_string(&snapshot);
+        assert!(json.is_ok());
+        
+        // Should deserialize back
+        let json_str = json.unwrap();
+        let deserialized: Result<ZoneSnapshot, _> = serde_json::from_str(&json_str);
+        assert!(deserialized.is_ok());
+        
+        let restored = deserialized.unwrap();
+        assert_eq!(restored.screen_width, 1920);
+        assert_eq!(restored.screen_height, 1080);
+        assert_eq!(restored.layout, ZoneLayout::MainWithSidePanel);
+    }
+
+    #[test]
+    fn test_zone_layout_default() {
+        let layout = ZoneLayout::default();
+        assert_eq!(layout, ZoneLayout::MainWithSidePanel);
+    }
+
+    #[test]
+    fn test_small_screen_constraints() {
+        let manager = ZoneManager::new(800, 600);
+        let (main, panel) = manager.layout_main_with_side_panel();
+        
+        // Panel should be capped at screen_width / 3
+        assert!(panel.width <= 800 / 3);
+        // Main should still have reasonable width
+        assert!(main.width > 0);
+        // Combined shouldn't exceed screen
+        assert!(main.x + main.width <= 800);
+    }
+}
