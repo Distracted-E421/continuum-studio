@@ -825,7 +825,8 @@ mod tests {
         assert_eq!(stats.total, 0);
         assert_eq!(stats.pending, 0);
         assert_eq!(stats.in_progress, 0);
-        assert_eq!(stats.completed_today, 0);
+        assert_eq!(stats.completed, 0);
+        assert_eq!(stats.cancelled, 0);
     }
 
     #[test]
