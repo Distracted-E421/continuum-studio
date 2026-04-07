@@ -745,12 +745,15 @@ Complete task management widget with multiple panels.
 
 ### Known TODOs
 
-| Location | Description | Priority |
-|----------|-------------|----------|
-| `main.rs:725` | Detect system theme preference | Low |
-| `main.rs:2766` | Add delete profile to Core API | Medium |
-| `main.rs:4491` | Integrate actual agent tracking from task queue widget | High |
-| `cli_agents.rs:770` | Fetch full agent details for each ID | Medium |
+| Location | Description | Priority | Effort |
+|----------|-------------|----------|--------|
+| `main.rs:725` | Detect system theme preference | Low | S - Add dark-light crate |
+| `main.rs:2767` | Add delete profile to Core API | Medium | M - Elixir + Rust changes |
+| `main.rs:4492` | Integrate agent tracking from task queue | High | L - WebSocket state sync |
+| `cli_agents.rs:770` | Fetch full agent details for each ID | Medium | S - HTTP call in handler |
+| `DialogScreen.kt:1245` | Handle link click in Android | Low | S - Add click handler |
+
+**Size Legend:** S = Small (< 1 hour), M = Medium (1-4 hours), L = Large (> 4 hours)
 
 ### Crates Directory
 
