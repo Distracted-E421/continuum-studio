@@ -1505,7 +1505,7 @@ where
             agent
                 .workspace
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or(&agent.workspace)
         ))
         .size(12)
@@ -2213,7 +2213,7 @@ where
         .map(|(ws, selected)| {
             let ws_clone = ws.clone();
             checkbox_button(
-                ws.split('/').last().unwrap_or(ws),
+                ws.split('/').next_back().unwrap_or(ws),
                 *selected,
                 to_message(CLIAgentMessage::ToggleBatchWorkspace(ws_clone)),
             )
