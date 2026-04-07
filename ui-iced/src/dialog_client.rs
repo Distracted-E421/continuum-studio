@@ -497,3 +497,113 @@ pub fn spawn_dialog_monitor() -> mpsc::Receiver<DialogClientMessage> {
 
     rx
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_orchestrator_mode_default() {
+        let mode = OrchestratorMode::default();
+        assert_eq!(mode, OrchestratorMode::UserActive);
+    }
+
+    #[test]
+    fn test_orchestrator_mode_parse_known_values() {
+        assert_eq!("user_active".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::UserActive);
+        assert_eq!("user_delegate".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::UserDelegate);
+        assert_eq!("spectator".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::Spectator);
+        assert_eq!("autonomous".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::Autonomous);
+    }
+
+    #[test]
+    fn test_orchestrator_mode_parse_unknown() {
+        // Unknown values default to UserActive
+        assert_eq!("unknown".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::UserActive);
+        assert_eq!("".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::UserActive);
+    }
+
+    #[test]
+    fn test_orchestrator_mode_as_str() {
+        assert_eq!(OrchestratorMode::UserActive.as_str(), "user_active");
+        assert_eq!(OrchestratorMode::UserDelegate.as_str(), "user_delegate");
+        assert_eq!(OrchestratorMode::Spectator.as_str(), "spectator");
+        assert_eq!(OrchestratorMode::Autonomous.as_str(), "autonomous");
+    }
+
+    #[test]
+    fn test_orchestrator_mode_emoji() {
+        assert_eq!(OrchestratorMode::UserActive.emoji(), "🟢");
+        assert_eq!(OrchestratorMode::UserDelegate.emoji(), "🟡");
+        assert_eq!(OrchestratorMode::Spectator.emoji(), "🟠");
+        assert_eq!(OrchestratorMode::Autonomous.emoji(), "🔴");
+    }
+
+    #[test]
+    fn test_orchestrator_mode_label() {
+        assert_eq!(OrchestratorMode::UserActive.label(), "User Active");
+        assert_eq!(OrchestratorMode::UserDelegate.label(), "Delegated");
+        assert_eq!(OrchestratorMode::Spectator.label(), "Spectator");
+        assert_eq!(OrchestratorMode::Autonomous.label(), "Autonomous");
+    }
+
+    #[test]
+    fn test_orchestrator_mode_roundtrip() {
+        for mode in [
+            OrchestratorMode::UserActive,
+            OrchestratorMode::UserDelegate,
+            OrchestratorMode::Spectator,
+            OrchestratorMode::Autonomous,
+        ] {
+            let s = mode.as_str();
+            let parsed: OrchestratorMode = s.parse().unwrap();
+            assert_eq!(parsed, mode);
+        }
+    }
+
+    #[test]
+    fn test_dialog_type_serialization() {
+        let choice = DialogType::Choice {
+            options: vec![
+                ChoiceOption {
+                    value: "a".to_string(),
+                    label: "Option A".to_string(),
+                    description: None,
+                },
+            ],
+            default: Some("a".to_string()),
+            allow_multiple: false,
+        };
+        
+        let json = serde_json::to_string(&choice);
+        assert!(json.is_ok());
+        
+        let json_str = json.unwrap();
+        assert!(json_str.contains("\"type\":\"Choice\""));
+    }
+
+    #[test]
+    fn test_dialog_request_serialization() {
+        let request = DialogRequest {
+            id: "test-123".to_string(),
+            title: "Test Dialog".to_string(),
+            prompt: "What do you want?".to_string(),
+            dialog_type: DialogType::Confirmation {
+                yes_label: "Yes".to_string(),
+                no_label: "No".to_string(),
+                default_yes: true,
+            },
+            timeout_ms: Some(30000),
+        };
+        
+        let json = serde_json::to_string(&request);
+        assert!(json.is_ok());
+        
+        let deserialized: Result<DialogRequest, _> = serde_json::from_str(&json.unwrap());
+        assert!(deserialized.is_ok());
+        
+        let restored = deserialized.unwrap();
+        assert_eq!(restored.id, "test-123");
+        assert_eq!(restored.timeout_ms, Some(30000));
+    }
+}
