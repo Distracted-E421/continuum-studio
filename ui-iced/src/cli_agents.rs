@@ -545,16 +545,16 @@ pub enum CLIAgentMessage {
 
 impl CLIAgentsState {
     pub fn new() -> Self {
-        let mut batch_form = BatchForm::default();
-        batch_form.max_concurrent = 3;
-
-        // Pre-populate with common workspaces
-        batch_form.workspaces = vec![
-            ("/home/e421/synapsix".to_string(), false),
-            ("/home/e421/homelab".to_string(), false),
-            ("/home/e421/cortex".to_string(), false),
-            ("/home/e421/continuum-studio".to_string(), false),
-        ];
+        let batch_form = BatchForm {
+            max_concurrent: 3,
+            workspaces: vec![
+                ("/home/e421/synapsix".to_string(), false),
+                ("/home/e421/homelab".to_string(), false),
+                ("/home/e421/cortex".to_string(), false),
+                ("/home/e421/continuum-studio".to_string(), false),
+            ],
+            ..Default::default()
+        };
 
         Self {
             batch_form,
