@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -1149,19 +1150,22 @@ fun SettingsView(
                     QuickLinkRow(
                         icon = Icons.Default.Web,
                         title = "Web Interface",
-                        subtitle = "Open dialog.datapunk.dev in browser"
+                        subtitle = "Open dialog.datapunk.dev in browser",
+                        url = "https://dialog.datapunk.dev"
                     )
                     HorizontalDivider()
                     QuickLinkRow(
                         icon = Icons.Default.Code,
                         title = "Source Code",
-                        subtitle = "View on Codeberg"
+                        subtitle = "View on Codeberg",
+                        url = "https://codeberg.org/Distracted/continuum-studio"
                     )
                     HorizontalDivider()
                     QuickLinkRow(
                         icon = Icons.AutoMirrored.Filled.Help,
                         title = "Documentation",
-                        subtitle = "Usage guide and FAQ"
+                        subtitle = "Usage guide and FAQ",
+                        url = "https://codeberg.org/Distracted/continuum-studio/wiki"
                     )
                 }
             }
@@ -1237,12 +1241,14 @@ private fun AboutRow(label: String, value: String) {
 private fun QuickLinkRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
-    subtitle: String
+    subtitle: String,
+    url: String
 ) {
+    val uriHandler = LocalUriHandler.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { /* TODO: Handle link click */ }
+            .clickable { uriHandler.openUri(url) }
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
