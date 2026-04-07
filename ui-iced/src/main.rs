@@ -11709,6 +11709,30 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
                 },
             )
         }
+        Some(CLIAgentTask::FetchAgentDetails { ids }) => {
+            log::info!("Fetching details for {} agents", ids.len());
+            let client = state.cli_agents_http.clone();
+            Task::perform(
+                async move {
+                    let mut agents = Vec::new();
+                    for id in ids {
+                        match client.get_agent(&id).await {
+                            Ok(details) => {
+                                agents.push(continuum_studio_iced::cli_agents::CLIAgent::from_details(details));
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to fetch agent {}: {}", id, e);
+                            }
+                        }
+                    }
+                    agents
+                },
+                |agents| {
+                    log::info!("Fetched full details for {} agents", agents.len());
+                    Message::CLIAgentAction(CLIAgentMessage::AgentsFullLoaded(agents))
+                },
+            )
+        }
 
         // Preset tasks
         Some(CLIAgentTask::FetchPresets) => {
