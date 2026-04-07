@@ -722,7 +722,17 @@ fn derive_theme(settings: &Settings) -> Theme {
     match settings.theme {
         ThemePreference::Dark => Theme::Dark,
         ThemePreference::Light => Theme::Light,
-        ThemePreference::System => Theme::Dark, // TODO: Detect system theme
+        ThemePreference::System => {
+            // Detect system theme via XDG Desktop Portal (Linux/BSD)
+            match dark_light::detect() {
+                Ok(dark_light::Mode::Dark) => Theme::Dark,
+                Ok(dark_light::Mode::Light) => Theme::Light,
+                Ok(dark_light::Mode::Unspecified) | Err(_) => {
+                    log::debug!("System theme unspecified, defaulting to Dark");
+                    Theme::Dark
+                }
+            }
+        }
         ThemePreference::Cosmic => {
             // Convert CosmicPreset to CosmicThemePreset and get theme
             let cosmic_preset = match settings.cosmic_preset {
