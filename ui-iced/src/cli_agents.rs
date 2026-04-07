@@ -117,8 +117,10 @@ pub struct CLIAgentsState {
     pub show_snippet_editor: bool,
     /// Snippet being edited
     pub editing_snippet: Option<EditingSnippet>,
-    /// Show prompt preview
+    /// Show prompt preview (single launch form)
     pub show_prompt_preview: bool,
+    /// Show prompt preview (batch form)
+    pub show_batch_preview: bool,
     /// Workspace-to-preset overrides
     pub workspace_overrides: HashMap<String, String>,
     /// Show workspace overrides modal
@@ -581,11 +583,15 @@ pub enum CLIAgentMessage {
     SnippetSaved(Snippet),
     SnippetDeleted(String),
 
-    // Prompt preview
+    // Prompt preview (single launch)
     TogglePromptPreview,
     CopyFullPrompt,
     PromptCopied,
     PromptCopyFailed(String),
+
+    // Prompt preview (batch)
+    ToggleBatchPreview,
+    CopyBatchPrompt,
 
     // Workspace overrides
     WorkspaceOverridesLoaded(HashMap<String, String>),
@@ -1095,6 +1101,15 @@ impl CLIAgentsState {
                 self.error = Some(format!("Failed to copy: {}", err));
                 None
             }
+
+            // Batch preview
+            CLIAgentMessage::ToggleBatchPreview => {
+                self.show_batch_preview = !self.show_batch_preview;
+                None
+            }
+            CLIAgentMessage::CopyBatchPrompt => Some(CLIAgentTask::CopyPromptToClipboard {
+                prompt: self.batch_form.prompt.clone(),
+            }),
 
             // Workspace overrides
             CLIAgentMessage::WorkspaceOverridesLoaded(overrides) => {
@@ -2362,6 +2377,132 @@ where
     ]
     .spacing(4);
 
+    // Preview button and section
+    let preview_btn = button(
+        text(if state.show_batch_preview {
+            "Hide Preview"
+        } else {
+            "Show Preview"
+        })
+        .size(11),
+    )
+    .padding([4, 8])
+    .on_press(to_message(CLIAgentMessage::ToggleBatchPreview));
+
+    let preview_section: Element<'a, M> = if state.show_batch_preview {
+        let prompt_text = if form.prompt.is_empty() {
+            "[Enter your prompt above]".to_string()
+        } else {
+            form.prompt.clone()
+        };
+
+        let total_chars = prompt_text.len();
+        let total_tokens = estimate_tokens(&prompt_text);
+
+        // Token warning thresholds
+        let token_warning = total_tokens > 50_000;
+        let token_critical = total_tokens > 100_000;
+
+        let token_color = if token_critical {
+            iced::Color::from_rgb(0.9, 0.3, 0.3)
+        } else if token_warning {
+            iced::Color::from_rgb(0.9, 0.7, 0.3)
+        } else {
+            iced::Color::from_rgb(0.5, 0.5, 0.5)
+        };
+
+        let token_text = if token_critical {
+            format!("⚠️ ~{} tokens (very large!)", format_number(total_tokens))
+        } else if token_warning {
+            format!("⚠️ ~{} tokens (large)", format_number(total_tokens))
+        } else {
+            format!("~{} tokens", format_number(total_tokens))
+        };
+
+        // Copy button
+        let copy_btn = button(
+            row![
+                text("📋").size(11),
+                Space::new().width(4),
+                text("Copy").size(10),
+            ]
+            .align_y(Alignment::Center),
+        )
+        .padding([3, 8])
+        .on_press(to_message(CLIAgentMessage::CopyBatchPrompt))
+        .style(|_theme, status| {
+            let bg = match status {
+                button::Status::Hovered => iced::Color::from_rgb(0.25, 0.3, 0.35),
+                _ => iced::Color::from_rgb(0.18, 0.2, 0.24),
+            };
+            button::Style {
+                background: Some(iced::Background::Color(bg)),
+                text_color: iced::Color::from_rgb(0.8, 0.8, 0.8),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.25, 0.28, 0.32),
+                },
+                ..Default::default()
+            }
+        });
+
+        container(
+            column![
+                row![
+                    text("📜 Prompt Preview").size(13),
+                    Space::new().width(Length::Fill),
+                    text(token_text).size(10).color(token_color),
+                    Space::new().width(8),
+                    text(format!("{} chars", format_number(total_chars)))
+                        .size(9)
+                        .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                    Space::new().width(8),
+                    copy_btn,
+                ]
+                .align_y(Alignment::Center),
+                Space::new().height(8),
+                container(
+                    scrollable(
+                        text(prompt_text)
+                            .size(10)
+                            .font(iced::Font::MONOSPACE)
+                            .color(iced::Color::from_rgb(0.75, 0.75, 0.75)),
+                    )
+                    .height(Length::Fixed(100.0)),
+                )
+                .padding(8)
+                .style(|_| container::Style {
+                    background: Some(iced::Background::Color(iced::Color::from_rgb(
+                        0.06, 0.06, 0.08,
+                    ))),
+                    border: iced::Border {
+                        radius: 4.0.into(),
+                        width: 1.0,
+                        color: iced::Color::from_rgb(0.12, 0.12, 0.15),
+                    },
+                    ..Default::default()
+                }),
+            ]
+            .spacing(0),
+        )
+        .padding(12)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.09, 0.09, 0.11,
+            ))),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.18, 0.18, 0.22),
+            },
+            ..Default::default()
+        })
+        .into()
+    } else {
+        Space::new().height(0).into()
+    };
+
     let workspace_checkboxes: Vec<Element<'a, M>> = form
         .workspaces
         .iter()
@@ -2424,6 +2565,9 @@ where
             text("Batch Launch").size(18),
             Space::new().height(16),
             prompt_input,
+            Space::new().height(8),
+            row![preview_btn].align_y(Alignment::Center),
+            preview_section,
             Space::new().height(16),
             workspaces_section,
             Space::new().height(16),
@@ -3625,5 +3769,32 @@ mod tests {
         assert!(full.contains("PREFIX_CONTENT"));
         assert!(full.contains("My task"));
         assert!(full.contains("SUFFIX_CONTENT"));
+    }
+
+    #[test]
+    fn test_toggle_batch_preview() {
+        let mut state = CLIAgentsState::new();
+        assert!(!state.show_batch_preview);
+        
+        state.update(CLIAgentMessage::ToggleBatchPreview);
+        assert!(state.show_batch_preview);
+        
+        state.update(CLIAgentMessage::ToggleBatchPreview);
+        assert!(!state.show_batch_preview);
+    }
+
+    #[test]
+    fn test_copy_batch_prompt_task() {
+        let mut state = CLIAgentsState::new();
+        state.batch_form.prompt = "Batch task prompt".to_string();
+        
+        let task = state.update(CLIAgentMessage::CopyBatchPrompt);
+        assert!(task.is_some());
+        match task {
+            Some(CLIAgentTask::CopyPromptToClipboard { prompt }) => {
+                assert_eq!(prompt, "Batch task prompt");
+            }
+            _ => panic!("Expected CopyPromptToClipboard task"),
+        }
     }
 }
