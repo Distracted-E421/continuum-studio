@@ -75,5 +75,8 @@ dark-light = "2.0"
 thiserror = "1.0"
 anyhow = "1.0"
 
+# Clipboard support (Wayland/X11/macOS/Windows)
+arboard = "3.4"
+
 [dev-dependencies]
 pretty_assertions = "1.0"

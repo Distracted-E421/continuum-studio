@@ -583,6 +583,9 @@ pub enum CLIAgentMessage {
 
     // Prompt preview
     TogglePromptPreview,
+    CopyFullPrompt,
+    PromptCopied,
+    PromptCopyFailed(String),
 
     // Workspace overrides
     WorkspaceOverridesLoaded(HashMap<String, String>),
@@ -1081,6 +1084,17 @@ impl CLIAgentsState {
                 self.show_prompt_preview = !self.show_prompt_preview;
                 None
             }
+            CLIAgentMessage::CopyFullPrompt => Some(CLIAgentTask::CopyPromptToClipboard {
+                prompt: self.build_full_prompt(),
+            }),
+            CLIAgentMessage::PromptCopied => {
+                // Could add a toast notification here
+                None
+            }
+            CLIAgentMessage::PromptCopyFailed(err) => {
+                self.error = Some(format!("Failed to copy: {}", err));
+                None
+            }
 
             // Workspace overrides
             CLIAgentMessage::WorkspaceOverridesLoaded(overrides) => {
@@ -1272,6 +1286,9 @@ pub enum CLIAgentTask {
         selection: String,
         comment: Option<String>,
     },
+
+    // Clipboard operations
+    CopyPromptToClipboard { prompt: String },
 }
 
 // =============================================================================
@@ -2098,9 +2115,16 @@ where
 
         let total_chars =
             prefix_preview.len() + state.launch_form.prompt.len() + suffix_preview.len();
-        let total_lines = prefix_preview.lines().count()
-            + state.launch_form.prompt.lines().count().max(1)
-            + suffix_preview.lines().count();
+
+        // Token estimation (~4 chars per token is a reasonable approximation for mixed text/code)
+        let prefix_tokens = estimate_tokens(prefix_preview);
+        let task_tokens = estimate_tokens(&state.launch_form.prompt);
+        let suffix_tokens = estimate_tokens(suffix_preview);
+        let total_tokens = prefix_tokens + task_tokens + suffix_tokens;
+
+        // Warning thresholds (Claude has ~200k context, but practical limits are lower)
+        let token_warning = total_tokens > 50_000;
+        let token_critical = total_tokens > 100_000;
 
         // Truncate long sections for preview
         let prefix_display = if prefix_preview.len() > 500 {
@@ -2129,31 +2153,83 @@ where
             state.launch_form.prompt.clone()
         };
 
-        // Build sections inline to avoid lifetime issues
-        let prefix_section = build_preview_section(
+        // Build sections with token counts
+        let prefix_section = build_preview_section_with_tokens(
             "PREFIX",
             prefix_display,
+            prefix_tokens,
             iced::Color::from_rgb(0.3, 0.45, 0.3),
         );
-        let task_section = build_preview_section(
+        let task_section = build_preview_section_with_tokens(
             "YOUR TASK",
             task_display,
+            task_tokens,
             iced::Color::from_rgb(0.35, 0.45, 0.55),
         );
-        let suffix_section = build_preview_section(
+        let suffix_section = build_preview_section_with_tokens(
             "SUFFIX",
             suffix_display,
+            suffix_tokens,
             iced::Color::from_rgb(0.45, 0.35, 0.3),
         );
+
+        // Token count display with warning colors
+        let token_color = if token_critical {
+            iced::Color::from_rgb(0.9, 0.3, 0.3)
+        } else if token_warning {
+            iced::Color::from_rgb(0.9, 0.7, 0.3)
+        } else {
+            iced::Color::from_rgb(0.5, 0.5, 0.5)
+        };
+
+        let token_text = if token_critical {
+            format!("⚠️ ~{} tokens (very large!)", format_number(total_tokens))
+        } else if token_warning {
+            format!("⚠️ ~{} tokens (large)", format_number(total_tokens))
+        } else {
+            format!("~{} tokens", format_number(total_tokens))
+        };
+
+        // Copy button
+        let copy_btn = button(
+            row![
+                text("📋").size(11),
+                Space::new().width(4),
+                text("Copy").size(10),
+            ]
+            .align_y(Alignment::Center),
+        )
+        .padding([3, 8])
+        .on_press(to_message(CLIAgentMessage::CopyFullPrompt))
+        .style(|_theme, status| {
+            let bg = match status {
+                button::Status::Hovered => iced::Color::from_rgb(0.25, 0.3, 0.35),
+                _ => iced::Color::from_rgb(0.18, 0.2, 0.24),
+            };
+            button::Style {
+                background: Some(iced::Background::Color(bg)),
+                text_color: iced::Color::from_rgb(0.8, 0.8, 0.8),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.25, 0.28, 0.32),
+                },
+                ..Default::default()
+            }
+        });
 
         container(
             column![
                 row![
                     text("📜 Full Prompt Preview").size(13),
                     Space::new().width(Length::Fill),
-                    text(format!("~{} chars | ~{} lines", total_chars, total_lines))
-                        .size(10)
-                        .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                    text(token_text).size(10).color(token_color),
+                    Space::new().width(8),
+                    text(format!("{} chars", format_number(total_chars)))
+                        .size(9)
+                        .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                    Space::new().width(8),
+                    copy_btn,
                 ]
                 .align_y(Alignment::Center),
                 Space::new().height(8),
@@ -2424,9 +2500,20 @@ fn checkbox_button<'a, M: 'a + Clone>(
 }
 
 /// Helper function to build a preview section for the prompt preview
+#[allow(dead_code)]
 fn build_preview_section<'a, M: 'a + Clone>(
     title: &'static str,
     content: String,
+    color: iced::Color,
+) -> Element<'a, M> {
+    build_preview_section_with_tokens(title, content, 0, color)
+}
+
+/// Helper function to build a preview section with token count display
+fn build_preview_section_with_tokens<'a, M: 'a + Clone>(
+    title: &'static str,
+    content: String,
+    tokens: usize,
     color: iced::Color,
 ) -> Element<'a, M> {
     let content_len = content.len();
@@ -2444,9 +2531,13 @@ fn build_preview_section<'a, M: 'a + Clone>(
                         ..Default::default()
                     }),
                 Space::new().width(8),
-                text(format!("{} chars", content_len))
+                text(format!("{} chars", format_number(content_len)))
                     .size(9)
                     .color(iced::Color::from_rgb(0.4, 0.4, 0.4)),
+                Space::new().width(8),
+                text(format!("~{} tokens", format_number(tokens)))
+                    .size(9)
+                    .color(iced::Color::from_rgb(0.5, 0.45, 0.35)),
             ]
             .align_y(Alignment::Center),
             Space::new().height(4),
@@ -2473,6 +2564,38 @@ fn build_preview_section<'a, M: 'a + Clone>(
         ..Default::default()
     })
     .into()
+}
+
+/// Estimate token count for a string.
+/// Uses ~4 characters per token as a rough approximation for mixed English text and code.
+/// This is a simplification - actual tokenization varies by model and content.
+fn estimate_tokens(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+
+    // Count words and special characters separately for better estimation
+    let word_count = text.split_whitespace().count();
+    let char_count = text.len();
+
+    // Heuristic: ~1.3 tokens per word on average, but code has more symbols
+    // Use a blend of character-based (~4 chars/token) and word-based estimates
+    let char_estimate = char_count / 4;
+    let word_estimate = (word_count as f64 * 1.3) as usize;
+
+    // Return the average, biased slightly toward character count for code
+    (char_estimate * 2 + word_estimate) / 3
+}
+
+/// Format a number with thousand separators for display
+fn format_number(n: usize) -> String {
+    if n < 1000 {
+        n.to_string()
+    } else if n < 1_000_000 {
+        format!("{}.{}k", n / 1000, (n % 1000) / 100)
+    } else {
+        format!("{}.{}M", n / 1_000_000, (n % 1_000_000) / 100_000)
+    }
 }
 
 // =============================================================================
@@ -3380,4 +3503,127 @@ where
             ..Default::default()
         })
         .into()
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_estimate_tokens_empty() {
+        assert_eq!(estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn test_estimate_tokens_short_text() {
+        // "Hello world" = 11 chars, 2 words
+        // char_estimate = 11/4 = 2
+        // word_estimate = 2 * 1.3 = 2
+        // result = (2*2 + 2) / 3 = 2
+        let tokens = estimate_tokens("Hello world");
+        assert!(tokens > 0 && tokens <= 5, "Expected 1-5 tokens, got {}", tokens);
+    }
+
+    #[test]
+    fn test_estimate_tokens_code() {
+        let code = r#"fn main() {
+    println!("Hello, world!");
+}"#;
+        let tokens = estimate_tokens(code);
+        // 51 chars, 5 words
+        // char_estimate = 51/4 = 12
+        // word_estimate = 5 * 1.3 = 6
+        // result = (12*2 + 6) / 3 = 10
+        assert!(tokens > 5 && tokens <= 20, "Expected 5-20 tokens, got {}", tokens);
+    }
+
+    #[test]
+    fn test_estimate_tokens_long_text() {
+        let long_text = "word ".repeat(1000); // 5000 chars, 1000 words
+        let tokens = estimate_tokens(&long_text);
+        // char_estimate = 5000/4 = 1250
+        // word_estimate = 1000 * 1.3 = 1300
+        // result = (1250*2 + 1300) / 3 = 1266
+        assert!(tokens > 1000 && tokens < 2000, "Expected ~1200 tokens, got {}", tokens);
+    }
+
+    #[test]
+    fn test_format_number_small() {
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(42), "42");
+        assert_eq!(format_number(999), "999");
+    }
+
+    #[test]
+    fn test_format_number_thousands() {
+        assert_eq!(format_number(1000), "1.0k");
+        assert_eq!(format_number(1500), "1.5k");
+        assert_eq!(format_number(12345), "12.3k");
+        assert_eq!(format_number(999999), "999.9k");
+    }
+
+    #[test]
+    fn test_format_number_millions() {
+        assert_eq!(format_number(1000000), "1.0M");
+        assert_eq!(format_number(1500000), "1.5M");
+        assert_eq!(format_number(12345678), "12.3M");
+    }
+
+    #[test]
+    fn test_cli_agents_state_default() {
+        let state = CLIAgentsState::new();
+        assert!(!state.show_prompt_preview);
+        assert!(state.presets.is_empty());
+        assert!(state.selected_preset.is_none());
+    }
+
+    #[test]
+    fn test_toggle_prompt_preview() {
+        let mut state = CLIAgentsState::new();
+        assert!(!state.show_prompt_preview);
+        
+        state.update(CLIAgentMessage::TogglePromptPreview);
+        assert!(state.show_prompt_preview);
+        
+        state.update(CLIAgentMessage::TogglePromptPreview);
+        assert!(!state.show_prompt_preview);
+    }
+
+    #[test]
+    fn test_build_full_prompt_no_preset() {
+        let mut state = CLIAgentsState::new();
+        state.launch_form.prompt = "My task".to_string();
+        
+        let full = state.build_full_prompt();
+        assert!(full.contains("[Default Prefix]"));
+        assert!(full.contains("My task"));
+        assert!(full.contains("[Default Suffix]"));
+    }
+
+    #[test]
+    fn test_build_full_prompt_with_preset() {
+        let mut state = CLIAgentsState::new();
+        state.presets.push(Preset {
+            id: "test".to_string(),
+            name: "Test Preset".to_string(),
+            description: None,
+            category: "test".to_string(),
+            is_builtin: false,
+            prefix: Some("PREFIX_CONTENT".to_string()),
+            suffix: Some("SUFFIX_CONTENT".to_string()),
+            created_at: None,
+            updated_at: None,
+        });
+        state.selected_preset = Some("test".to_string());
+        state.launch_form.prompt = "My task".to_string();
+        
+        let full = state.build_full_prompt();
+        assert!(full.contains("PREFIX_CONTENT"));
+        assert!(full.contains("My task"));
+        assert!(full.contains("SUFFIX_CONTENT"));
+    }
 }

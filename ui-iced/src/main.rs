@@ -12188,6 +12188,30 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
                 },
             )
         }
+        Some(CLIAgentTask::CopyPromptToClipboard { prompt }) => {
+            log::info!("Copying prompt to clipboard ({} chars)", prompt.len());
+            Task::perform(
+                async move {
+                    use arboard::Clipboard;
+                    match Clipboard::new() {
+                        Ok(mut clipboard) => clipboard
+                            .set_text(&prompt)
+                            .map_err(|e| format!("Clipboard error: {}", e)),
+                        Err(e) => Err(format!("Failed to access clipboard: {}", e)),
+                    }
+                },
+                |result| match result {
+                    Ok(()) => {
+                        log::info!("Prompt copied to clipboard");
+                        Message::CLIAgentAction(CLIAgentMessage::PromptCopied)
+                    }
+                    Err(e) => {
+                        log::error!("Failed to copy prompt: {}", e);
+                        Message::CLIAgentAction(CLIAgentMessage::PromptCopyFailed(e))
+                    }
+                },
+            )
+        }
         None => Task::none(),
     }
 }
