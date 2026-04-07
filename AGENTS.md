@@ -1078,3 +1078,71 @@ Added documentation for recent features:
 | `ui-iced/src/cli_agents.rs` | Clippy fixes |
 | `ui-iced/src/widgets/diagram.rs` | `strip_prefix` fix |
 | `README.md` | Feature documentation |
+
+## April 7, 2026 - Code Quality Session (Continued)
+
+### Additional Fixes
+
+**1. Eliminated `unwrap()` in `view_for_window` (main.rs)**
+
+Replaced awkward pattern that used `.map()` then `.unwrap()` on the same Option:
+
+```rust
+// Before: Used map then unwrap - technically safe but not idiomatic
+match window_state.map(|ws| ws.window_type) {
+    Some(WindowType::TiledPanel) => {
+        let ws = window_state.unwrap(); // redundant unwrap
+        view_tiled_panel_window(state, ws.vertical_split, ws.split_ratio)
+    }
+    ...
+}
+
+// After: Direct pattern matching
+match state.windows.get(&window_id) {
+    Some(ws) => match ws.window_type {
+        WindowType::TiledPanel => {
+            view_tiled_panel_window(state, ws.vertical_split, ws.split_ratio)
+        }
+        ...
+    },
+    None => view_main_window(state),
+}
+```
+
+**2. Fixed path `unwrap()` in diagram rendering (widgets/diagram.rs)**
+
+Added proper error handling for path-to-string conversion:
+
+```rust
+// Before: Could panic on invalid UTF-8 paths
+input_file.to_str().unwrap()
+
+// After: Returns error instead of panicking
+let input_str = input_file
+    .to_str()
+    .ok_or_else(|| "Invalid UTF-8 in input path".to_string())?;
+```
+
+**3. Fixed awkward `is_err() + unwrap()` pattern (services.rs)**
+
+Replaced confusing pattern with idiomatic `map().unwrap_or()`:
+
+```rust
+// Before: Safe but confusing - checks is_err then unwraps
+if mix_check.is_err() || !mix_check.unwrap().status.success() { ... }
+
+// After: Clear and idiomatic
+let mix_available = std::process::Command::new("which")
+    .arg("mix")
+    .output()
+    .map(|o| o.status.success())
+    .unwrap_or(false);
+
+if !mix_available { ... }
+```
+
+### Verification
+
+- All 55 tests pass
+- No new clippy warnings introduced
+- Changes committed in `9cd64b1` and `701368e`
