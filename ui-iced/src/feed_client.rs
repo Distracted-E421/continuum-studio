@@ -324,3 +324,107 @@ impl Default for FeedHttpClient {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_feed_source_icon() {
+        assert_eq!(FeedSource::Git.icon(), "🔀");
+        assert_eq!(FeedSource::FileChange.icon(), "📁");
+        assert_eq!(FeedSource::Agent.icon(), "🤖");
+        assert_eq!(FeedSource::TaskQueue.icon(), "📋");
+        assert_eq!(FeedSource::Nesy.icon(), "🧮");
+        assert_eq!(FeedSource::System.icon(), "⚙️");
+        assert_eq!(FeedSource::Unknown.icon(), "❓");
+    }
+
+    #[test]
+    fn test_feed_source_label() {
+        assert_eq!(FeedSource::Git.label(), "git");
+        assert_eq!(FeedSource::FileChange.label(), "file");
+        assert_eq!(FeedSource::Agent.label(), "agent");
+        assert_eq!(FeedSource::TaskQueue.label(), "task");
+        assert_eq!(FeedSource::Nesy.label(), "nesy");
+        assert_eq!(FeedSource::System.label(), "system");
+        assert_eq!(FeedSource::Unknown.label(), "unknown");
+    }
+
+    #[test]
+    fn test_feed_source_serialization() {
+        let json = serde_json::to_string(&FeedSource::Git).unwrap();
+        assert_eq!(json, "\"git\"");
+        
+        let s: FeedSource = serde_json::from_str("\"agent\"").unwrap();
+        assert_eq!(s, FeedSource::Agent);
+        
+        // Unknown values should deserialize to Unknown
+        let s: FeedSource = serde_json::from_str("\"something_else\"").unwrap();
+        assert_eq!(s, FeedSource::Unknown);
+    }
+
+    #[test]
+    fn test_feed_link_serialization() {
+        let link = FeedLink {
+            label: "View Commit".to_string(),
+            url: "https://github.com/user/repo/commit/abc123".to_string(),
+            link_type: "commit".to_string(),
+        };
+        
+        let json = serde_json::to_string(&link);
+        assert!(json.is_ok());
+        
+        let restored: Result<FeedLink, _> = serde_json::from_str(&json.unwrap());
+        assert!(restored.is_ok());
+        
+        let restored = restored.unwrap();
+        assert_eq!(restored.label, "View Commit");
+    }
+
+    #[test]
+    fn test_feed_entry_serialization() {
+        let entry = FeedEntry {
+            id: "entry-123".to_string(),
+            timestamp: "2026-04-07T12:00:00Z".to_string(),
+            source: FeedSource::Agent,
+            event_type: "status_update".to_string(),
+            agent_id: Some("agent-456".to_string()),
+            title: "Agent started working".to_string(),
+            body: Some("Details here".to_string()),
+            links: vec![],
+            metadata: serde_json::json!({"key": "value"}),
+            project: Some("continuum-studio".to_string()),
+            repo: None,
+            tags: vec!["test".to_string()],
+        };
+        
+        let json = serde_json::to_string(&entry);
+        assert!(json.is_ok());
+        
+        let restored: Result<FeedEntry, _> = serde_json::from_str(&json.unwrap());
+        assert!(restored.is_ok());
+        
+        let restored = restored.unwrap();
+        assert_eq!(restored.id, "entry-123");
+        assert_eq!(restored.source, FeedSource::Agent);
+    }
+
+    #[test]
+    fn test_feed_stats_default() {
+        let stats = FeedStats::default();
+        assert_eq!(stats.total_entries, 0);
+    }
+
+    #[test]
+    fn test_feed_http_client_default() {
+        let client = FeedHttpClient::default();
+        assert!(!client.base_url.is_empty());
+    }
+
+    #[test]
+    fn test_default_urls() {
+        assert_eq!(DEFAULT_API_URL, "http://localhost:4001/api/feed");
+        assert_eq!(DEFAULT_WS_URL, "ws://localhost:4001/ws/feed");
+    }
+}
