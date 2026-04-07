@@ -4497,54 +4497,219 @@ fn view_task_queue_new_task_panel(state: &ContinuumStudio) -> Element<'_, Messag
 
 /// Agents panel content for task queue window
 fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message> {
+    use continuum_studio_iced::coordinator_client::{AgentStatus as CoordStatus, AgentType};
+
     let colors = &state.colors;
 
-    // TODO: Integrate with actual agent tracking from task queue widget
-    // For now, show a placeholder with the agent monitoring concept
+    // Separate coordinator agents by type
+    let session_agents: Vec<_> = state
+        .coordinator_agents
+        .iter()
+        .filter(|a| a.agent_type == AgentType::SessionAgent)
+        .collect();
+    let sub_agents: Vec<_> = state
+        .coordinator_agents
+        .iter()
+        .filter(|a| a.agent_type == AgentType::SubAgent)
+        .collect();
 
-    let header = text("ACTIVE AGENTS").size(11).color(colors.text_secondary);
+    // Count CLI agents that are running
+    let cli_agent_count = state
+        .cli_agents_state
+        .agents
+        .values()
+        .filter(|a| matches!(a.status, continuum_studio_iced::cli_agents::AgentStatus::Running))
+        .count();
 
-    // Placeholder: Show session agents (main Cursor sessions)
-    let session_agents_section = column![
-        text("Session Agents").size(13).color(colors.text_primary),
-        Space::new().height(4),
-        row![
-            container(
-                text("●")
-                    .size(10)
-                    .color(iced::Color::from_rgb(0.3, 0.8, 0.3))
-            )
-            .padding([2, 4]),
-            text("Continuum Studio")
-                .size(12)
-                .color(colors.text_secondary),
+    let total_count = session_agents.len() + sub_agents.len() + cli_agent_count;
+
+    let header = row![
+        text("ACTIVE AGENTS").size(11).color(colors.text_secondary),
+        Space::new().width(Length::Fill),
+        text(format!("{}", total_count))
+            .size(11)
+            .color(if total_count > 0 {
+                iced::Color::from_rgb(0.3, 0.8, 0.3)
+            } else {
+                colors.text_secondary
+            }),
+    ];
+
+    // Helper to get status color
+    let status_color = |status: &CoordStatus| -> iced::Color {
+        match status {
+            CoordStatus::Active => iced::Color::from_rgb(0.3, 0.8, 0.3),
+            CoordStatus::Idle => iced::Color::from_rgb(0.8, 0.7, 0.2),
+            CoordStatus::Waiting => iced::Color::from_rgb(0.3, 0.5, 0.9),
+            CoordStatus::Completed => iced::Color::from_rgb(0.5, 0.5, 0.5),
+            CoordStatus::Disconnected => iced::Color::from_rgb(0.8, 0.3, 0.3),
+            CoordStatus::Unknown => iced::Color::from_rgb(0.5, 0.5, 0.5),
+        }
+    };
+
+    // Session agents section
+    let session_agents_section = {
+        let mut section = column![
+            text("Session Agents").size(13).color(colors.text_primary),
+            Space::new().height(4),
         ]
-        .spacing(6),
-    ]
-    .spacing(4);
+        .spacing(4);
 
-    // Placeholder: Sub-agents section
-    let sub_agents_section = column![
-        Space::new().height(16),
-        text("Sub-Agents").size(13).color(colors.text_primary),
-        Space::new().height(4),
-        text("No active sub-agents")
-            .size(12)
-            .color(colors.text_secondary),
-    ]
-    .spacing(4);
+        if session_agents.is_empty() {
+            section = section.push(
+                text("No session agents registered")
+                    .size(12)
+                    .color(colors.text_secondary),
+            );
+        } else {
+            for agent in &session_agents {
+                let workspace_name = agent
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| w.rsplit('/').next())
+                    .unwrap_or("unknown");
+                let agent_row = row![
+                    container(
+                        text(agent.status.icon())
+                            .size(10)
+                            .color(status_color(&agent.status))
+                    )
+                    .padding([2, 4]),
+                    column![
+                        text(workspace_name)
+                            .size(12)
+                            .color(colors.text_primary),
+                        text(&agent.id[..8.min(agent.id.len())])
+                            .size(10)
+                            .color(colors.text_secondary),
+                    ]
+                    .spacing(2),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center);
+                section = section.push(agent_row);
+            }
+        }
+        section
+    };
 
-    // Info text
-    let info_text = text("Agent tracking integrates with Synapsix harness system")
-        .size(10)
-        .color(colors.text_secondary);
+    // Sub-agents section
+    let sub_agents_section = {
+        let mut section = column![
+            Space::new().height(16),
+            text("Sub-Agents").size(13).color(colors.text_primary),
+            Space::new().height(4),
+        ]
+        .spacing(4);
+
+        if sub_agents.is_empty() {
+            section = section.push(
+                text("No active sub-agents")
+                    .size(12)
+                    .color(colors.text_secondary),
+            );
+        } else {
+            for agent in &sub_agents {
+                let focus_desc = agent
+                    .focus
+                    .description
+                    .as_deref()
+                    .unwrap_or("working...");
+                let agent_row = row![
+                    container(
+                        text(agent.status.icon())
+                            .size(10)
+                            .color(status_color(&agent.status))
+                    )
+                    .padding([2, 4]),
+                    column![
+                        text(&agent.id[..8.min(agent.id.len())])
+                            .size(12)
+                            .color(colors.text_primary),
+                        text(focus_desc)
+                            .size(10)
+                            .color(colors.text_secondary),
+                    ]
+                    .spacing(2),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center);
+                section = section.push(agent_row);
+            }
+        }
+        section
+    };
+
+    // CLI agents section (from cli_agents_state)
+    let cli_agents_section = {
+        let running_cli_agents: Vec<_> = state
+            .cli_agents_state
+            .agents
+            .values()
+            .filter(|a| matches!(a.status, continuum_studio_iced::cli_agents::AgentStatus::Running))
+            .collect();
+
+        let mut section = column![
+            Space::new().height(16),
+            text("CLI Agents").size(13).color(colors.text_primary),
+            Space::new().height(4),
+        ]
+        .spacing(4);
+
+        if running_cli_agents.is_empty() {
+            section = section.push(
+                text("No CLI agents running")
+                    .size(12)
+                    .color(colors.text_secondary),
+            );
+        } else {
+            for agent in &running_cli_agents {
+                let workspace_name = agent
+                    .workspace
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("unknown");
+                let agent_row = row![
+                    container(
+                        text("▶")
+                            .size(10)
+                            .color(iced::Color::from_rgb(0.3, 0.8, 0.3))
+                    )
+                    .padding([2, 4]),
+                    column![
+                        text(workspace_name)
+                            .size(12)
+                            .color(colors.text_primary),
+                        text(&agent.id[..8.min(agent.id.len())])
+                            .size(10)
+                            .color(colors.text_secondary),
+                    ]
+                    .spacing(2),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center);
+                section = section.push(agent_row);
+            }
+        }
+        section
+    };
+
+    // Info text showing data source
+    let info_text = text(if total_count > 0 {
+        "Agent data from Synapsix Coordinator"
+    } else {
+        "Connect to Synapsix to see agent activity"
+    })
+    .size(10)
+    .color(colors.text_secondary);
 
     column![
         header,
         Space::new().height(12),
-        session_agents_section,
-        sub_agents_section,
-        Space::new().height(Length::Fill),
+        scrollable(
+            column![session_agents_section, sub_agents_section, cli_agents_section,].spacing(0)
+        )
+        .height(Length::Fill),
         info_text,
     ]
     .spacing(0)
