@@ -76,16 +76,21 @@ pub enum OrchestratorMode {
     Autonomous,
 }
 
-impl OrchestratorMode {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for OrchestratorMode {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "user_active" => Self::UserActive,
             "user_delegate" => Self::UserDelegate,
             "spectator" => Self::Spectator,
             "autonomous" => Self::Autonomous,
             _ => Self::UserActive,
-        }
+        })
     }
+}
+
+impl OrchestratorMode {
 
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -347,7 +352,7 @@ impl DialogClient {
             .await
             .map_err(|e| format!("D-Bus call failed: {}", e))?;
 
-        Ok(OrchestratorMode::from_str(&result))
+        Ok(result.parse().unwrap())
     }
 
     /// Set orchestrator mode

@@ -1094,9 +1094,10 @@ mod tests {
 
     #[test]
     fn test_cancel_mode_change() {
-        let mut state = OrchestratorPanelState::default();
-
-        state.pending_mode_change = Some(OrchestratorMode::Spectator);
+        let mut state = OrchestratorPanelState {
+            pending_mode_change: Some(OrchestratorMode::Spectator),
+            ..Default::default()
+        };
         assert!(state.pending_mode_change.is_some());
 
         // Cancel (simulates CancelModeChange)

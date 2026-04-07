@@ -12309,7 +12309,7 @@ fn handle_orchestrator_ws_event(
             Task::none()
         }
         OrchestratorWsEvent::DialogCreated { dialog } => {
-            let pending_dialog = dialog.into_pending_dialog();
+            let pending_dialog = (*dialog).into_pending_dialog();
             log::info!(
                 "New dialog from orchestrator WS: {} (priority: {:?})",
                 pending_dialog.id,
