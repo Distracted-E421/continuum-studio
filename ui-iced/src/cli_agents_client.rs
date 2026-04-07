@@ -1171,7 +1171,7 @@ impl OrchestratorDialogInfo {
 }
 
 /// Spawn an orchestrator WebSocket connection for real-time dialog notifications
-pub async fn spawn_orchestrator_websocket(
+pub fn spawn_orchestrator_websocket(
     ws_url: Option<String>,
 ) -> mpsc::Receiver<OrchestratorWsEvent> {
     let (tx, rx) = mpsc::channel(100);
