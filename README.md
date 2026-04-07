@@ -114,6 +114,10 @@ Features:
 - **History View** - Browse past dialog responses with reinvoke support
 - **Pull-to-Refresh** - Manual refresh for dialogs and history
 - **DataStore Persistence** - Settings survive app restarts
+- **Multi-Endpoint Configuration** - Multiple server endpoints with auto-fallback
+- **Context-aware FAB** - Floating action button with context-sensitive menu
+- **WorkManager** - Periodic widget updates in background
+- **Coordination Dashboard** - Multi-agent monitoring and coordination
 
 ### Studio Core (`core/studio_core/`)
 
