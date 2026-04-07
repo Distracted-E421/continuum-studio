@@ -125,6 +125,11 @@ Continuum Studio continues active development. This month focused on performance
 - Fixed awkward `is_err()/unwrap()` pattern in services.rs
 - Added link click handler to Android QuickLinkRow
 - System theme detection via dark-light crate
+- **Clippy fixes**:
+  - Boxed `OrchestratorDialogInfo` in `DialogCreated` variant (large_enum_variant)
+  - Fixed `field_reassign_with_default` in orchestrator_panel.rs test
+  - Implemented `std::str::FromStr` for `OrchestratorMode` (should_implement_trait)
+  - Reduced clippy warnings from 4 to 1 (remaining: too_many_arguments in cli_agents_client.rs - acceptable)
 
 ## Related Documentation
 
