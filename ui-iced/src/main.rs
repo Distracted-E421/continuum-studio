@@ -4518,7 +4518,7 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
         .cli_agents_state
         .agents
         .values()
-        .filter(|a| matches!(a.status, continuum_studio_iced::cli_agents::AgentStatus::Running))
+        .filter(|a| matches!(a.status, continuum_studio_iced::cli_agents::CLIAgentStatus::Running))
         .count();
 
     let total_count = session_agents.len() + sub_agents.len() + cli_agent_count;
@@ -4646,7 +4646,7 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
             .cli_agents_state
             .agents
             .values()
-            .filter(|a| matches!(a.status, continuum_studio_iced::cli_agents::AgentStatus::Running))
+            .filter(|a| matches!(a.status, continuum_studio_iced::cli_agents::CLIAgentStatus::Running))
             .collect();
 
         let mut section = column![
