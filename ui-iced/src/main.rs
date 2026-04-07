@@ -12201,16 +12201,13 @@ fn handle_orchestrator_message(
     match msg {
         SetMode(mode) => {
             // Fire async D-Bus call to set mode
-            let mode_str = mode.as_str().to_string();
+            // OrchestratorMode is Copy, so we can use it directly in the async block
             Task::perform(
                 async move {
                     use continuum_studio_iced::dialog_client::DialogClient;
                     let mut client = DialogClient::new();
                     if client.connect().await.is_ok() {
-                        match client.set_orchestrator_mode(mode_str.parse().unwrap()).await {
-                            Ok(new_mode) => Ok(new_mode),
-                            Err(e) => Err(e),
-                        }
+                        client.set_orchestrator_mode(mode).await
                     } else {
                         Err("Failed to connect to daemon".to_string())
                     }
@@ -12451,16 +12448,13 @@ fn handle_orchestrator_message(
         ConfirmModeChange => {
             if let Some(mode) = state.orchestrator_state.pending_mode_change.take() {
                 log::info!("Confirming mode change to {:?}", mode);
-                let mode_str = mode.as_str().to_string();
+                // OrchestratorMode is Copy, so we can use it directly in the async block
                 Task::perform(
                     async move {
                         use continuum_studio_iced::dialog_client::DialogClient;
                         let mut client = DialogClient::new();
                         if client.connect().await.is_ok() {
-                            match client.set_orchestrator_mode(mode_str.parse().unwrap()).await {
-                                Ok(new_mode) => Ok(new_mode),
-                                Err(e) => Err(e),
-                            }
+                            client.set_orchestrator_mode(mode).await
                         } else {
                             Err("Failed to connect to daemon".to_string())
                         }
