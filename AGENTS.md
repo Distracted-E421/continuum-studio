@@ -1008,3 +1008,73 @@ COSMIC and VS Code theme integration for consistent styling.
 | **Updater** | `updater.rs` | Multi-forge self-update system |
 | **Sessions** | `sessions.rs` | Cursor session tracking |
 | **Settings** | `settings.rs` | App configuration persistence |
+
+## April 7, 2026 - Code Quality Session
+
+### Changes Made
+
+**1. Type Deduplication (widgets/task_queue.rs)**
+
+Resolved technical debt identified in earlier audit. The widget now imports core types from `task_queue_client.rs` instead of duplicating them:
+
+```rust
+// Before: ~95 lines of duplicated type definitions
+// After: Single import line
+pub use crate::task_queue_client::{Priority, QueueStats, Task, TaskStatus};
+```
+
+This prevents drift between API client types and widget types.
+
+**2. System Theme Detection (main.rs)**
+
+Added `dark-light` crate (v2.0.0) for automatic system theme detection via XDG Desktop Portal D-Bus API:
+
+```rust
+ThemePreference::System => {
+    match dark_light::detect() {
+        Ok(dark_light::Mode::Dark) => Theme::Dark,
+        Ok(dark_light::Mode::Light) => Theme::Light,
+        Ok(dark_light::Mode::Unspecified) | Err(_) => Theme::Dark,
+    }
+}
+```
+
+Works with COSMIC, GNOME, KDE, and other freedesktop-compliant desktops.
+
+**3. Clippy Warning Fixes**
+
+Fixed 4 clippy warnings:
+
+| Warning | Fix | File |
+|---------|-----|------|
+| `Iterator::last` on `DoubleEndedIterator` | Use `next_back()` | `cli_agents.rs` |
+| `field_reassign_with_default` | Use struct literal with spread | `cli_agents.rs` |
+| Manual prefix stripping | Use `strip_prefix()` | `widgets/diagram.rs` |
+
+**4. README.md Updates**
+
+Added documentation for recent features:
+- System theme detection
+- Parked agents panel
+- Subagents panel
+- Agent coordination
+
+### Remaining Clippy Warnings (Acceptable)
+
+| Warning | Location | Reason |
+|---------|----------|--------|
+| Too many arguments (8/7) | `cli_agents_client.rs:247` | Would require config struct refactor |
+| Large enum variant size | `cli_agents_client.rs:1099` | Would require boxing |
+| `from_str` method name | Various | Intentional, not implementing `FromStr` trait |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `ui-iced/Cargo.toml` | +1 dep (dark-light) |
+| `ui-iced/src/main.rs` | System theme detection |
+| `ui-iced/src/widgets/task_queue.rs` | Type deduplication (~80 lines removed) |
+| `ui-iced/src/widgets/mod.rs` | Updated re-exports |
+| `ui-iced/src/cli_agents.rs` | Clippy fixes |
+| `ui-iced/src/widgets/diagram.rs` | `strip_prefix` fix |
+| `README.md` | Feature documentation |
