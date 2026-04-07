@@ -148,3 +148,88 @@ impl ParkedAgentsHttpClient {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_api_base() {
+        assert_eq!(DEFAULT_API_BASE, "http://localhost:8080");
+    }
+
+    #[test]
+    fn test_client_default() {
+        let client = ParkedAgentsHttpClient::default();
+        assert_eq!(client.base_url, DEFAULT_API_BASE);
+    }
+
+    #[test]
+    fn test_client_with_base_url() {
+        let client = ParkedAgentsHttpClient::with_base_url("http://custom:9000");
+        assert_eq!(client.base_url, "http://custom:9000");
+    }
+
+    #[test]
+    fn test_parked_agents_response_deserialization() {
+        let json = r#"{
+            "agents": [
+                {
+                    "agentId": "agent-123",
+                    "workspace": "/home/user/project",
+                    "parkedAt": 1712491200,
+                    "capabilities": ["fast_shell", "fast_dialog"],
+                    "lastHeartbeat": 1712491300
+                }
+            ]
+        }"#;
+        
+        let response: ParkedAgentsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.agents.len(), 1);
+        assert_eq!(response.agents[0].agent_id, "agent-123");
+        assert_eq!(response.agents[0].workspace, "/home/user/project");
+        assert_eq!(response.agents[0].capabilities.len(), 2);
+    }
+
+    #[test]
+    fn test_parked_agents_response_empty() {
+        let json = r#"{"agents": []}"#;
+        let response: ParkedAgentsResponse = serde_json::from_str(json).unwrap();
+        assert!(response.agents.is_empty());
+    }
+
+    #[test]
+    fn test_parked_agent_json_to_parked_agent() {
+        use chrono::TimeZone;
+        
+        let json_agent = ParkedAgentJson {
+            agent_id: "agent-456".to_string(),
+            workspace: "/home/dev/code".to_string(),
+            parked_at: Utc.with_ymd_and_hms(2026, 4, 7, 12, 0, 0).unwrap(),
+            capabilities: vec!["fast_shell".to_string()],
+            last_heartbeat: Some(Utc.with_ymd_and_hms(2026, 4, 7, 12, 30, 0).unwrap()),
+        };
+        
+        let parked: ParkedAgent = json_agent.into();
+        assert_eq!(parked.agent_id, "agent-456");
+        assert_eq!(parked.workspace, "/home/dev/code");
+        assert_eq!(parked.capabilities.len(), 1);
+    }
+
+    #[test]
+    fn test_parked_agent_json_without_heartbeat() {
+        use chrono::TimeZone;
+        
+        let parked_time = Utc.with_ymd_and_hms(2026, 4, 7, 12, 0, 0).unwrap();
+        let json_agent = ParkedAgentJson {
+            agent_id: "agent-789".to_string(),
+            workspace: "/home/dev/project".to_string(),
+            parked_at: parked_time,
+            capabilities: vec![],
+            last_heartbeat: None,
+        };
+        
+        let parked: ParkedAgent = json_agent.into();
+        assert_eq!(parked.last_heartbeat, parked_time);
+    }
+}
