@@ -635,7 +635,7 @@ fn orchestrator_ws_worker() -> impl iced::futures::Stream<Item = Message> {
         |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
             use iced::futures::SinkExt;
 
-            let mut rx = spawn_orchestrator_websocket(None).await;
+            let mut rx = spawn_orchestrator_websocket(None);
 
             while let Some(event) = rx.recv().await {
                 let _ = output.send(Message::OrchestratorWsEvent(event)).await;
