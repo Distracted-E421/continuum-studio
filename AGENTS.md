@@ -985,3 +985,7 @@ COSMIC and VS Code theme integration for consistent styling.
 | **Feed** | `feed_client.rs` | Activity feed HTTP |
 | **Profiling** | `profiling.rs` | Performance spans |
 | **TaskQueue Widget** | `widgets/task_queue.rs` | Task management widget |
+| **Log Capture** | `log_capture.rs` | In-memory log buffer for UI |
+| **Updater** | `updater.rs` | Multi-forge self-update system |
+| **Sessions** | `sessions.rs` | Cursor session tracking |
+| **Settings** | `settings.rs` | App configuration persistence |
