@@ -738,3 +738,141 @@ async fn connect_and_handle(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_priority_default() {
+        let p = Priority::default();
+        assert_eq!(p, Priority::Medium);
+    }
+
+    #[test]
+    fn test_priority_emoji() {
+        assert_eq!(Priority::Critical.emoji(), "🔴");
+        assert_eq!(Priority::High.emoji(), "🟠");
+        assert_eq!(Priority::Medium.emoji(), "🟡");
+        assert_eq!(Priority::Low.emoji(), "🟢");
+        assert_eq!(Priority::Backlog.emoji(), "⚪");
+    }
+
+    #[test]
+    fn test_priority_label() {
+        assert_eq!(Priority::Critical.label(), "critical");
+        assert_eq!(Priority::High.label(), "high");
+        assert_eq!(Priority::Medium.label(), "medium");
+        assert_eq!(Priority::Low.label(), "low");
+        assert_eq!(Priority::Backlog.label(), "backlog");
+    }
+
+    #[test]
+    fn test_priority_all() {
+        let all = Priority::all();
+        assert_eq!(all.len(), 5);
+        assert!(all.contains(&Priority::Critical));
+        assert!(all.contains(&Priority::High));
+        assert!(all.contains(&Priority::Medium));
+        assert!(all.contains(&Priority::Low));
+        assert!(all.contains(&Priority::Backlog));
+    }
+
+    #[test]
+    fn test_priority_display() {
+        let p = Priority::High;
+        let display = format!("{}", p);
+        assert!(display.contains("🟠"));
+        assert!(display.contains("high"));
+    }
+
+    #[test]
+    fn test_priority_serialization() {
+        let json = serde_json::to_string(&Priority::Critical).unwrap();
+        assert_eq!(json, "\"critical\"");
+        
+        let p: Priority = serde_json::from_str("\"high\"").unwrap();
+        assert_eq!(p, Priority::High);
+    }
+
+    #[test]
+    fn test_task_status_default() {
+        let s = TaskStatus::default();
+        assert_eq!(s, TaskStatus::Pending);
+    }
+
+    #[test]
+    fn test_task_status_label() {
+        assert_eq!(TaskStatus::Pending.label(), "pending");
+        assert_eq!(TaskStatus::Claimed.label(), "claimed");
+        assert_eq!(TaskStatus::InProgress.label(), "in_progress");
+        assert_eq!(TaskStatus::Completed.label(), "completed");
+        assert_eq!(TaskStatus::Cancelled.label(), "cancelled");
+    }
+
+    #[test]
+    fn test_task_status_serialization() {
+        let json = serde_json::to_string(&TaskStatus::InProgress).unwrap();
+        assert_eq!(json, "\"in_progress\"");
+        
+        let s: TaskStatus = serde_json::from_str("\"completed\"").unwrap();
+        assert_eq!(s, TaskStatus::Completed);
+    }
+
+    #[test]
+    fn test_queue_stats_default() {
+        let stats = QueueStats::default();
+        assert_eq!(stats.total, 0);
+        assert_eq!(stats.pending, 0);
+        assert_eq!(stats.in_progress, 0);
+        assert_eq!(stats.completed_today, 0);
+    }
+
+    #[test]
+    fn test_task_serialization() {
+        let task = Task {
+            id: "task-123".to_string(),
+            content: "Test task".to_string(),
+            priority: Priority::High,
+            status: TaskStatus::Pending,
+            assigned_to: None,
+            project: Some("continuum-studio".to_string()),
+            tags: vec!["test".to_string(), "ui".to_string()],
+            notes: Some("Notes here".to_string()),
+            parent_id: None,
+            created_by: Creator::Agent,
+            agent_id: Some("agent-456".to_string()),
+            session_id: Some("session-789".to_string()),
+            estimated_effort: None,
+            blocked_by: vec![],
+            created_at: Some("2026-04-07T12:00:00Z".to_string()),
+            updated_at: Some("2026-04-07T12:30:00Z".to_string()),
+            claimed_at: None,
+            completed_at: None,
+            result: None,
+        };
+        
+        let json = serde_json::to_string(&task);
+        assert!(json.is_ok());
+        
+        let restored: Result<Task, _> = serde_json::from_str(&json.unwrap());
+        assert!(restored.is_ok());
+        
+        let restored = restored.unwrap();
+        assert_eq!(restored.id, "task-123");
+        assert_eq!(restored.priority, Priority::High);
+    }
+
+    #[test]
+    fn test_creator_serialization() {
+        assert_eq!(serde_json::to_string(&Creator::User).unwrap(), "\"user\"");
+        assert_eq!(serde_json::to_string(&Creator::Agent).unwrap(), "\"agent\"");
+        assert_eq!(serde_json::to_string(&Creator::Cli).unwrap(), "\"cli\"");
+    }
+
+    #[test]
+    fn test_task_queue_http_client_default() {
+        let client = TaskQueueHttpClient::default();
+        assert!(!client.base_url.is_empty());
+    }
+}
