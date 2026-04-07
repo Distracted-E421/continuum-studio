@@ -285,7 +285,30 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
         window::close_events().map(Message::WindowClosed),
         // Memory stats logging (every 60 seconds)
         memory_stats_subscription(),
+        // Toast auto-dismiss (only active when toast is shown)
+        toast_timeout_subscription(state.toast.as_ref()),
     ])
+}
+
+/// Toast auto-dismiss subscription (3 second timeout)
+fn toast_timeout_subscription(toast: Option<&Toast>) -> iced::Subscription<Message> {
+    match toast {
+        Some(t) => {
+            let elapsed = t.shown_at.elapsed();
+            let timeout = std::time::Duration::from_secs(3);
+            if elapsed >= timeout {
+                // Already expired, dismiss immediately via a one-shot
+                iced::Subscription::run(|| {
+                    futures::stream::once(async { Message::DismissToast })
+                })
+            } else {
+                // Schedule dismissal after remaining time
+                let remaining = timeout - elapsed;
+                iced::time::every(remaining).map(|_| Message::DismissToast)
+            }
+        }
+        None => iced::Subscription::none(),
+    }
 }
 
 /// Memory stats logging subscription (every 60 seconds)
@@ -917,6 +940,7 @@ impl ContinuumStudio {
                 parked_agents_http: ParkedAgentsHttpClient::new(),
                 agent_activity_state: ActivityFeedState::new(),
                 memory_stats: MemoryStats::default(),
+                toast: None,
             },
             startup_task,
         )
@@ -982,6 +1006,43 @@ impl ContinuumStudio {
             Task::batch([startup_tasks, open_task.discard(), tq_open_task.discard()]);
 
         (state, combined_task)
+    }
+}
+
+/// Toast notification for ephemeral feedback
+#[derive(Debug, Clone)]
+struct Toast {
+    message: String,
+    level: ToastLevel,
+    shown_at: std::time::Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum ToastLevel {
+    Success,
+    Info,
+    Warning,
+    Error,
+}
+
+impl ToastLevel {
+    fn color(&self) -> iced::Color {
+        match self {
+            ToastLevel::Success => iced::Color::from_rgb(0.3, 0.7, 0.4),
+            ToastLevel::Info => iced::Color::from_rgb(0.4, 0.5, 0.7),
+            ToastLevel::Warning => iced::Color::from_rgb(0.8, 0.6, 0.2),
+            ToastLevel::Error => iced::Color::from_rgb(0.8, 0.3, 0.3),
+        }
+    }
+
+    fn icon(&self) -> &'static str {
+        match self {
+            ToastLevel::Success => "✓",
+            ToastLevel::Info => "ℹ",
+            ToastLevel::Warning => "⚠",
+            ToastLevel::Error => "✕",
+        }
     }
 }
 
@@ -1141,6 +1202,8 @@ struct ContinuumStudio {
     agent_activity_state: ActivityFeedState,
     /// Memory statistics for performance monitoring
     memory_stats: MemoryStats,
+    /// Toast notification (ephemeral feedback, auto-dismisses after 3s)
+    toast: Option<Toast>,
 }
 
 /// Memory statistics for monitoring app state growth
@@ -1375,6 +1438,12 @@ enum Message {
     ZoneAction(ZoneMsg),
     /// No-op message (for ignoring errors gracefully)
     NoOp,
+
+    // === Toast Notifications ===
+    /// Show a toast notification
+    ShowToast(String, ToastLevel),
+    /// Dismiss the current toast
+    DismissToast,
 }
 
 /// Keyboard shortcuts for quick actions
@@ -2149,6 +2218,18 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         }
         Message::NoOp => {
             // Intentionally do nothing
+        }
+
+        // === Toast Notification Handlers ===
+        Message::ShowToast(message, level) => {
+            state.toast = Some(Toast {
+                message,
+                level,
+                shown_at: std::time::Instant::now(),
+            });
+        }
+        Message::DismissToast => {
+            state.toast = None;
         }
 
         // === Multi-Window Message Handlers ===
@@ -3015,10 +3096,61 @@ fn view_main_window(state: &ContinuumStudio) -> Element<'_, Message> {
             .padding(20),
     ];
 
-    container(main_content)
+    let base_view: Element<'_, Message> = container(main_content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .into()
+        .into();
+
+    // Overlay toast notification if active
+    if let Some(toast) = &state.toast {
+        let toast_view = view_toast(toast);
+        iced::widget::stack![base_view, toast_view].into()
+    } else {
+        base_view
+    }
+}
+
+/// Render a toast notification overlay
+fn view_toast(toast: &Toast) -> Element<'_, Message> {
+    use iced::widget::{button, column, container, row, text, Space};
+
+    let icon = text(toast.level.icon()).size(14);
+    let message = text(&toast.message).size(12);
+    let dismiss_btn = button(text("✕").size(10))
+        .padding([2, 6])
+        .on_press(Message::DismissToast)
+        .style(|_theme, _status| iced::widget::button::Style {
+            background: Some(iced::Background::Color(iced::Color::TRANSPARENT)),
+            text_color: iced::Color::from_rgb(0.7, 0.7, 0.7),
+            ..Default::default()
+        });
+
+    let toast_content = row![icon, Space::new().width(8), message, Space::new().width(12), dismiss_btn]
+        .align_y(iced::Alignment::Center);
+
+    let bg_color = toast.level.color();
+
+    let toast_box = container(toast_content)
+        .padding([8, 16])
+        .style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(bg_color)),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+            },
+            text_color: Some(iced::Color::WHITE),
+            ..Default::default()
+        });
+
+    // Position at bottom-center of screen
+    container(
+        column![Space::new().height(Length::Fill), toast_box, Space::new().height(20),]
+            .align_x(iced::Alignment::Center),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 /// Task queue detached window view
@@ -12189,7 +12321,8 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
             )
         }
         Some(CLIAgentTask::CopyPromptToClipboard { prompt }) => {
-            log::info!("Copying prompt to clipboard ({} chars)", prompt.len());
+            let char_count = prompt.len();
+            log::info!("Copying prompt to clipboard ({} chars)", char_count);
             Task::perform(
                 async move {
                     use arboard::Clipboard;
@@ -12200,14 +12333,20 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
                         Err(e) => Err(format!("Failed to access clipboard: {}", e)),
                     }
                 },
-                |result| match result {
+                move |result| match result {
                     Ok(()) => {
                         log::info!("Prompt copied to clipboard");
-                        Message::CLIAgentAction(CLIAgentMessage::PromptCopied)
+                        Message::ShowToast(
+                            format!("Copied {} chars to clipboard", char_count),
+                            ToastLevel::Success,
+                        )
                     }
                     Err(e) => {
                         log::error!("Failed to copy prompt: {}", e);
-                        Message::CLIAgentAction(CLIAgentMessage::PromptCopyFailed(e))
+                        Message::ShowToast(
+                            format!("Copy failed: {}", e),
+                            ToastLevel::Error,
+                        )
                     }
                 },
             )
