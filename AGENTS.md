@@ -774,8 +774,23 @@ The widget should import from the client module to avoid drift. Currently they'r
 
 **System Theme Detection (Priority: Low)**
 
-`derive_theme()` in `main.rs:725` falls back to Dark for `ThemePreference::System`. Should detect via:
-- `XDG_CURRENT_DESKTOP` environment variable
-- GNOME: `gsettings get org.gnome.desktop.interface color-scheme`
-- KDE: Read plasma config
-- Fallback to system dark-mode-detection crates
+`derive_theme()` in `main.rs:725` falls back to Dark for `ThemePreference::System`. 
+
+**Recommended fix:** Add `dark-light` crate (https://github.com/rust-dark-light/rust-dark-light)
+- Detects via XDG Desktop Portal D-Bus API
+- Works in Flatpak sandboxes
+- Returns `Mode::Dark`, `Mode::Light`, or `Mode::Unspecified`
+
+```rust
+// Cargo.toml
+dark-light = "1.0"
+
+// main.rs
+ThemePreference::System => {
+    match dark_light::detect() {
+        Ok(dark_light::Mode::Dark) => Theme::Dark,
+        Ok(dark_light::Mode::Light) => Theme::Light,
+        _ => Theme::Dark, // Fallback
+    }
+}
+```
