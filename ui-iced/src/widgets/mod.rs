@@ -25,21 +25,22 @@ pub use diagram::{
 };
 pub use task_queue::{
     ActivePanel,
-    // Agent types
+    // Agent types (widget-specific)
     Agent,
     AgentStatus,
     AgentType,
     // Layout types
     PanelLayout,
-    Priority,
-    QueueStats,
-    Task,
     // History types
     TaskHistoryEntry,
     TaskQueueAction,
     TaskQueueColors,
     TaskQueueMessage,
     TaskQueueWidget,
-    TaskStatus,
     WidgetSize as TaskQueueSize,
+    // Core types re-exported from task_queue_client (for convenience)
+    Priority,
+    QueueStats,
+    Task,
+    TaskStatus,
 };
