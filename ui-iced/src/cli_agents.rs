@@ -411,6 +411,79 @@ impl CLIEventType {
     }
 }
 
+impl CLIAgent {
+    /// Convert from API AgentDetails to CLIAgent
+    pub fn from_details(details: crate::cli_agents_client::AgentDetails) -> Self {
+        use chrono::DateTime;
+
+        let status = match details.status.as_str() {
+            "pending" => CLIAgentStatus::Pending,
+            "running" => CLIAgentStatus::Running,
+            "completed" => CLIAgentStatus::Completed,
+            "failed" => CLIAgentStatus::Failed,
+            "timeout" => CLIAgentStatus::Timeout,
+            _ => CLIAgentStatus::Pending,
+        };
+
+        let mode = match details.mode.as_deref() {
+            Some("plan") => AgentMode::Plan,
+            Some("ask") => AgentMode::Ask,
+            _ => AgentMode::Agent,
+        };
+
+        let started_at = details
+            .started_at
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+
+        let completed_at = details
+            .completed_at
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+
+        let events = details
+            .events
+            .into_iter()
+            .filter_map(|e| {
+                let event_type = match e.event_type.as_str() {
+                    "init" => CLIEventType::Init,
+                    "thinking" => CLIEventType::Thinking,
+                    "tool_started" => CLIEventType::ToolStarted,
+                    "tool_completed" => CLIEventType::ToolCompleted,
+                    "response" => CLIEventType::Response,
+                    "result" => CLIEventType::Result,
+                    "error" => CLIEventType::Error,
+                    _ => return None,
+                };
+                let timestamp = DateTime::parse_from_rfc3339(&e.timestamp)
+                    .ok()?
+                    .with_timezone(&Utc);
+                Some(CLIAgentEvent {
+                    event_type,
+                    timestamp,
+                    content: e.content,
+                    tool_name: e.tool_name,
+                    tool_args: e.tool_args,
+                })
+            })
+            .collect();
+
+        Self {
+            id: details.id,
+            workspace: details.workspace,
+            prompt: details.prompt,
+            status,
+            mode,
+            model: details.model,
+            started_at,
+            completed_at,
+            events,
+            result: details.result,
+            error: details.error,
+        }
+    }
+}
+
 /// Form for launching single agent
 #[derive(Debug, Clone, Default)]
 pub struct LaunchForm {
@@ -766,9 +839,12 @@ impl CLIAgentsState {
                 }
                 None
             }
-            CLIAgentMessage::AgentsLoaded(_agent_ids) => {
-                // TODO: Fetch full agent details for each ID
-                None
+            CLIAgentMessage::AgentsLoaded(agent_ids) => {
+                if agent_ids.is_empty() {
+                    None
+                } else {
+                    Some(CLIAgentTask::FetchAgentDetails { ids: agent_ids })
+                }
             }
             CLIAgentMessage::AgentsFullLoaded(agents) => {
                 self.agents = agents.into_iter().map(|a| (a.id.clone(), a)).collect();
@@ -1137,6 +1213,9 @@ pub enum CLIAgentTask {
         id: String,
     },
     RefreshAgents,
+    FetchAgentDetails {
+        ids: Vec<String>,
+    },
 
     // Preset tasks
     FetchPresets,
