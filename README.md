@@ -83,6 +83,10 @@ Features:
   - Preset/snippet system for prompt templates
   - Batch launch across workspaces
   - Dialog inbox for worker agent responses
+- **Task Queue** - Synapsix integration for persistent task management
+- **XX-Zones** - Deterministic window positioning (Wayland protocol prep)
+- **Profiling** - Performance timing spans with threshold logging
+- **Activity Feed** - Real-time event streaming from agents
 
 ```bash
 cd ui-iced && cargo run --release
