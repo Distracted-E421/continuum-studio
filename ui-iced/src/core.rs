@@ -822,3 +822,97 @@ pub fn spawn_core_connection_with_config(
 
     (request_tx, response_rx, state_rx)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reconnect_config_default() {
+        let config = ReconnectConfig::default();
+        assert_eq!(config.initial_delay, Duration::from_secs(1));
+        assert_eq!(config.max_delay, Duration::from_secs(60));
+        assert_eq!(config.backoff_multiplier, 2.0);
+        assert_eq!(config.heartbeat_interval, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_connection_state_equality() {
+        assert_eq!(ConnectionState::Disconnected, ConnectionState::Disconnected);
+        assert_eq!(ConnectionState::Connected, ConnectionState::Connected);
+        assert_eq!(ConnectionState::Connecting, ConnectionState::Connecting);
+        assert_ne!(ConnectionState::Connected, ConnectionState::Disconnected);
+        
+        assert_eq!(
+            ConnectionState::Reconnecting { attempt: 1 },
+            ConnectionState::Reconnecting { attempt: 1 }
+        );
+        assert_ne!(
+            ConnectionState::Reconnecting { attempt: 1 },
+            ConnectionState::Reconnecting { attempt: 2 }
+        );
+    }
+
+    #[test]
+    fn test_core_request_get_versions_json() {
+        let req = CoreRequest::GetVersions;
+        let json = req.to_json();
+        assert!(json.contains("\"command\":\"versions_list\""));
+    }
+
+    #[test]
+    fn test_core_request_launch_version_json() {
+        let req = CoreRequest::LaunchVersion {
+            version: "0.44.11".to_string(),
+            folder: Some("/home/user/project".to_string()),
+        };
+        let json = req.to_json();
+        assert!(json.contains("\"command\":\"versions_run\""));
+        assert!(json.contains("\"version\":\"0.44.11\""));
+        assert!(json.contains("\"folder\""));
+    }
+
+    #[test]
+    fn test_core_request_install_version_json() {
+        let req = CoreRequest::InstallVersion {
+            version: "0.45.0".to_string(),
+        };
+        let json = req.to_json();
+        assert!(json.contains("\"command\":\"versions_download\""));
+        assert!(json.contains("\"version\":\"0.45.0\""));
+    }
+
+    #[test]
+    fn test_core_request_batch_uninstall_json() {
+        let req = CoreRequest::BatchUninstallVersions {
+            versions: vec!["0.43.0".to_string(), "0.42.0".to_string()],
+            remove_data: true,
+            keep_auth: false,
+        };
+        let json = req.to_json();
+        assert!(json.contains("\"command\":\"versions_batch_uninstall\""));
+        assert!(json.contains("\"remove_data\":true"));
+        assert!(json.contains("\"keep_auth\":false"));
+    }
+
+    #[test]
+    fn test_core_request_get_auth_status_json() {
+        let req = CoreRequest::GetAuthStatus {
+            version: "0.44.11".to_string(),
+        };
+        let json = req.to_json();
+        assert!(json.contains("\"command\":\"auth_status\""));
+    }
+
+    #[test]
+    fn test_core_request_ping_json() {
+        let req = CoreRequest::Ping;
+        let json = req.to_json();
+        assert!(json.contains("\"command\":\"ping\""));
+    }
+
+    #[test]
+    fn test_default_socket_path() {
+        assert_eq!(DEFAULT_SOCKET_PATH, "/tmp/continuum-studio.sock");
+    }
+}
