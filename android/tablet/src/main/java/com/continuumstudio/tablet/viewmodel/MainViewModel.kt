@@ -139,6 +139,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _ttsState.value = _ttsState.value.copy(isSpeaking = false)
     }
     
+    // Clean text for TTS - remove emojis, hashes, improve readability
+    private fun cleanTextForTts(text: String): String {
+        return text
+            // Remove emojis (common emoji ranges)
+            .replace(Regex("[\\p{So}\\p{Cs}]"), "")
+            // Replace arrows with words
+            .replace("→", " to ")
+            .replace("->", " to ")
+            .replace("←", " from ")
+            .replace("<-", " from ")
+            .replace("↑", " up ")
+            .replace("↓", " down ")
+            // Remove backtick-quoted code/identifiers
+            .replace(Regex("`[^`]+`"), "code")
+            // Remove hex hashes (like git commits: 7+ hex chars)
+            .replace(Regex("\\b[a-fA-F0-9]{7,}\\b"), "identifier")
+            // Remove UUIDs
+            .replace(Regex("[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}"), "identifier")
+            // Remove URLs
+            .replace(Regex("https?://[^\\s]+"), "link")
+            // Remove file paths
+            .replace(Regex("/[a-zA-Z0-9_/.-]+"), "path")
+            // Add pause after newlines by adding period
+            .replace(Regex("\n+"), ". ")
+            // Add period before bullet points for pause
+            .replace(Regex("\\s*[-*•]\\s+"), ". ")
+            // Clean up multiple periods
+            .replace(Regex("\\.\\s*\\."), ".")
+            // Clean up multiple spaces
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+    
     // Manual speak - always speaks (no duplicate check)
     fun speakDialog(dialog: Dialog, force: Boolean = true) {
         android.util.Log.d("ContinuumTTS", "speakDialog: ${dialog.title}, force=$force")
@@ -153,12 +186,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         lastSpokenDialogId = dialog.id
         
         val text = buildString {
-            append("${dialog.title}. ")
-            append(dialog.prompt)
+            append("${cleanTextForTts(dialog.title)}. ")
+            append(cleanTextForTts(dialog.prompt))
             if (!dialog.options.isNullOrEmpty()) {
                 append(". Options are: ")
                 dialog.options.forEachIndexed { idx, opt ->
-                    append("${idx + 1}: ${opt.label}. ")
+                    append("${idx + 1}: ${cleanTextForTts(opt.label)}. ")
                 }
             }
         }
@@ -205,6 +238,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun respondToDialog(dialogId: String, response: String, comment: String? = null) {
         viewModelScope.launch {
             apiClient?.respondToDialog(dialogId, response, comment)?.onSuccess {
+                // Stop TTS if we're speaking the dialog being answered
+                if (lastSpokenDialogId == dialogId && _ttsState.value.isSpeaking) {
+                    stopSpeaking()
+                }
                 _dialogs.value = _dialogs.value.filter { it.id != dialogId }
             }
         }
