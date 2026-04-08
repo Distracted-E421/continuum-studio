@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Continuum Studio"
 include(":app")
+include(":tablet")
