@@ -14,6 +14,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VolumeUp
 import com.continuumstudio.tablet.data.models.Dialog
 import com.continuumstudio.tablet.data.models.DialogPriority
 import com.continuumstudio.tablet.ui.theme.LocalIsFiveFootMode
@@ -136,6 +140,9 @@ private fun InfoDenseSplitView(
     onSelectDialog: (Dialog) -> Unit,
     viewModel: MainViewModel
 ) {
+    val ttsState by viewModel.ttsState.collectAsState()
+    val settings by viewModel.settings.collectAsState()
+    
     Row(modifier = Modifier.fillMaxSize()) {
         // Left 2/3: Full dialog content
         Column(
@@ -146,14 +153,39 @@ private fun InfoDenseSplitView(
                 .verticalScroll(rememberScrollState())
         ) {
             if (selectedDialog != null) {
-                // Title with priority
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Title with priority and TTS controls
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     PriorityIndicator(selectedDialog.priority, large = true)
                     Spacer(Modifier.width(12.dp))
                     Text(
                         text = selectedDialog.title,
-                        style = MaterialTheme.typography.headlineMedium
+                        style = MaterialTheme.typography.headlineMedium,
+                        modifier = Modifier.weight(1f)
                     )
+                    
+                    // TTS controls
+                    if (settings.ttsEnabled) {
+                        if (ttsState.isSpeaking) {
+                            IconButton(onClick = { viewModel.stopSpeaking() }) {
+                                Icon(
+                                    Icons.Default.Stop, 
+                                    contentDescription = "Stop",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        } else {
+                            IconButton(onClick = { viewModel.speakDialog(selectedDialog) }) {
+                                Icon(
+                                    Icons.Default.VolumeUp, 
+                                    contentDescription = "Read aloud",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
                 }
                 
                 Spacer(Modifier.height(16.dp))

@@ -11,6 +11,7 @@ import androidx.compose.ui.unit.dp
 import com.continuumstudio.tablet.ui.theme.LocalIsFiveFootMode
 import com.continuumstudio.tablet.viewmodel.MainViewModel
 import com.continuumstudio.tablet.viewmodel.OrchestratorMode
+import kotlinx.coroutines.delay
 
 @Composable
 fun AgentsScreen(viewModel: MainViewModel) {
@@ -113,16 +114,142 @@ private fun getModeDescription(mode: OrchestratorMode): String = when (mode) {
 }
 
 @Composable
-fun ActivityFeedScreen(viewModel: MainViewModel) {
-    val events by viewModel.activityFeed.collectAsState()
+fun DialogHistoryScreen(viewModel: MainViewModel) {
+    val history by viewModel.dialogHistory.collectAsState()
     val isFiveFootMode = LocalIsFiveFootMode.current
     
+    LaunchedEffect(Unit) {
+        while (true) {
+            viewModel.refreshDialogHistory()
+            delay(5000)
+        }
+    }
+    
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text(
-            "Activity Feed",
-            style = if (isFiveFootMode) MaterialTheme.typography.headlineLarge 
-                   else MaterialTheme.typography.headlineMedium
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Dialog History",
+                style = if (isFiveFootMode) MaterialTheme.typography.headlineLarge 
+                       else MaterialTheme.typography.headlineMedium
+            )
+            Text(
+                "${history.size} dialogs",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        
+        if (history.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("No dialog history", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = { viewModel.refreshDialogHistory() }) {
+                        Text("Refresh")
+                    }
+                }
+            }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(history) { dialog ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (dialog.isAnswered) 
+                                MaterialTheme.colorScheme.surfaceVariant 
+                            else MaterialTheme.colorScheme.primaryContainer
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    dialog.title,
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                if (dialog.isAnswered) {
+                                    Text(
+                                        "✓ Answered",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Text(
+                                        "⏳ Pending",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.tertiary
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                dialog.prompt,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 3
+                            )
+                            if (dialog.isAnswered && dialog.answer != null) {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Response: ${dialog.answer}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ActivityFeedScreen(viewModel: MainViewModel) {
+    val events by viewModel.activityFeed.collectAsState()
+    val connectionState by viewModel.connectionState.collectAsState()
+    val isFiveFootMode = LocalIsFiveFootMode.current
+    
+    LaunchedEffect(Unit) {
+        while (true) {
+            viewModel.refreshData()
+            delay(2000)
+        }
+    }
+    
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Activity Log",
+                style = if (isFiveFootMode) MaterialTheme.typography.headlineLarge 
+                       else MaterialTheme.typography.headlineMedium
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (connectionState.isConnected) "🟢 Live" else "🔴 Offline",
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "${events.size} events",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
         Spacer(Modifier.height(16.dp))
         
         if (events.isEmpty()) {
@@ -130,25 +257,91 @@ fun ActivityFeedScreen(viewModel: MainViewModel) {
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Text("No recent activity")
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "No recent activity",
+                        style = if (isFiveFootMode) MaterialTheme.typography.titleLarge 
+                               else MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Activity events will appear here as they happen",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = { viewModel.refreshData() }) {
+                        Text("Refresh")
+                    }
+                }
             }
         } else {
-            LazyColumn {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(events) { event ->
                     Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = getEventColor(event.eventType)
+                        )
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            Text(event.title, style = MaterialTheme.typography.titleMedium)
-                            event.body?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        getEventIcon(event.eventType),
+                                        style = MaterialTheme.typography.titleLarge
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        event.title,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                }
+                                Text(
+                                    event.source ?: "system",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            event.body?.let { body ->
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    body,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 4
+                                )
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun getEventColor(eventType: String?): androidx.compose.ui.graphics.Color {
+    val colors = MaterialTheme.colorScheme
+    return when (eventType?.lowercase()) {
+        "dialog_sent", "dialog_response" -> colors.primaryContainer
+        "command" -> colors.secondaryContainer
+        "error", "failed" -> colors.errorContainer
+        "file_edit" -> colors.tertiaryContainer
+        else -> colors.surfaceVariant
+    }
+}
+
+private fun getEventIcon(eventType: String?): String = when (eventType?.lowercase()) {
+    "dialog_sent" -> "💬"
+    "dialog_response" -> "✅"
+    "command" -> "⌨️"
+    "error", "failed" -> "❌"
+    "file_edit" -> "📝"
+    "tool_call" -> "🔧"
+    else -> "📋"
 }
 
 @Composable

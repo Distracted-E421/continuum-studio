@@ -20,9 +20,10 @@ enum class Screen(
     val route: String,
 ) {
     Dialogs("Dialog Inbox", Icons.Default.Email, "dialogs"),
+    History("Dialog History", Icons.Default.History, "history"),
+    Activity("Activity Log", Icons.Default.List, "activity"),
     Agents("CLI Agents", Icons.Default.Android, "agents"),
     Orchestrator("Orchestrator", Icons.Default.Settings, "orchestrator"),
-    Activity("Activity Feed", Icons.Default.List, "activity"),
     Parked("Parked Agents", Icons.Default.DirectionsCar, "parked"),
     Tasks("Task Queue", Icons.Default.CheckCircle, "tasks"),
     Settings("Settings", Icons.Default.Settings, "settings"),
@@ -148,9 +149,10 @@ fun AppNavigation(
             Box(modifier = Modifier.padding(padding)) {
                 when (currentScreen) {
                     Screen.Dialogs -> DialogInboxScreen(viewModel)
+                    Screen.History -> DialogHistoryScreen(viewModel)
+                    Screen.Activity -> ActivityFeedScreen(viewModel)
                     Screen.Agents -> AgentsScreen(viewModel)
                     Screen.Orchestrator -> OrchestratorScreen(viewModel)
-                    Screen.Activity -> ActivityFeedScreen(viewModel)
                     Screen.Parked -> ParkedAgentsScreen(viewModel)
                     Screen.Tasks -> TaskQueueScreen(viewModel)
                     Screen.Settings -> SettingsScreen(viewModel)

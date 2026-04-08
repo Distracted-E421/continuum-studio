@@ -72,6 +72,8 @@ data class ActivityEvent(
     val body: String? = null,
     val agentId: String? = null,
     val timestamp: Instant = Instant.now(),
+    val eventType: String? = null,
+    val source: String? = null,
 )
 
 enum class ActivityType {

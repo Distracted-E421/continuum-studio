@@ -1,6 +1,8 @@
 package com.continuumstudio.tablet.viewmodel
 
 import android.app.Application
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.continuumstudio.tablet.UiMode
@@ -15,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.Locale
+import java.util.UUID
 
 data class AppSettings(
     // Phoenix server (agents, tasks, etc.)
@@ -41,6 +45,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     private var apiClient: SynapsixClient? = null
     private var webSocketManager: WebSocketManager? = null
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var lastSpokenDialogId: String? = null
+    
+    private val _ttsState = MutableStateFlow(TtsState())
+    val ttsState: StateFlow<TtsState> = _ttsState.asStateFlow()
     
     private val _uiMode = MutableStateFlow(UiMode.InfoDense)
     val uiMode: StateFlow<UiMode> = _uiMode.asStateFlow()
@@ -66,11 +76,103 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _tasks = MutableStateFlow<List<Task>>(emptyList())
     val tasks: StateFlow<List<Task>> = _tasks.asStateFlow()
     
+    private val _dialogHistory = MutableStateFlow<List<Dialog>>(emptyList())
+    val dialogHistory: StateFlow<List<Dialog>> = _dialogHistory.asStateFlow()
+    
     private val _orchestratorMode = MutableStateFlow(OrchestratorMode.UserActive)
     val orchestratorMode: StateFlow<OrchestratorMode> = _orchestratorMode.asStateFlow()
     
     init {
+        initTts()
         connect()
+    }
+    
+    private fun initTts() {
+        tts = TextToSpeech(getApplication()) { status ->
+            android.util.Log.d("ContinuumTTS", "TTS init status: $status")
+            if (status == TextToSpeech.SUCCESS) {
+                val langResult = tts?.setLanguage(Locale.US)
+                android.util.Log.d("ContinuumTTS", "Language set result: $langResult")
+                tts?.setSpeechRate(_settings.value.speechRate)
+                ttsReady = true
+                _ttsState.value = _ttsState.value.copy(isReady = true)
+                android.util.Log.d("ContinuumTTS", "TTS initialized successfully")
+                
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {
+                        android.util.Log.d("ContinuumTTS", "TTS started: $utteranceId")
+                        viewModelScope.launch { _ttsState.value = _ttsState.value.copy(isSpeaking = true) }
+                    }
+                    override fun onDone(utteranceId: String?) {
+                        android.util.Log.d("ContinuumTTS", "TTS done: $utteranceId")
+                        viewModelScope.launch { _ttsState.value = _ttsState.value.copy(isSpeaking = false) }
+                    }
+                    override fun onError(utteranceId: String?) {
+                        android.util.Log.e("ContinuumTTS", "TTS error: $utteranceId")
+                        viewModelScope.launch { _ttsState.value = _ttsState.value.copy(isSpeaking = false) }
+                    }
+                })
+            } else {
+                android.util.Log.e("ContinuumTTS", "TTS init failed with status: $status")
+            }
+        }
+    }
+    
+    fun speak(text: String, queue: Boolean = false) {
+        android.util.Log.d("ContinuumTTS", "speak called: ttsReady=$ttsReady, enabled=${_settings.value.ttsEnabled}")
+        if (!ttsReady) {
+            android.util.Log.w("ContinuumTTS", "TTS not ready")
+            return
+        }
+        if (!_settings.value.ttsEnabled) {
+            android.util.Log.w("ContinuumTTS", "TTS disabled in settings")
+            return
+        }
+        _ttsState.value = _ttsState.value.copy(isSpeaking = true)
+        val queueMode = if (queue) TextToSpeech.QUEUE_ADD else TextToSpeech.QUEUE_FLUSH
+        val result = tts?.speak(text, queueMode, null, UUID.randomUUID().toString())
+        android.util.Log.d("ContinuumTTS", "speak result: $result")
+    }
+    
+    fun stopSpeaking() {
+        tts?.stop()
+        _ttsState.value = _ttsState.value.copy(isSpeaking = false)
+    }
+    
+    // Manual speak - always speaks (no duplicate check)
+    fun speakDialog(dialog: Dialog, force: Boolean = true) {
+        android.util.Log.d("ContinuumTTS", "speakDialog: ${dialog.title}, force=$force")
+        if (!_settings.value.ttsEnabled) {
+            android.util.Log.w("ContinuumTTS", "TTS disabled, not speaking")
+            return
+        }
+        if (!force && dialog.id == lastSpokenDialogId) {
+            android.util.Log.d("ContinuumTTS", "Already spoken, skipping")
+            return
+        }
+        lastSpokenDialogId = dialog.id
+        
+        val text = buildString {
+            append("${dialog.title}. ")
+            append(dialog.prompt)
+            if (!dialog.options.isNullOrEmpty()) {
+                append(". Options are: ")
+                dialog.options.forEachIndexed { idx, opt ->
+                    append("${idx + 1}: ${opt.label}. ")
+                }
+            }
+        }
+        speak(text)
+    }
+    
+    fun autoSpeakNewDialogs() {
+        if (_settings.value.ttsEnabled && _settings.value.ttsAutoRead) {
+            _dialogs.value.firstOrNull { !it.isAnswered }?.let { dialog ->
+                if (dialog.id != lastSpokenDialogId) {
+                    speakDialog(dialog, force = false)
+                }
+            }
+        }
     }
     
     fun toggleMode() {
@@ -164,12 +266,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshData() {
         viewModelScope.launch {
             apiClient?.let { client ->
-                client.getDialogs().onSuccess { dialogs -> _dialogs.value = dialogs }
+                client.getDialogs().onSuccess { dialogs -> 
+                    _dialogs.value = dialogs
+                    autoSpeakNewDialogs()
+                }
+                client.getDialogHistory(100).onSuccess { history -> _dialogHistory.value = history }
                 client.getAgents().onSuccess { agents -> _agents.value = agents }
                 client.getTasks().onSuccess { tasks -> _tasks.value = tasks }
                 client.getParkedAgents().onSuccess { agents -> _parkedAgents.value = agents }
             }
         }
+    }
+    
+    fun refreshDialogHistory() {
+        viewModelScope.launch {
+            apiClient?.getDialogHistory(100)?.onSuccess { history -> _dialogHistory.value = history }
+        }
+    }
+    
+    override fun onCleared() {
+        super.onCleared()
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
     }
     
     private fun subscribeToWebSocketEvents() {
@@ -224,3 +343,8 @@ enum class OrchestratorMode {
     Spectator,
     Autonomous
 }
+
+data class TtsState(
+    val isReady: Boolean = false,
+    val isSpeaking: Boolean = false,
+)
