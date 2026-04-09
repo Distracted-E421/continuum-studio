@@ -83,6 +83,12 @@ pub enum CoreRequest {
     },
     /// Get detailed disk usage for all installed versions
     GetDiskUsageAll,
+    /// Check for new Cursor versions (calls VersionUpdater)
+    RefreshVersions,
+    /// Update local version manifest from upstream
+    UpdateVersions,
+    /// Get version updater status
+    GetUpdaterStatus,
     /// Get sessions
     GetSessions,
     /// Get version statistics
@@ -143,6 +149,9 @@ impl CoreRequest {
                 }))
             }
             CoreRequest::GetDiskUsageAll => ("versions_disk_usage_all", serde_json::json!({})),
+            CoreRequest::RefreshVersions => ("versions_refresh", serde_json::json!({})),
+            CoreRequest::UpdateVersions => ("versions_update", serde_json::json!({})),
+            CoreRequest::GetUpdaterStatus => ("versions_updater_status", serde_json::json!({})),
             CoreRequest::GetSessions => ("sessions_list", serde_json::json!({})),
             CoreRequest::GetStats => ("versions_stats", serde_json::json!({})),
             CoreRequest::GetWorkspaces { limit } => {
@@ -228,6 +237,28 @@ pub enum CoreResponse {
     AuthProfiles(Vec<AuthProfile>),
     /// Pong response
     Pong,
+    /// Version update check result
+    VersionsRefreshResult {
+        current_latest: Option<String>,
+        upstream_latest: Option<String>,
+        new_versions: Vec<String>,
+        new_count: usize,
+    },
+    /// Version update started
+    VersionsUpdateStarted,
+    /// Versions updated successfully
+    VersionsUpdated { new_count: usize },
+    /// Version update failed
+    VersionsUpdateFailed { reason: String },
+    /// Version updater status
+    UpdaterStatus {
+        current_latest: Option<String>,
+        upstream_latest: Option<String>,
+        new_versions_available: usize,
+        last_check: Option<String>,
+        last_update: Option<String>,
+        check_interval_hours: f64,
+    },
     /// Error occurred
     Error { message: String },
 }
@@ -400,6 +431,68 @@ impl CoreResponse {
                 let profiles: Vec<AuthProfile> = serde_json::from_value(data)
                     .map_err(|e| format!("Failed to parse auth profiles: {}", e))?;
                 Ok(CoreResponse::AuthProfiles(profiles))
+            }
+            "versions_refresh_result" => {
+                let current_latest = data.get("current_latest")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let upstream_latest = data.get("upstream_latest")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let new_versions: Vec<String> = data.get("new_versions")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                let new_count = data.get("new_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                Ok(CoreResponse::VersionsRefreshResult {
+                    current_latest,
+                    upstream_latest,
+                    new_versions,
+                    new_count,
+                })
+            }
+            "versions_update_started" => Ok(CoreResponse::VersionsUpdateStarted),
+            "versions_updated" => {
+                let new_count = data.get("new_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                Ok(CoreResponse::VersionsUpdated { new_count })
+            }
+            "versions_update_failed" => {
+                let reason = data.get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string();
+                Ok(CoreResponse::VersionsUpdateFailed { reason })
+            }
+            "versions_updater_status" => {
+                let current_latest = data.get("current_latest")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let upstream_latest = data.get("upstream_latest")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let new_versions_available = data.get("new_versions_available")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                let last_check = data.get("last_check")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let last_update = data.get("last_update")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let check_interval_hours = data.get("check_interval_hours")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0);
+                Ok(CoreResponse::UpdaterStatus {
+                    current_latest,
+                    upstream_latest,
+                    new_versions_available,
+                    last_check,
+                    last_update,
+                    check_interval_hours,
+                })
             }
             "pong" => Ok(CoreResponse::Pong),
             "error" => {

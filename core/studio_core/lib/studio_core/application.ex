@@ -34,6 +34,9 @@ defmodule StudioCore.Application do
       # Version registry - Cursor version management
       StudioCore.VersionRegistry,
 
+      # Version updater - automatic version checking
+      StudioCore.VersionUpdater,
+
       # Auth manager - Cursor authentication management
       StudioCore.AuthManager,
 
@@ -41,7 +44,7 @@ defmodule StudioCore.Application do
       StudioCore.WorkspaceTracker,
 
       # Unix socket acceptor for UI connections
-      {StudioCore.Socket.Acceptor, socket_path()},
+      {StudioCore.Socket.Acceptor, socket_path()}
     ]
 
     opts = [strategy: :one_for_one, name: StudioCore.Supervisor]

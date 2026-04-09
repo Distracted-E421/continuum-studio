@@ -868,6 +868,10 @@ impl ContinuumStudio {
                 windows: BTreeMap::new(),
                 main_window_id: None,
                 versions,
+                new_versions_available: Vec::new(),
+                upstream_latest: None,
+                checking_version_updates: false,
+                last_version_check: None,
                 workspaces: vec![],
                 workspace_files: vec![],
                 workspace_files_loading: false,
@@ -1064,6 +1068,14 @@ struct ContinuumStudio {
     main_window_id: Option<window::Id>,
     /// Available Cursor versions
     versions: Vec<CursorVersion>,
+    /// New Cursor versions available (from upstream)
+    new_versions_available: Vec<String>,
+    /// Latest version from upstream (for comparison)
+    upstream_latest: Option<String>,
+    /// Whether version check is in progress
+    checking_version_updates: bool,
+    /// Last version check timestamp
+    last_version_check: Option<String>,
     /// Tracked workspaces
     workspaces: Vec<Workspace>,
     /// Discovered .code-workspace files
@@ -1800,6 +1812,10 @@ enum CursorMessage {
     ExtractAuth(String),
     /// Apply auth from the most recent profile to a target version
     ApplyAuthFromLatest(String),
+    /// Check for new Cursor versions from upstream
+    CheckForUpdates,
+    /// Update the local version manifest from upstream
+    UpdateVersionManifest,
 }
 
 /// Discovered .code-workspace file
@@ -2507,6 +2523,32 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                     log::warn!("No auth profiles available to apply");
                 }
             }
+            CursorMessage::CheckForUpdates => {
+                log::info!("Checking for Cursor version updates...");
+                state.checking_version_updates = true;
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::RefreshVersions).await;
+                        },
+                        |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                    );
+                }
+            }
+            CursorMessage::UpdateVersionManifest => {
+                log::info!("Updating Cursor version manifest from upstream...");
+                state.checking_version_updates = true;
+                if let Some(tx) = &state.core_tx {
+                    let tx = tx.clone();
+                    return Task::perform(
+                        async move {
+                            let _ = tx.send(CoreRequest::UpdateVersions).await;
+                        },
+                        |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                    );
+                }
+            }
         },
         Message::WorkspaceAction(ws_msg) => match ws_msg {
             WorkspaceMessage::RefreshWorkspaces => {
@@ -3051,6 +3093,72 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 CoreResponse::AuthProfiles(profiles) => {
                     log::info!("Received {} auth profiles", profiles.len());
                     state.auth_profiles = profiles;
+                }
+                // Version update check responses
+                CoreResponse::VersionsRefreshResult {
+                    current_latest,
+                    upstream_latest,
+                    new_versions,
+                    new_count,
+                } => {
+                    log::info!(
+                        "Version check: {} new versions available (current: {:?}, upstream: {:?})",
+                        new_count, current_latest, upstream_latest
+                    );
+                    state.new_versions_available = new_versions;
+                    state.upstream_latest = upstream_latest;
+                    state.checking_version_updates = false;
+                    state.last_version_check = Some(chrono::Local::now().to_rfc3339());
+                    
+                    // Show toast if new versions available
+                    if new_count > 0 {
+                        return Task::done(Message::ShowToast(
+                            format!("{} new Cursor version(s) available!", new_count),
+                            ToastLevel::Info,
+                        ));
+                    }
+                }
+                CoreResponse::VersionsUpdateStarted => {
+                    log::info!("Version manifest update started");
+                    state.checking_version_updates = true;
+                }
+                CoreResponse::VersionsUpdated { new_count } => {
+                    log::info!("Version manifest updated with {} new versions", new_count);
+                    state.checking_version_updates = false;
+                    // Refresh the versions list from Core
+                    if let Some(tx) = &state.core_tx {
+                        let tx = tx.clone();
+                        return Task::perform(
+                            async move {
+                                let _ = tx.send(CoreRequest::GetVersions).await;
+                            },
+                            |_| Message::CursorAction(CursorMessage::RefreshVersions),
+                        );
+                    }
+                }
+                CoreResponse::VersionsUpdateFailed { reason } => {
+                    log::error!("Version manifest update failed: {}", reason);
+                    state.checking_version_updates = false;
+                    return Task::done(Message::ShowToast(
+                        format!("Failed to update versions: {}", reason),
+                        ToastLevel::Error,
+                    ));
+                }
+                CoreResponse::UpdaterStatus {
+                    current_latest,
+                    upstream_latest,
+                    new_versions_available,
+                    last_check,
+                    last_update: _,
+                    check_interval_hours: _,
+                } => {
+                    log::info!(
+                        "Updater status: current={:?}, upstream={:?}, new={}",
+                        current_latest, upstream_latest, new_versions_available
+                    );
+                    state.upstream_latest = upstream_latest;
+                    state.last_version_check = last_check;
+                    // Note: new_versions_available here is just a count, we'd need a full refresh for the list
                 }
             }
         }
@@ -5991,11 +6099,71 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<'_, Message> {
         column(version_elements).spacing(4).into()
     };
 
-    // Header card with stats
+    // Build update indicator if new versions available
+    let new_version_count = state.new_versions_available.len();
+    let updates_indicator: Element<Message> = if new_version_count > 0 {
+        container(
+            row![
+                text("🆕").size(14),
+                text(format!("{} update{} available!", new_version_count, if new_version_count > 1 { "s" } else { "" }))
+                    .size(12)
+                    .color(iced::Color::from_rgb(0.3, 0.8, 0.5)),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .padding([6, 12])
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color::from_rgba(0.2, 0.6, 0.3, 0.2))),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: iced::Color::from_rgb(0.3, 0.6, 0.4),
+            },
+            ..container::Style::default()
+        })
+        .into()
+    } else {
+        Space::new().width(0).into()
+    };
+
+    // Build check/update buttons
+    let update_buttons: Element<Message> = if state.checking_version_updates {
+        text("Checking...")
+            .size(12)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5))
+            .into()
+    } else if new_version_count > 0 {
+        row![
+            styled_button("Update Now", false)
+                .on_press(Message::CursorAction(CursorMessage::UpdateVersionManifest)),
+            Space::new().width(8),
+            styled_button("Refresh", false)
+                .on_press(Message::CursorAction(CursorMessage::RefreshVersions)),
+        ]
+        .spacing(8)
+        .into()
+    } else {
+        row![
+            styled_button("Check Updates", false)
+                .on_press(Message::CursorAction(CursorMessage::CheckForUpdates)),
+            Space::new().width(8),
+            styled_button("Refresh", false)
+                .on_press(Message::CursorAction(CursorMessage::RefreshVersions)),
+        ]
+        .spacing(8)
+        .into()
+    };
+
+    // Header card with stats and update indicator
     let header_card = container(
         row![
             column![
-                text("Cursor Versions").size(20),
+                row![
+                    text("Cursor Versions").size(20),
+                    Space::new().width(12),
+                    updates_indicator,
+                ].align_y(Alignment::Center),
                 row![
                     text(format!("{} total", total))
                         .size(12)
@@ -6016,8 +6184,7 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<'_, Message> {
             ]
             .spacing(4),
             Space::new().width(Length::Fill),
-            styled_button("Refresh", false)
-                .on_press(Message::CursorAction(CursorMessage::RefreshVersions)),
+            update_buttons,
         ]
         .align_y(Alignment::Center),
     )
