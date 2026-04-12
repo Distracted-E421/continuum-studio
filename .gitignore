@@ -41,3 +41,4 @@ deps/
 .elixir_ls/
 *.beam
 result
+android/tablet/build/
