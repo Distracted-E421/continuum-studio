@@ -17,11 +17,11 @@
 #   nu build-watcher.nu --once             # Build once and exit
 #   nu build-watcher.nu --channel nightly  # Set build channel
 
-# Configuration
-const CONTINUUM_DIR = ($env.HOME | path join ".continuum")
-const BUILDS_DIR = ($env.HOME | path join ".continuum" "builds")
-const BIN_DIR = ($env.HOME | path join ".continuum" "bin")
-const HISTORY_FILE = ($env.HOME | path join ".continuum" "builds" "build-history.json")
+# Configuration - computed at runtime since $env.HOME is not available at parse time
+def get_continuum_dir [] { $env.HOME | path join ".continuum" }
+def get_builds_dir [] { $env.HOME | path join ".continuum" "builds" }
+def get_bin_dir [] { $env.HOME | path join ".continuum" "bin" }
+def get_history_file [] { $env.HOME | path join ".continuum" "builds" "build-history.json" }
 
 def main [
     --repo: string = ""        # Path to continuum-studio repo
@@ -48,18 +48,18 @@ def main [
     }
 
     # Ensure directories exist
-    mkdir ($BUILDS_DIR | path join $channel)
-    mkdir $BIN_DIR
+    mkdir ((get_builds_dir) | path join $channel)
+    mkdir (get_bin_dir)
 
     # Initialize history if it doesn't exist
-    if not ($HISTORY_FILE | path exists) {
-        "[]" | save $HISTORY_FILE
+    if not ((get_history_file) | path exists) {
+        "[]" | save (get_history_file)
     }
 
     print $"Continuum Build Watcher starting..."
     print $"  Repo: ($repo_path)"
     print $"  Channel: ($channel)"
-    print $"  Builds dir: ($BUILDS_DIR)"
+    print $"  Builds dir: ((get_builds_dir))"
 
     if $once {
         # Single build mode
@@ -77,7 +77,7 @@ def main [
         print $"  Watching for changes..."
 
         # Do an initial build if no nightly exists
-        let nightly_binary = ($BUILDS_DIR | path join $channel "continuum-studio")
+        let nightly_binary = ((get_builds_dir) | path join $channel "continuum-studio")
         if not ($nightly_binary | path exists) {
             print "No existing nightly build found, building..."
             let result = (do_build $repo_path $channel $verbose)
@@ -148,7 +148,7 @@ def do_build [repo_path: string, channel: string, verbose: bool]: nothing -> rec
     let cargo_toml = ($repo_path | path join "ui-iced" "Cargo.toml" | open --raw)
     let version = ($cargo_toml | parse --regex 'version = "(?P<ver>[^"]+)"' | get 0?.ver? | default "0.0.0")
 
-    let build_dir = ($BUILDS_DIR | path join $channel)
+    let build_dir = ((get_builds_dir) | path join $channel)
     let metadata_path = ($build_dir | path join "metadata.json")
     let binary_dest = ($build_dir | path join "continuum-studio")
 
@@ -157,7 +157,7 @@ def do_build [repo_path: string, channel: string, verbose: bool]: nothing -> rec
         if $verbose {
             print "Running: cargo build --release"
         }
-        let output = (^cargo build --release 2>&1 | complete)
+        let output = (^cargo build --release out+err>| complete)
 
         if $output.exit_code != 0 {
             { success: false, error: $output.stdout }
@@ -170,6 +170,7 @@ def do_build [repo_path: string, channel: string, verbose: bool]: nothing -> rec
 
     if not $build_result.success {
         # Log failed build
+        let duration = (((date now) - $start_time | into int) / 1_000_000_000)
         let entry = {
             timestamp: (date now | format date "%Y-%m-%dT%H:%M:%S%z")
             commit: $commit
@@ -178,7 +179,7 @@ def do_build [repo_path: string, channel: string, verbose: bool]: nothing -> rec
             version: $version
             success: false
             error: $build_result.error
-            duration_secs: ((date now) - $start_time | into int) / 1_000_000_000
+            duration_secs: $duration
         }
         append_history $entry
 
@@ -208,7 +209,7 @@ def do_build [repo_path: string, channel: string, verbose: bool]: nothing -> rec
         $metadata | to json | save -f $metadata_path
 
         # Update symlink in bin directory
-        let bin_link = ($BIN_DIR | path join "continuum-studio")
+        let bin_link = ((get_bin_dir) | path join "continuum-studio")
         rm -f $bin_link
         # Use absolute path for symlink
         ^ln -sf $binary_dest $bin_link
@@ -239,6 +240,7 @@ def do_build [repo_path: string, channel: string, verbose: bool]: nothing -> rec
         }
     } else {
         let error = $"Binary not found at ($source_binary)"
+        let duration = (((date now) - $start_time | into int) / 1_000_000_000)
         let entry = {
             timestamp: (date now | format date "%Y-%m-%dT%H:%M:%S%z")
             commit: $commit
@@ -247,7 +249,7 @@ def do_build [repo_path: string, channel: string, verbose: bool]: nothing -> rec
             version: $version
             success: false
             error: $error
-            duration_secs: ((date now) - $start_time | into int) / 1_000_000_000
+            duration_secs: $duration
         }
         append_history $entry
 
@@ -281,8 +283,8 @@ def get_current_branch [repo_path: string]: nothing -> string {
 # Append an entry to the build history
 def append_history [entry: record] {
     try {
-        mut history = if ($HISTORY_FILE | path exists) {
-            open $HISTORY_FILE
+        mut history = if ((get_history_file) | path exists) {
+            open (get_history_file)
         } else {
             []
         }
@@ -294,7 +296,7 @@ def append_history [entry: record] {
             $history = ($history | last 100)
         }
 
-        $history | to json | save -f $HISTORY_FILE
+        $history | to json | save -f (get_history_file)
     } catch {|e|
         print $"Warning: Failed to update build history: ($e | get msg? | default 'unknown')"
     }
