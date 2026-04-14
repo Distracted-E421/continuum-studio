@@ -154,10 +154,11 @@ def do_build [repo_path: string, channel: string, verbose: bool]: nothing -> rec
 
     # Build
     let build_result = try {
+        let manifest_path = ($repo_path | path join "ui-iced" "Cargo.toml")
         if $verbose {
-            print "Running: cargo build --release"
+            print $"Running: cargo build --release --manifest-path ($manifest_path)"
         }
-        let output = (^cargo build --release out+err>| complete)
+        let output = (^cargo build --release --manifest-path $manifest_path out+err>| complete)
 
         if $output.exit_code != 0 {
             { success: false, error: $output.stdout }
