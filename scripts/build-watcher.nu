@@ -106,7 +106,7 @@ def watch_loop [repo_path: string, channel: string, poll_interval: int, verbose:
             # Timeout after poll_interval seconds to check anyway
             let git_refs = ($repo_path | path join ".git" "refs" "heads")
             try {
-                ^inotifywait -q -t $poll_interval -e modify -e create -e moved_to $git_refs 2>/dev/null
+                ^inotifywait -q -t $poll_interval -e modify -e create -e moved_to $git_refs err> /dev/null
             }
         } else {
             # Fallback: poll
