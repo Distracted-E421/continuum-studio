@@ -125,6 +125,7 @@ class MainActivity : ComponentActivity() {
                 val latency by dialogViewModel.latency.collectAsState()
                 val snackbarMessage by dialogViewModel.snackbarMessage.collectAsState()
                 val isOnline by dialogViewModel.isOnline.collectAsState()
+                val queueItems by dialogViewModel.queueItems.collectAsState()
                 val bayConfig by widgetBayViewModel.bayConfig.collectAsState()
                 
                 // CLI Agents state
@@ -432,6 +433,10 @@ class MainActivity : ComponentActivity() {
                                 onSetEndpointFallbackEnabled = dialogViewModel::setEndpointFallbackEnabled,
                                 onTestEndpoint = dialogViewModel::testEndpoint,
                                 onTestAllEndpoints = dialogViewModel::testAllEndpoints,
+                                // Queue functionality
+                                queueItems = queueItems,
+                                onSwitchToQueuedDialog = dialogViewModel::switchToQueuedDialog,
+                                onToggleQueueDrawer = dialogViewModel::toggleQueueDrawer,
                             )
                         }
                         

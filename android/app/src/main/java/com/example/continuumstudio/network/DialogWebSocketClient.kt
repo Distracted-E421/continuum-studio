@@ -64,6 +64,13 @@ class DialogWebSocketClient(
     
     private val _historyLoading = MutableStateFlow(false)
     val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
+    
+    // Queue state - stores actual queue items, not just count
+    private val _queueItems = MutableStateFlow<List<QueueItem>>(emptyList())
+    val queueItems: StateFlow<List<QueueItem>> = _queueItems.asStateFlow()
+    
+    private val _queueLoading = MutableStateFlow(false)
+    val queueLoading: StateFlow<Boolean> = _queueLoading.asStateFlow()
 
     // Events channel for one-shot events
     private val _events = Channel<DialogEvent>(Channel.BUFFERED)
@@ -478,6 +485,10 @@ class DialogWebSocketClient(
                         queueCount = initial.queueCount,
                         holdMode = initial.holdMode
                     ) }
+                    // Fetch the full queue
+                    if (initial.queueCount > 0) {
+                        fetchQueue(_connectionState.value.serverUrl)
+                    }
                     // If there's an active dialog, fetch its details
                     if (initial.hasActive) {
                         fetchCurrentDialog(_connectionState.value.serverUrl)
@@ -497,6 +508,8 @@ class DialogWebSocketClient(
                 "QueueUpdate" -> {
                     val update = json.decodeFromString<ServerMessage.QueueUpdate>(text)
                     _dialogState.update { it.copy(queueCount = update.queueCount) }
+                    // Fetch the full queue to update our local list
+                    fetchQueue(_connectionState.value.serverUrl)
                     // If there's a new active dialog, fetch it
                     if (update.activeId != null && 
                         update.activeId != _dialogState.value.activeDialog?.id) {
@@ -541,6 +554,77 @@ class DialogWebSocketClient(
                 _historyLoading.value = false
             }
         }
+    }
+    
+    /**
+     * Fetch the dialog queue from REST API
+     * This returns actual queue items, not just a count
+     */
+    suspend fun fetchQueue(serverUrl: String): List<QueueItem> {
+        return withContext(Dispatchers.IO) {
+            _queueLoading.value = true
+            try {
+                val httpUrl = buildHttpUrl(serverUrl)
+                val request = buildRequestWithAuth("$httpUrl/api/queue").build()
+                
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: return@withContext emptyList()
+                    val apiResponse = json.decodeFromString<ApiResponse<List<QueueItem>>>(body)
+                    if (apiResponse.success) {
+                        apiResponse.data?.also { items ->
+                            _queueItems.value = items
+                            _dialogState.update { it.copy(
+                                queueItems = items,
+                                queueCount = items.size
+                            ) }
+                        } ?: emptyList()
+                    } else emptyList()
+                } else emptyList()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                emptyList()
+            } finally {
+                _queueLoading.value = false
+            }
+        }
+    }
+    
+    /**
+     * Switch to a specific dialog in the queue by index
+     * This calls the daemon's switch API
+     */
+    suspend fun switchToQueuedDialog(serverUrl: String, queueIndex: Int): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val httpUrl = buildHttpUrl(serverUrl)
+                val requestBody = buildJsonObject {
+                    put("index", queueIndex)
+                }
+                
+                val request = buildRequestWithAuth("$httpUrl/api/switch")
+                    .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+                
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    // Refresh current dialog and queue after switch
+                    fetchCurrentDialog(serverUrl)
+                    fetchQueue(serverUrl)
+                    true
+                } else false
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+        }
+    }
+    
+    /**
+     * Toggle the queue drawer open/closed state
+     */
+    fun setQueueDrawerOpen(open: Boolean) {
+        _dialogState.update { it.copy(isQueueDrawerOpen = open) }
     }
     
     /**

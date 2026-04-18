@@ -185,11 +185,13 @@ data class ConnectionState(
 
 data class DialogUiState(
     val activeDialog: DialogDetails? = null,
+    val queueItems: List<QueueItem> = emptyList(),
     val queueCount: Int = 0,
     val holdMode: Boolean = false,
     val selectedValue: String = "",
     val comment: String = "",
     val selectedOptions: Set<String> = emptySet(),
     val sliderValue: Float = 0f,
+    val isQueueDrawerOpen: Boolean = false,
 )
 

@@ -229,7 +229,7 @@ class ChangeModeAction : ActionCallback {
                 
                 val body = """{"mode":"$newMode"}""".toRequestBody("application/json".toMediaType())
                 val request = Request.Builder()
-                    .url("http://100.102.101.72:8082/api/orchestrator/mode")
+                    .url("http://100.109.236.61:8080/api/orchestrator/mode")
                     .post(body)
                     .build()
                 
@@ -256,7 +256,7 @@ class RefreshAction : ActionCallback {
                 
                 // Fetch orchestrator mode
                 val modeRequest = Request.Builder()
-                    .url("http://100.102.101.72:8082/api/orchestrator/mode")
+                    .url("http://100.109.236.61:8080/api/orchestrator/mode")
                     .get()
                     .build()
                 
@@ -281,7 +281,7 @@ class RefreshAction : ActionCallback {
                 
                 // Fetch pending dialogs
                 val dialogsRequest = Request.Builder()
-                    .url("http://100.102.101.72:8082/api/agent-dialogs")
+                    .url("http://100.109.236.61:8080/api/agent-dialogs")
                     .get()
                     .build()
                 
@@ -297,7 +297,7 @@ class RefreshAction : ActionCallback {
                 
                 // Fetch running agents
                 val agentsRequest = Request.Builder()
-                    .url("http://100.102.101.72:4001/api/cli-agents")
+                    .url("http://100.109.236.61:4001/api/cli-agents")
                     .get()
                     .build()
                 

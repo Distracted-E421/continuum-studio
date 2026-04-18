@@ -43,6 +43,10 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     val historyLoading = wsClient.historyLoading
     val latency = wsClient.latency
     
+    // Queue items
+    val queueItems = wsClient.queueItems
+    val queueLoading = wsClient.queueLoading
+    
     // Network connectivity status
     val isOnline: StateFlow<Boolean> = networkMonitor.isOnline
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
@@ -676,6 +680,48 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                 wsClient.reinvokeDialog(it, historyItem)
             }
         }
+    }
+    
+    /**
+     * Fetch the dialog queue
+     */
+    fun fetchQueue() {
+        viewModelScope.launch {
+            connectionState.value.serverUrl.takeIf { it.isNotBlank() }?.let {
+                wsClient.fetchQueue(it)
+            }
+        }
+    }
+    
+    /**
+     * Switch to a specific queued dialog by index
+     */
+    fun switchToQueuedDialog(queueIndex: Int) {
+        viewModelScope.launch {
+            connectionState.value.serverUrl.takeIf { it.isNotBlank() }?.let { serverUrl ->
+                val success = wsClient.switchToQueuedDialog(serverUrl, queueIndex)
+                if (success) {
+                    showToast("Switched to queued dialog")
+                } else {
+                    showToast("Failed to switch dialog")
+                }
+            }
+        }
+    }
+    
+    /**
+     * Toggle the queue drawer open/closed
+     */
+    fun setQueueDrawerOpen(open: Boolean) {
+        wsClient.setQueueDrawerOpen(open)
+    }
+    
+    /**
+     * Toggle queue drawer
+     */
+    fun toggleQueueDrawer() {
+        val currentState = dialogState.value.isQueueDrawerOpen
+        wsClient.setQueueDrawerOpen(!currentState)
     }
     
     /**

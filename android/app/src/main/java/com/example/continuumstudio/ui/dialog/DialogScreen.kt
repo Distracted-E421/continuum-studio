@@ -110,14 +110,17 @@ fun DialogScreen(
     onSetEndpointFallbackEnabled: (Boolean) -> Unit = {},
     onTestEndpoint: (Int) -> Unit = {},
     onTestAllEndpoints: () -> Unit = {},
+    // Queue functionality
+    queueItems: List<com.example.continuumstudio.data.QueueItem> = emptyList(),
+    onSwitchToQueuedDialog: (Int) -> Unit = {},
+    onToggleQueueDrawer: () -> Unit = {},
 ) {
     // Initialize serverUrlInput from savedServerUrl (persisted in DataStore)
     var serverUrlInput by remember { mutableStateOf(savedServerUrl) }
     var showSettings by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(MainTab.DIALOG) }
     
-    // Radial menu state
-    var showRadialMenu by remember { mutableStateOf(false) }
+    // FAB and radial menu removed - using inline buttons
     
     // Connection status for FAB
     val connectionStatus = when {
@@ -264,24 +267,8 @@ fun DialogScreen(
                         )
                     }
             }
-        },
-        floatingActionButton = {
-            ContextAwareFAB(
-                connectionStatus = connectionStatus,
-                hasPendingDialog = dialogState.activeDialog != null,
-                onTap = {
-                    if (connectionState.isConnected) {
-                        onRefresh()
-                    } else {
-                        onConnect(serverUrlInput)
-                    }
-                },
-                onLongPress = {
-                    showRadialMenu = true
-                },
-                modifier = Modifier.padding(16.dp)
-            )
         }
+        // FAB removed - using inline buttons instead
     ) { padding ->
         Column(
             modifier = Modifier
@@ -340,31 +327,48 @@ fun DialogScreen(
                     if (connectionState.isConnected) {
                         when (selectedTab) {
                             MainTab.DIALOG -> {
-                                if (dialogState.activeDialog != null) {
-                                    ActiveDialogCard(
-                                        dialog = dialogState.activeDialog,
-                                        selectedValue = dialogState.selectedValue,
-                                        selectedOptions = dialogState.selectedOptions,
-                                        sliderValue = dialogState.sliderValue,
-                                        comment = dialogState.comment,
-                                        holdMode = dialogState.holdMode,
-                                        onSelectOption = onSelectOption,
-                                        onToggleOption = onToggleOption,
-                                        onTextChange = onTextChange,
-                                        onCommentChange = onCommentChange,
-                                        onSliderChange = onSliderChange,
-                                        onConfirm = onConfirm,
-                                        onSubmit = onSubmit,
-                                    )
-                                } else {
-                                    // No active dialog - show dashboard
-                                    DashboardCard(
-                                        queueCount = dialogState.queueCount,
-                                        holdMode = dialogState.holdMode,
-                                        latency = latency,
-                                        isOnline = isOnline,
-                                        onTestNotification = onTestNotification,
-                                    )
+                                // Wrap content with QueueDrawer on left
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    Row(modifier = Modifier.fillMaxSize()) {
+                                        // Queue drawer (left side)
+                                        QueueDrawer(
+                                            queueItems = queueItems,
+                                            activeDialogId = dialogState.activeDialog?.id,
+                                            isOpen = dialogState.isQueueDrawerOpen,
+                                            onToggle = onToggleQueueDrawer,
+                                            onSelectDialog = onSwitchToQueuedDialog,
+                                        )
+                                        
+                                        // Main content (right side)
+                                        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                                            if (dialogState.activeDialog != null) {
+                                                ActiveDialogCard(
+                                                    dialog = dialogState.activeDialog,
+                                                    selectedValue = dialogState.selectedValue,
+                                                    selectedOptions = dialogState.selectedOptions,
+                                                    sliderValue = dialogState.sliderValue,
+                                                    comment = dialogState.comment,
+                                                    holdMode = dialogState.holdMode,
+                                                    onSelectOption = onSelectOption,
+                                                    onToggleOption = onToggleOption,
+                                                    onTextChange = onTextChange,
+                                                    onCommentChange = onCommentChange,
+                                                    onSliderChange = onSliderChange,
+                                                    onConfirm = onConfirm,
+                                                    onSubmit = onSubmit,
+                                                )
+                                            } else {
+                                                // No active dialog - show dashboard with queue info
+                                                DashboardCard(
+                                                    queueCount = queueItems.size,
+                                                    holdMode = dialogState.holdMode,
+                                                    latency = latency,
+                                                    isOnline = isOnline,
+                                                    onTestNotification = onTestNotification,
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             MainTab.HISTORY -> {
@@ -413,41 +417,7 @@ fun DialogScreen(
         }
     }
     
-    // Radial Menu Overlay
-    if (showRadialMenu) {
-        QuickActionsRadialMenu(
-            isVisible = showRadialMenu,
-            onRefresh = {
-                showRadialMenu = false
-                onRefresh()
-            },
-            onSwitchEndpoint = {
-                showRadialMenu = false
-                selectedTab = MainTab.SETTINGS
-            },
-            onSettings = {
-                showRadialMenu = false
-                selectedTab = MainTab.SETTINGS
-            },
-            onTestAll = {
-                showRadialMenu = false
-                onTestAllEndpoints()
-            },
-            onViewLogs = {
-                showRadialMenu = false
-                selectedTab = MainTab.HISTORY
-                onFetchHistory()
-            },
-            onDismiss = {
-                showRadialMenu = false
-            },
-            accentColor = when (connectionStatus) {
-                ConnectionStatus.CONNECTED -> Color(0xFF4CAF50)
-                ConnectionStatus.CONNECTING -> Color(0xFFFFC107)
-                else -> MaterialTheme.colorScheme.primary
-            }
-        )
-    }
+    // Radial menu overlay removed - using inline buttons
 }
 
 /**
@@ -1699,86 +1669,14 @@ fun ActiveDialogCard(
     onConfirm: (Boolean) -> Unit,
     onSubmit: () -> Unit,
 ) {
-    val hapticFeedback = LocalHapticFeedback.current
-    
-    // State for radial response menu
-    var showResponseRadial by remember { mutableStateOf(false) }
-    
-    // Build radial options based on dialog type
-    val radialOptions = remember(dialog.dialogType, selectedValue, selectedOptions, sliderValue) {
-        when (dialog.dialogType.type) {
-            "choice" -> {
-                if (dialog.dialogType.allowMultiple == true) {
-                    // Multi-select: show "Submit Selection" if any selected
-                    if (selectedOptions.isNotEmpty()) {
-                        listOf("__submit__" to "Submit (${selectedOptions.size})")
-                    } else {
-                        emptyList()
-                    }
-                } else {
-                    // Single select: show all options
-                    (dialog.dialogType.options ?: emptyList()).map { opt ->
-                        opt.value to (opt.label ?: opt.value)
-                    }
-                }
-            }
-            "confirm" -> listOf(
-                "true" to (dialog.dialogType.yesLabel ?: "Yes"),
-                "false" to (dialog.dialogType.noLabel ?: "No"),
-            )
-            "text" -> {
-                if (selectedValue.isNotBlank()) {
-                    listOf("__submit__" to "Submit")
-                } else {
-                    emptyList()
-                }
-            }
-            "slider" -> listOf("__submit__" to "Submit")
-            else -> listOf("__submit__" to "Submit")
-        }
-    }
-    
-    // Handler for radial selection
-    val handleRadialSelection: (String) -> Unit = { optionId ->
-        when (dialog.dialogType.type) {
-            "choice" -> {
-                if (optionId == "__submit__") {
-                    onSubmit()
-                } else {
-                    onSelectOption(optionId)
-                    onSubmit()
-                }
-            }
-            "confirm" -> {
-                onConfirm(optionId == "true")
-                onSubmit()
-            }
-            "text", "slider" -> {
-                if (optionId == "__submit__") {
-                    onSubmit()
-                }
-            }
-            else -> onSubmit()
-        }
-        showResponseRadial = false
-    }
+    // Radial menu removed - using regular button interaction
     
     Box(modifier = Modifier.fillMaxSize()) {
-        // Main card content with dark background and long-press gesture
+        // Main card content with dark background
         Card(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 4.dp, vertical = 8.dp)
-                .pointerInput(radialOptions) {
-                    detectTapGestures(
-                        onLongPress = {
-                            if (radialOptions.isNotEmpty()) {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                                showResponseRadial = true
-                            }
-                        }
-                    )
-                },
+                .padding(horizontal = 4.dp, vertical = 8.dp),
             colors = CardDefaults.cardColors(
                 containerColor = Color(0xFF1A1A1A), // High contrast dark
             ),
@@ -1948,13 +1846,55 @@ fun ActiveDialogCard(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Interaction hint (replaces submit button)
+                // Explicit Submit button for choice/text/slider dialogs
+                if (dialog.dialogType.type in listOf("choice", "text", "slider")) {
+                    val hasSelection = when (dialog.dialogType.type) {
+                        "choice" -> {
+                            if (dialog.dialogType.allowMultiple == true) {
+                                selectedOptions.isNotEmpty()
+                            } else {
+                                selectedValue.isNotEmpty()
+                            }
+                        }
+                        "text" -> selectedValue.isNotEmpty()
+                        "slider" -> true // Sliders always have a value
+                        else -> false
+                    }
+                    
+                    Button(
+                        onClick = onSubmit,
+                        enabled = hasSelection,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            disabledContainerColor = Color(0xFF2A2A2A),
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (hasSelection) "Submit Response" else "Select an option first",
+                            fontSize = 16.sp,
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                // Interaction hint
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color(0xFF252525))
-                        .padding(16.dp),
+                        .padding(12.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1962,28 +1902,19 @@ fun ActiveDialogCard(
                         Icons.Default.TouchApp,
                         contentDescription = null,
                         tint = Color(0xFF757575),
-                        modifier = Modifier.size(24.dp),
+                        modifier = Modifier.size(20.dp),
                     )
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Hold anywhere to respond",
-                        fontSize = 16.sp,
-                        color = Color(0xFF9E9E9E),
+                        text = "Tap an option, add a comment, then submit",
+                        fontSize = 14.sp,
+                        color = Color(0xFF757575),
                     )
                 }
             }
         }
         
-        // Radial response menu overlay
-        if (radialOptions.isNotEmpty()) {
-            DialogResponseRadialMenu(
-                isVisible = showResponseRadial,
-                options = radialOptions,
-                onSelectOption = handleRadialSelection,
-                onCancel = { showResponseRadial = false },
-                onDismiss = { showResponseRadial = false },
-            )
-        }
+        // Radial menu overlay removed - using inline buttons instead
     }
 }
 
@@ -2000,16 +1931,14 @@ fun ChoiceContentRedesigned(
     
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // Header with selection hint
-        if (!allowMultiple) {
-            Text(
-                text = "Hold card to select option",
-                fontSize = 14.sp,
-                color = Color(0xFF757575),
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-        }
+        Text(
+            text = if (allowMultiple) "Tap to select multiple options" else "Tap to select an option",
+            fontSize = 14.sp,
+            color = Color(0xFF757575),
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         
         options.forEach { option ->
             val isSelected = if (allowMultiple) {
@@ -2026,16 +1955,14 @@ fun ChoiceContentRedesigned(
                         if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                         else Color(0xFF252525)
                     )
-                    .then(
+                    .clickable {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                         if (allowMultiple) {
-                            Modifier.clickable {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onToggleOption(option.value)
-                            }
+                            onToggleOption(option.value)
                         } else {
-                            Modifier // Single-select uses radial
+                            onSelectOption(option.value)
                         }
-                    )
+                    }
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
