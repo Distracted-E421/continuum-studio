@@ -22,7 +22,7 @@ Continuum Studio
 
 ### Desktop UI (`ui-iced/`)
 
-- **April 18, 2026**: `cargo build --release`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` (139 tests) all pass on `iced-migration`. Introduced `SpawnAgentWithPresetParams` in `cli_agents_client.rs` so `spawn_agent_with_preset` satisfies `clippy::too_many_arguments` under `-D warnings`.
+- **April 18, 2026**: `cargo build --release`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` (139 tests) all pass on `iced-migration`. Overnight AFK session re-verified the same toolchain; no new compiler warnings. Intentional `#[allow(dead_code)]` remains only for planned UI phases (e.g. `main.rs` CoreRequest variants, `updater.rs` helpers). Earlier same day: `SpawnAgentWithPresetParams` in `cli_agents_client.rs` so `spawn_agent_with_preset` satisfies `clippy::too_many_arguments` under `-D warnings`.
 - Session management for Cursor instances
 - Service discovery and monitoring dashboard
 - Chat message pipeline display
