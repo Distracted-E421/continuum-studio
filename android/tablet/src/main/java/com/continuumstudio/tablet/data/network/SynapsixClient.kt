@@ -47,7 +47,26 @@ class SynapsixClient(
             // Ignore - current might not exist
         }
         
-        // 2. Get agent dialogs (dialogs from CLI agents)
+        // 2. Get queued dialogs from daemon queue
+        try {
+            val queueRequest = Request.Builder()
+                .url("$dialogUrl/api/queue")
+                .get()
+                .build()
+            
+            val queueResponse = client.newCall(queueRequest).execute()
+            if (queueResponse.isSuccessful) {
+                val body = queueResponse.body?.string() ?: "{}"
+                val queueResponseData: QueueResponse = gson.fromJson(body, QueueResponse::class.java)
+                if (queueResponseData.success && queueResponseData.data != null) {
+                    dialogs.addAll(queueResponseData.data.mapIndexed { index, item -> item.toDialog(index) })
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore - might not have queued dialogs
+        }
+        
+        // 3. Get agent dialogs (dialogs from CLI agents)
         try {
             val agentRequest = Request.Builder()
                 .url("$dialogUrl/api/agent-dialogs")
@@ -67,6 +86,27 @@ class SynapsixClient(
         }
         
         Result.success(dialogs.distinctBy { it.id })
+    }
+    
+    // Switch to a specific dialog in the queue by index
+    suspend fun switchToQueuedDialog(index: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = gson.toJson(mapOf("index" to index)).toRequestBody(jsonMediaType)
+            
+            val request = Request.Builder()
+                .url("$dialogUrl/api/switch")
+                .post(body)
+                .build()
+            
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                Result.success(Unit)
+            } else {
+                Result.failure(Exception("HTTP ${response.code}: ${response.message}"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
     
     // Get dialog history (includes answered dialogs) from /api/history
@@ -484,4 +524,50 @@ data class TaskDto(
         createdBy = created_by,
         agentId = agent_id
     )
+}
+
+// Response wrapper for /api/queue (daemon dialog queue)
+data class QueueResponse(
+    val success: Boolean,
+    val data: List<QueueItemDto>? = null,
+    val error: String? = null
+)
+
+// Queue item from /api/queue
+data class QueueItemDto(
+    val id: String,
+    val dialog_type: CurrentDialogTypeDto,
+    val title: String,
+    val prompt: String,
+    val timeout_ms: Long? = null
+) {
+    fun toDialog(queueIndex: Int): Dialog {
+        val dialogTypeName = dialog_type.type.lowercase()
+        return Dialog(
+            id = id,
+            type = when (dialogTypeName) {
+                "confirmation", "confirm" -> DialogType.Confirmation
+                "choice" -> DialogType.Choice
+                "text" -> DialogType.Text
+                "slider" -> DialogType.Slider
+                else -> DialogType.Choice
+            },
+            title = title,
+            prompt = prompt,
+            options = dialog_type.options?.map { DialogOption(it.value, it.label, it.description) }
+                ?: if (dialogTypeName == "confirmation" || dialogTypeName == "confirm") {
+                    listOf(
+                        DialogOption("true", dialog_type.confirm_text ?: "Yes"),
+                        DialogOption("false", dialog_type.cancel_text ?: "No")
+                    )
+                } else null,
+            defaultValue = dialog_type.default,
+            source = DialogSource.External,
+            priority = DialogPriority.Normal,
+            agentId = null,
+            workspace = "Queue #${queueIndex + 1}",
+            isAnswered = false,
+            answer = null
+        )
+    }
 }

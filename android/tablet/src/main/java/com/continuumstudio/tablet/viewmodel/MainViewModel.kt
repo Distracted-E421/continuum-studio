@@ -247,6 +247,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
+    fun switchToQueuedDialog(index: Int) {
+        viewModelScope.launch {
+            apiClient?.switchToQueuedDialog(index)?.onSuccess {
+                // Refresh dialogs after switching
+                refreshData()
+            }?.onFailure { error ->
+                android.util.Log.e("ContinuumTablet", "Failed to switch dialog: ${error.message}", error)
+            }
+        }
+    }
+    
     fun spawnAgent(prompt: String, workspace: String? = null, preset: String? = null) {
         viewModelScope.launch {
             apiClient?.spawnAgent(prompt, workspace, preset)?.onSuccess { agent ->
@@ -309,6 +320,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 client.getDialogHistory(100).onSuccess { history -> _dialogHistory.value = history }
                 client.getAgents().onSuccess { agents -> _agents.value = agents }
+                client.getTasks().onSuccess { tasks -> _tasks.value = tasks }
+                client.getParkedAgents().onSuccess { agents -> _parkedAgents.value = agents }
+            }
+        }
+    }
+    
+    // Refresh only data not covered by WebSocket (history, tasks, parked agents)
+    // Dialogs and active agents are handled by WebSocket events
+    fun refreshNonRealtimeData() {
+        viewModelScope.launch {
+            apiClient?.let { client ->
+                // Only refresh data not covered by WebSocket
+                client.getDialogHistory(100).onSuccess { history -> _dialogHistory.value = history }
                 client.getTasks().onSuccess { tasks -> _tasks.value = tasks }
                 client.getParkedAgents().onSuccess { agents -> _parkedAgents.value = agents }
             }
