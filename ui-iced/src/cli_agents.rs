@@ -2643,16 +2643,6 @@ fn checkbox_button<'a, M: 'a + Clone>(
         .into()
 }
 
-/// Helper function to build a preview section for the prompt preview
-#[allow(dead_code)]
-fn build_preview_section<'a, M: 'a + Clone>(
-    title: &'static str,
-    content: String,
-    color: iced::Color,
-) -> Element<'a, M> {
-    build_preview_section_with_tokens(title, content, 0, color)
-}
-
 /// Helper function to build a preview section with token count display
 fn build_preview_section_with_tokens<'a, M: 'a + Clone>(
     title: &'static str,
