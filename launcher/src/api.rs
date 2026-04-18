@@ -19,6 +19,12 @@ pub async fn fetch_versions() -> Result<Vec<CursorVersion>, String> {
         .collect())
 }
 
+/// Wrapper for versioned JSON format from cursor-versions CLI
+#[derive(serde::Deserialize)]
+struct VersionsWrapper {
+    versions: Vec<CursorVersion>,
+}
+
 async fn load_local_versions() -> Result<Vec<CursorVersion>, String> {
     let paths = [
         dirs::config_dir().map(|d| d.join("synapsix").join(VERSIONS_FILE)),
@@ -30,6 +36,11 @@ async fn load_local_versions() -> Result<Vec<CursorVersion>, String> {
         if path.exists() {
             match tokio::fs::read_to_string(&path).await {
                 Ok(content) => {
+                    // Try parsing as wrapped format first (from cursor-versions CLI)
+                    if let Ok(wrapper) = serde_json::from_str::<VersionsWrapper>(&content) {
+                        return Ok(wrapper.versions);
+                    }
+                    // Fall back to direct array format
                     return serde_json::from_str(&content)
                         .map_err(|e| format!("Failed to parse versions: {}", e));
                 }
@@ -70,11 +81,26 @@ async fn get_installed_versions() -> Vec<String> {
         while let Ok(Some(entry)) = entries.next_entry().await {
             if let Some(name) = entry.file_name().to_str() {
                 if name.starts_with("cursor-") && name.ends_with(".AppImage") {
-                    let version = name
-                        .trim_start_matches("cursor-")
-                        .trim_end_matches(".AppImage")
+                    // Extract version from patterns like:
+                    // cursor-3.1.14-linux-x64.AppImage -> 3.1.14
+                    // cursor-3.1.14.AppImage -> 3.1.14
+                    let without_prefix = name.trim_start_matches("cursor-");
+                    let without_suffix = without_prefix.trim_end_matches(".AppImage");
+                    
+                    // Remove platform suffixes
+                    let version = without_suffix
+                        .trim_end_matches("-linux-x64")
+                        .trim_end_matches("-linux-arm64")
+                        .trim_end_matches("-darwin-x64")
+                        .trim_end_matches("-darwin-arm64")
+                        .trim_end_matches("-darwin-universal")
+                        .trim_end_matches("-x86_64")
+                        .trim_end_matches("-aarch64")
                         .to_string();
-                    installed.push(version);
+                    
+                    if !version.is_empty() {
+                        installed.push(version);
+                    }
                 }
             }
         }
@@ -84,13 +110,40 @@ async fn get_installed_versions() -> Vec<String> {
 }
 
 pub async fn download_version(version: String) -> (String, Result<(), String>) {
-    let client = reqwest::Client::new();
-    let url = format!("{}/api/cursor/download/{}", SYNAPSIX_API_BASE, version);
+    // Use cursor-versions CLI to install
+    let result = tokio::process::Command::new("cursor-versions")
+        .args(["install", &version])
+        .output()
+        .await;
 
-    let result = match client.post(&url).send().await {
-        Ok(resp) if resp.status().is_success() => Ok(()),
-        Ok(resp) => Err(format!("Download failed: {}", resp.status())),
-        Err(e) => Err(format!("Connection failed: {}", e)),
+    let result = match result {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Err(format!("Install failed: {}{}", stdout, stderr))
+        }
+        Err(e) => Err(format!("Failed to run cursor-versions: {}", e)),
+    };
+
+    (version, result)
+}
+
+pub async fn uninstall_version(version: String) -> (String, Result<(), String>) {
+    // Use cursor-versions CLI to uninstall
+    let result = tokio::process::Command::new("cursor-versions")
+        .args(["uninstall", &version])
+        .output()
+        .await;
+
+    let result = match result {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Err(format!("Uninstall failed: {}{}", stdout, stderr))
+        }
+        Err(e) => Err(format!("Failed to run cursor-versions: {}", e)),
     };
 
     (version, result)
@@ -99,35 +152,84 @@ pub async fn download_version(version: String) -> (String, Result<(), String>) {
 pub async fn fetch_recent_workspaces() -> Vec<Workspace> {
     let mut workspaces = Vec::new();
 
-    // Load from Cursor's global storage
+    // Load from Cursor's global storage (note: capital C in Cursor)
     let cursor_storage = dirs::home_dir()
-        .map(|d| d.join(".config/cursor/User/globalStorage/storage.json"));
+        .map(|d| d.join(".config/Cursor/User/globalStorage/storage.json"));
 
-    if let Some(path) = cursor_storage {
+    eprintln!("[DEBUG] Looking for storage at: {:?}", cursor_storage);
+
+    if let Some(ref path) = cursor_storage {
+        eprintln!("[DEBUG] Storage path exists: {}", path.exists());
         if path.exists() {
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                eprintln!("[DEBUG] Read storage.json, {} bytes", content.len());
                 if let Ok(storage) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(folders) = storage.get("openedPathsList").and_then(|v| v.get("workspaces3")) {
-                        if let Some(arr) = folders.as_array() {
-                            for item in arr.iter().take(10) {
-                                if let Some(uri) = item.as_str() {
-                                    if let Some(path_str) = uri.strip_prefix("file://") {
-                                        let path = PathBuf::from(path_str);
-                                        let name = path.file_name()
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or("Unknown")
-                                            .to_string();
-                                        workspaces.push(Workspace {
-                                            path,
-                                            name,
-                                            last_opened: None,
-                                        });
-                                    }
+                    // Parse workspaces from profileAssociations.workspaces (keys are URIs)
+                    let profiles = storage.get("profileAssociations")
+                        .and_then(|v| v.get("workspaces"))
+                        .and_then(|v| v.as_object());
+                    
+                    eprintln!("[DEBUG] Found profiles: {}", profiles.is_some());
+                    
+                    if let Some(profiles) = profiles {
+                        eprintln!("[DEBUG] Profile entries: {}", profiles.len());
+                        for (uri, _) in profiles.iter().take(20) {
+                            eprintln!("[DEBUG] Processing: {}", uri);
+                            if let Some(path_str) = uri.strip_prefix("file://") {
+                                let path = PathBuf::from(path_str);
+                                // Skip internal Cursor workspace.json files (but allow .code-workspace)
+                                if path_str.contains("/Workspaces/") && path_str.contains("/workspace.json") {
+                                    eprintln!("[DEBUG] Skipping internal workspace.json: {}", path_str);
+                                    continue;
+                                }
+                                // Only include paths that exist
+                                let exists = path.exists();
+                                eprintln!("[DEBUG] Path {} exists: {}", path.display(), exists);
+                                if !exists {
+                                    continue;
+                                }
+                                let name = path.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string();
+                                if !workspaces.iter().any(|w: &Workspace| w.path == path) {
+                                    eprintln!("[DEBUG] Adding workspace: {} at {}", name, path.display());
+                                    workspaces.push(Workspace {
+                                        path,
+                                        name,
+                                        last_opened: None,
+                                    });
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+    
+    eprintln!("[DEBUG] Total workspaces found: {}", workspaces.len());
+    
+    // Add default workspaces if none found
+    if workspaces.is_empty() {
+        // Add some common paths
+        let common_paths = [
+            "/home/e421/homelab",
+            "/home/e421/cortex",
+            "/home/e421/synapsix",
+        ];
+        for path_str in &common_paths {
+            let path = PathBuf::from(path_str);
+            if path.exists() {
+                let name = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Unknown")
+                    .to_string();
+                workspaces.push(Workspace {
+                    path,
+                    name,
+                    last_opened: None,
+                });
             }
         }
     }
@@ -185,11 +287,34 @@ pub async fn launch_cursor(version: String, workspace: PathBuf) -> Result<(), St
         .map(|d| d.join(".cursor-versions").join("downloads"))
         .ok_or("Could not determine versions directory")?;
 
-    let appimage_path = versions_dir.join(format!("cursor-{}.AppImage", version));
-
-    if !appimage_path.exists() {
-        return Err(format!("Version {} not installed", version));
+    // Try different AppImage filename patterns
+    let patterns = [
+        format!("cursor-{}-linux-x64.AppImage", version),
+        format!("cursor-{}-linux-arm64.AppImage", version),
+        format!("cursor-{}.AppImage", version),
+    ];
+    
+    let mut appimage_path = None;
+    for pattern in &patterns {
+        let path = versions_dir.join(pattern);
+        if path.exists() {
+            appimage_path = Some(path);
+            break;
+        }
     }
+    
+    let appimage_path = appimage_path
+        .ok_or_else(|| {
+            let tried: Vec<_> = patterns.iter().map(|p| versions_dir.join(p)).collect();
+            format!(
+                "Version '{}' not found. Tried:\n{}",
+                version,
+                tried.iter()
+                    .map(|p| format!("  - {}", p.display()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        })?;
 
     // Make sure it's executable
     #[cfg(unix)]
@@ -234,11 +359,12 @@ pub async fn check_synapsix_status() -> SynapsixStatus {
     let mut status = SynapsixStatus::default();
 
     // Check if dialog daemon is running via D-Bus
+    // Correct D-Bus name: sh.synapsix.Dialog at /sh/synapsix/Dialog
     if let Ok(conn) = zbus::Connection::session().await {
         let proxy_result = conn
             .call_method(
-                Some("dev.continuumlogic.synapsix.dialog"),
-                "/dev/continuumlogic/synapsix/dialog",
+                Some("sh.synapsix.Dialog"),
+                "/sh/synapsix/Dialog",
                 Some("org.freedesktop.DBus.Peer"),
                 "Ping",
                 &(),
@@ -249,12 +375,15 @@ pub async fn check_synapsix_status() -> SynapsixStatus {
         status.dialog_available = proxy_result.is_ok();
     }
 
-    // Check terminal monitor
-    let monitor_socket = dirs::runtime_dir()
-        .unwrap_or_else(|| PathBuf::from("/run/user/1000"))
-        .join("synapsix-terminal-monitor.sock");
-
-    status.terminal_monitor = monitor_socket.exists();
+    // Check terminal monitor via systemd
+    let monitor_status = tokio::process::Command::new("systemctl")
+        .args(["--user", "is-active", "synapsix-terminal-monitor"])
+        .output()
+        .await;
+    
+    status.terminal_monitor = monitor_status
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
     // Try to get version from API
     let client = reqwest::Client::new();

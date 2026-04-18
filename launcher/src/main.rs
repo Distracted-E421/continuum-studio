@@ -36,6 +36,8 @@ pub enum Message {
     DownloadVersion(String),
     DownloadProgress(String, f32),
     DownloadComplete(String, Result<(), String>),
+    UninstallVersion(String),
+    UninstallComplete(String, Result<(), String>),
 
     // Workspace
     LoadWorkspaces,
@@ -73,10 +75,20 @@ pub enum Tab {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CursorVersion {
     pub version: String,
+    #[serde(default)]
     pub date: Option<String>,
+    #[serde(skip_deserializing, default)]
     pub installed: bool,
+    #[serde(default = "default_era")]
     pub era: String,
+    #[serde(default)]
     pub notes: Option<String>,
+    #[serde(default)]
+    pub commit_hash: Option<String>,
+}
+
+fn default_era() -> String {
+    "Latest".to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -137,9 +149,9 @@ impl Launcher {
         };
 
         let commands = Task::batch(vec![
-            Task::perform(async {}, |_| Message::LoadVersions),
-            Task::perform(async {}, |_| Message::LoadWorkspaces),
-            Task::perform(async {}, |_| Message::RefreshSynapsixStatus),
+            Task::perform(api::fetch_versions(), Message::VersionsLoaded),
+            Task::perform(api::fetch_recent_workspaces(), Message::WorkspacesLoaded),
+            Task::perform(api::check_synapsix_status(), Message::SynapsixStatusUpdated),
         ]);
 
         (launcher, commands)
@@ -204,6 +216,26 @@ impl Launcher {
                         }
                     }
                     Err(e) => self.error = Some(format!("Download failed: {}", e)),
+                }
+                Task::none()
+            }
+
+            Message::UninstallVersion(version) => {
+                Task::perform(api::uninstall_version(version), |(v, r)| Message::UninstallComplete(v, r))
+            }
+
+            Message::UninstallComplete(version, result) => {
+                match result {
+                    Ok(()) => {
+                        if let Some(v) = self.versions.iter_mut().find(|v| v.version == version) {
+                            v.installed = false;
+                        }
+                        // Clear selected version if it was the one uninstalled
+                        if self.selected_version.as_ref() == Some(&version) {
+                            self.selected_version = None;
+                        }
+                    }
+                    Err(e) => self.error = Some(format!("Uninstall failed: {}", e)),
                 }
                 Task::none()
             }
@@ -480,15 +512,26 @@ impl Launcher {
                     };
 
                     let action: Element<Message> = if v.installed {
-                        button(text("Select"))
-                            .on_press(Message::SelectVersion(v.version.clone()))
-                            .style(|_theme, _status| button::Style {
-                                background: Some(iced::Background::Color(iced::Color::from_rgb(0.3, 0.3, 0.3))),
-                                text_color: iced::Color::from_rgb(0.9, 0.9, 0.9),
-                                border: iced::Border::default().rounded(4),
-                                ..Default::default()
-                            })
-                            .into()
+                        row![
+                            button(text("Select"))
+                                .on_press(Message::SelectVersion(v.version.clone()))
+                                .style(|_theme, _status| button::Style {
+                                    background: Some(iced::Background::Color(iced::Color::from_rgb(0.3, 0.3, 0.3))),
+                                    text_color: iced::Color::from_rgb(0.9, 0.9, 0.9),
+                                    border: iced::Border::default().rounded(4),
+                                    ..Default::default()
+                                }),
+                            button(text("🗑"))
+                                .on_press(Message::UninstallVersion(v.version.clone()))
+                                .style(|_theme, _status| button::Style {
+                                    background: Some(iced::Background::Color(iced::Color::from_rgb(0.6, 0.2, 0.2))),
+                                    text_color: iced::Color::WHITE,
+                                    border: iced::Border::default().rounded(4),
+                                    ..Default::default()
+                                }),
+                        ]
+                        .spacing(5)
+                        .into()
                     } else if self.downloading.as_ref().map(|(dv, _)| dv) == Some(&v.version) {
                         let progress = self.downloading.as_ref().map(|(_, p)| *p).unwrap_or(0.0);
                         button(text(format!("{:.0}%", progress * 100.0)))
