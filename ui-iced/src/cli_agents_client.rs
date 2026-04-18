@@ -37,6 +37,18 @@ pub struct SpawnAgentRequest {
     pub suffix: Option<String>,
 }
 
+/// Arguments for [`CLIAgentsHttpClient::spawn_agent_with_preset`].
+#[derive(Debug, Clone)]
+pub struct SpawnAgentWithPresetParams {
+    pub prompt: String,
+    pub workspace: String,
+    pub mode: Option<AgentMode>,
+    pub force: Option<bool>,
+    pub approve_mcps: Option<bool>,
+    pub prefix: Option<String>,
+    pub suffix: Option<String>,
+}
+
 /// Request to spawn a batch of CLI agents
 #[derive(Debug, Clone, Serialize)]
 pub struct SpawnBatchRequest {
@@ -144,8 +156,16 @@ impl CLIAgentsHttpClient {
         force: Option<bool>,
         approve_mcps: Option<bool>,
     ) -> Result<SpawnResponse, String> {
-        self.spawn_agent_with_preset(prompt, workspace, mode, force, approve_mcps, None, None)
-            .await
+        self.spawn_agent_with_preset(SpawnAgentWithPresetParams {
+            prompt: prompt.to_string(),
+            workspace: workspace.to_string(),
+            mode,
+            force,
+            approve_mcps,
+            prefix: None,
+            suffix: None,
+        })
+        .await
     }
 
     /// Spawn a batch of CLI agents
@@ -246,17 +266,20 @@ impl CLIAgentsHttpClient {
     /// Spawn a single CLI agent with custom prefix/suffix
     pub async fn spawn_agent_with_preset(
         &self,
-        prompt: &str,
-        workspace: &str,
-        mode: Option<AgentMode>,
-        force: Option<bool>,
-        approve_mcps: Option<bool>,
-        prefix: Option<String>,
-        suffix: Option<String>,
+        params: SpawnAgentWithPresetParams,
     ) -> Result<SpawnResponse, String> {
+        let SpawnAgentWithPresetParams {
+            prompt,
+            workspace,
+            mode,
+            force,
+            approve_mcps,
+            prefix,
+            suffix,
+        } = params;
         let req = SpawnAgentRequest {
-            prompt: prompt.to_string(),
-            workspace: workspace.to_string(),
+            prompt,
+            workspace,
             mode: mode.map(|m| m.label().to_string()),
             force,
             approve_mcps,
@@ -823,9 +846,9 @@ impl CLIAgentsHttpClient {
         } else if selection == "false" {
             serde_json::Value::Bool(false)
         } else if let Ok(num) = selection.parse::<f64>() {
-            serde_json::Value::Number(serde_json::Number::from_f64(num).unwrap_or_else(|| {
-                serde_json::Number::from(0)
-            }))
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(num).unwrap_or_else(|| serde_json::Number::from(0)),
+            )
         } else {
             serde_json::Value::String(selection.to_string())
         };
@@ -836,7 +859,10 @@ impl CLIAgentsHttpClient {
         };
 
         // Use the new agent-dialogs/:id/respond endpoint
-        let url = format!("http://localhost:8080/api/agent-dialogs/{}/respond", dialog_id);
+        let url = format!(
+            "http://localhost:8080/api/agent-dialogs/{}/respond",
+            dialog_id
+        );
         let resp = self
             .client
             .post(&url)
@@ -856,7 +882,10 @@ impl CLIAgentsHttpClient {
 
     /// Escalate a dialog to critical priority (brings to user attention)
     pub async fn escalate_dialog(&self, dialog_id: &str) -> Result<(), String> {
-        let url = format!("http://localhost:8080/api/agent-dialogs/{}/escalate", dialog_id);
+        let url = format!(
+            "http://localhost:8080/api/agent-dialogs/{}/escalate",
+            dialog_id
+        );
         let resp = self
             .client
             .post(&url)
@@ -1098,17 +1127,11 @@ pub const ORCHESTRATOR_WS_URL: &str = "ws://localhost:8080/ws/orchestrator";
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OrchestratorWsEvent {
     /// New dialog from agent
-    DialogCreated {
-        dialog: Box<OrchestratorDialogInfo>,
-    },
+    DialogCreated { dialog: Box<OrchestratorDialogInfo> },
     /// Dialog was answered
-    DialogAnswered {
-        dialog_id: String,
-    },
+    DialogAnswered { dialog_id: String },
     /// Dialog priority escalated
-    DialogEscalated {
-        dialog_id: String,
-    },
+    DialogEscalated { dialog_id: String },
     /// Connection established
     Connected,
     /// Heartbeat
@@ -1171,9 +1194,7 @@ impl OrchestratorDialogInfo {
 }
 
 /// Spawn an orchestrator WebSocket connection for real-time dialog notifications
-pub fn spawn_orchestrator_websocket(
-    ws_url: Option<String>,
-) -> mpsc::Receiver<OrchestratorWsEvent> {
+pub fn spawn_orchestrator_websocket(ws_url: Option<String>) -> mpsc::Receiver<OrchestratorWsEvent> {
     let (tx, rx) = mpsc::channel(100);
 
     tokio::spawn(async move {

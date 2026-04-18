@@ -18,8 +18,8 @@ pub mod monitoring;
 pub mod offline;
 pub mod orchestrator_panel;
 pub mod parked_agents;
-pub mod profiling;
 pub mod parked_agents_client;
+pub mod profiling;
 pub mod services;
 pub mod sessions;
 pub mod settings;
@@ -42,7 +42,7 @@ pub use cli_agents::{
 };
 pub use cli_agents_client::{
     spawn_cli_agents_websocket, CLIAgentWsEvent, CLIAgentsHttpClient, SpawnAgentRequest,
-    SpawnBatchRequest,
+    SpawnAgentWithPresetParams, SpawnBatchRequest,
 };
 pub use coordinator_client::{
     Agent as CoordinatorAgent, AgentFocus, AgentStatus, AgentType, Conflict, CoordinatorEvent,

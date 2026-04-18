@@ -22,6 +22,7 @@ Continuum Studio
 
 ### Desktop UI (`ui-iced/`)
 
+- **April 18, 2026**: `cargo build --release`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` (139 tests) all pass on `iced-migration`. Introduced `SpawnAgentWithPresetParams` in `cli_agents_client.rs` so `spawn_agent_with_preset` satisfies `clippy::too_many_arguments` under `-D warnings`.
 - Session management for Cursor instances
 - Service discovery and monitoring dashboard
 - Chat message pipeline display
@@ -763,39 +764,13 @@ Only one shared crate exists:
 
 ### Technical Debt
 
-**Type Duplication (Priority: Medium)**
+**Type Duplication (task queue types)** — **Resolved April 7, 2026** (see Code Quality Session): `widgets/task_queue.rs` re-exports `Priority`, `TaskStatus`, `Task`, and `QueueStats` from `task_queue_client.rs`.
 
-`task_queue_client.rs` and `widgets/task_queue.rs` both define:
-- `Priority` enum (Critical, High, Medium, Low, Backlog)
-- `TaskStatus` enum (Pending, Claimed, InProgress, Completed, Cancelled)
-- `Task` struct
-- `QueueStats` struct
+**System Theme Detection (Priority: Low)** — **Resolved April 7, 2026**: `dark-light` is integrated; the note below kept for crate reference.
 
-The widget should import from the client module to avoid drift. Currently they're nearly identical but `task_queue_client.rs` has more fields (e.g., `created_by`, `agent_id`, `session_id`).
+`derive_theme()` previously fell back to Dark for `ThemePreference::System`.
 
-**Detailed Fix Plan:**
-
-1. In `widgets/task_queue.rs`:
-   ```rust
-   // Replace local definitions with:
-   pub use crate::task_queue_client::{Priority, TaskStatus, Task, QueueStats};
-   ```
-
-2. In `widgets/mod.rs`:
-   - Remove `Priority`, `TaskStatus`, `Task`, `QueueStats` from task_queue re-exports
-   - Add note that these are now in `task_queue_client`
-
-3. Update `lib.rs` to avoid duplicate exports
-
-4. Test compilation and fix any type mismatches
-
-**Impact:** ~40 lines removed, API surface simplified. Widget-specific types (`Agent`, `AgentType`, `AgentStatus`, `TaskHistoryEntry`) remain in widget.
-
-**System Theme Detection (Priority: Low)**
-
-`derive_theme()` in `main.rs:725` falls back to Dark for `ThemePreference::System`. 
-
-**Recommended fix:** Add `dark-light` crate (https://github.com/rust-dark-light/rust-dark-light)
+**Implementation:** `dark-light` crate (https://github.com/rust-dark-light/rust-dark-light)
 - Detects via XDG Desktop Portal D-Bus API
 - Works in Flatpak sandboxes
 - Returns `Mode::Dark`, `Mode::Light`, or `Mode::Unspecified`
@@ -1063,8 +1038,7 @@ Added documentation for recent features:
 
 | Warning | Location | Reason |
 |---------|----------|--------|
-| Too many arguments (8/7) | `cli_agents_client.rs:247` | Would require config struct refactor |
-| Large enum variant size | `cli_agents_client.rs:1099` | Would require boxing |
+| Large enum variant size | `cli_agents_client.rs` (WS events) | Would require boxing |
 | `from_str` method name | Various | Intentional, not implementing `FromStr` trait |
 
 ### Files Modified

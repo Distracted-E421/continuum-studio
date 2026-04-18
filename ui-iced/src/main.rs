@@ -39,7 +39,7 @@ use continuum_studio_iced::chat_pipeline::{
 use continuum_studio_iced::cli_agents::{
     view_cli_agents_tab, CLIAgentMessage, CLIAgentTask, CLIAgentsState,
 };
-use continuum_studio_iced::cli_agents_client::CLIAgentsHttpClient;
+use continuum_studio_iced::cli_agents_client::{CLIAgentsHttpClient, SpawnAgentWithPresetParams};
 use continuum_studio_iced::orchestrator_panel::{
     view_orchestrator_panel, OrchestratorMessage, OrchestratorPanelState,
 };
@@ -12071,15 +12071,15 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
             Task::perform(
                 async move {
                     client
-                        .spawn_agent_with_preset(
-                            &prompt,
-                            &workspace,
-                            Some(mode),
-                            Some(force),
-                            Some(approve_mcps),
+                        .spawn_agent_with_preset(SpawnAgentWithPresetParams {
+                            prompt,
+                            workspace,
+                            mode: Some(mode),
+                            force: Some(force),
+                            approve_mcps: Some(approve_mcps),
                             prefix,
                             suffix,
-                        )
+                        })
                         .await
                 },
                 |result| match result {
