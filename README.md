@@ -238,5 +238,14 @@ homelab.synapsix = {
 
 ## License
 
-- Core components: AGPL-3.0
-- Infrastructure services: SSPL
+**SSPL-1.0** (Server Side Public License) for core orchestration platform.
+
+This license means:
+- ✅ **Self-hosting**: Free for personal or organizational AI orchestration
+- ✅ **Modification**: Fork and customize for your workflow
+- ✅ **Internal use**: Deploy within your organization at no cost
+- ⚠️ **SaaS restriction**: Offering Continuum Studio as a managed service requires releasing your entire stack
+
+The SSPL protects against cloud providers offering AI-orchestration-as-a-service without contributing. For users deploying their own AI infrastructure, this works like a permissive open-source license.
+
+See [LICENSE](LICENSE) for full details and [LICENSING_FAQ.md](../cortex/docs/LICENSING_FAQ.md) for common questions.
