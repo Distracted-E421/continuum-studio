@@ -171,8 +171,8 @@ Agent action verification via SMT solvers:
 ### Dialog System
 
 Interactive AI agent feedback without wasting API requests:
-- Native desktop dialogs (egui) and iced panel
-- Mobile dialogs (WebSocket + web UI)
+- Native desktop dialogs via Synapsix dialog daemon (Iced GUI; optional egui build)
+- Mobile dialogs (WebSocket + web UI on port 8080)
 - Priority queue, decision memory, approval workflows
 - Hold mode for complex decisions
 - Rich context (code diffs, file previews, progress)
@@ -220,12 +220,13 @@ homelab.synapsix = {
 
 | Document | Description |
 |----------|-------------|
+| `docs/STATUS_APRIL_2026.md` | Current component status and inventory |
 | `docs/ARCHITECTURE.md` | System architecture overview |
-| `docs/UI_ARCHITECTURE.md` | UI component design |
+| `docs/UI_ARCHITECTURE.md` | iced UI structure and communication patterns |
 | `docs/AGENT_BRIDGE_ARCHITECTURE.md` | Agent Bridge design |
-| `docs/MODULE_ARCHITECTURE.md` | Module boundaries |
+| `docs/MODULE_ARCHITECTURE.md` | Module boundaries (see top note: `ui-iced` is current desktop UI) |
 | `docs/ETF_PROTOCOL.md` | IPC protocol specification |
-| `docs/WIDGET_BAY_DESIGN.md` | Widget bay design |
+| `docs/WIDGET_BAY_DESIGN.md` | Android widget bay design |
 | `docs/DESIGN_PROXY_SESSION_MONITORING.md` | Session monitoring design |
 | `docs/UI_PARADIGM_EXPLORATION.md` | UI paradigm rationale |
 

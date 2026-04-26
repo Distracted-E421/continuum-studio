@@ -1,8 +1,19 @@
 # Module Architecture: Continuum Studio & Synapsix
 
 > **Document Purpose**: Define clear module boundaries and responsibilities  
-> **Date**: January 2026  
-> **Status**: Architecture Definition
+> **Date**: January 2026 (structural model still valid)  
+> **Status**: Architecture definition — **read together with current layout below**
+
+## Current layout (April 2026)
+
+| Area | Path | Notes |
+|------|------|--------|
+| Desktop UI | `continuum-studio/ui-iced/` | **Active** — Rust + iced 0.14. Legacy egui code remains under `ui/` only for reference. |
+| Studio Core | `continuum-studio/core/studio_core/` | Elixir/OTP |
+| Agent Bridge | `continuum-studio/core/agent_bridge/` | Elixir umbrella app path (not `agent-bridge/` at repo root) |
+| Dialog daemon | `synapsix/dialog/` | Lives in Synapsix repo; D-Bus `sh.synapsix.Dialog`, web port 8080 |
+
+The **egui-oriented** directory trees, `Widget` trait examples, and `agent-bridge/` path below describe the **original module split**; mentally substitute `ui-iced/` and `core/agent_bridge/` where applicable.
 
 ---
 
@@ -64,7 +75,7 @@ The Continuum ecosystem consists of **four primary modules** with clear boundari
 ### Purpose
 Distributed AI harness orchestrator - the "muscle" that controls applications and services for AI agents.
 
-### License: AGPL-3.0
+### License: SSPL-1.0 (verify repository `LICENSE`)
 
 ### Responsibilities
 
@@ -166,7 +177,7 @@ synapsix/
 ### Purpose
 The application runtime that ties everything together - event routing, state management, and IPC coordination.
 
-### License: AGPL-3.0
+### License: SSPL-1.0 (verify repository `LICENSE`)
 
 ### Responsibilities
 
@@ -293,7 +304,7 @@ The visual interface - widget rendering, user interaction, and presentation logi
 
 ### Language: Rust (egui/cosmic)
 
-### License: AGPL-3.0
+### License: SSPL-1.0 (verify repository `LICENSE`)
 
 ### Responsibilities
 
@@ -425,7 +436,7 @@ continuum-studio/
 ### Purpose
 Unified interface for connecting to various AI providers - local models, APIs, and IDE-embedded agents.
 
-### License: AGPL-3.0
+### License: SSPL-1.0 (verify repository `LICENSE`)
 
 ### Responsibilities
 
@@ -703,10 +714,10 @@ synapsix (separate repo)
 
 | Module | Language | License | Responsibility |
 |--------|----------|---------|----------------|
-| **Synapsix** | Elixir | AGPL | Harness control, dialogs, cross-machine |
-| **Studio Core** | Elixir | AGPL | Event bus, state, IPC, sessions |
-| **Studio UI** | Rust | AGPL | Widgets, layout, rendering |
-| **Agent Bridge** | Elixir | AGPL | AI providers, context, tools |
+| **Synapsix** | Elixir | SSPL-1.0 | Harness control, dialogs, cross-machine |
+| **Studio Core** | Elixir | SSPL-1.0 | Event bus, state, IPC, sessions |
+| **Studio UI** | Rust | SSPL-1.0 | Widgets, layout, rendering (`ui-iced/`) |
+| **Agent Bridge** | Elixir | SSPL-1.0 | AI providers, context, tools |
 | **Continuum DNS** | Go/Elixir | SSPL | Service discovery (future) |
 
 **Key Design Principles**:

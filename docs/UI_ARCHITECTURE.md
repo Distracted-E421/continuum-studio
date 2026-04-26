@@ -204,6 +204,17 @@ fn subscription(&self) -> Subscription<Message> {
 }
 ```
 
+## Synapsix endpoint split (defaults)
+
+Continuum Studio talks to two logical servers on localhost:
+
+| Port | Service | Typical use in `ui-iced` |
+|------|---------|---------------------------|
+| **4001** | Synapsix Phoenix HTTP/WebSocket | CLI agents API, presets, task queue, feed, chat pipeline, coordination |
+| **8080** | Dialog daemon web + WS | Agent dialog inbox (HTTP), `ws/orchestrator`, `ws/activity`, parked agents base URL |
+
+Override via settings where the UI exposes base URLs.
+
 ## Communication Patterns
 
 ### Core IPC (Unix Socket)

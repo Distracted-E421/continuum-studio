@@ -1,5 +1,7 @@
 # Session Summary - Feb 18, 2026
 
+> **Archive** — One-off session log. For current project status see `docs/STATUS_APRIL_2026.md`.
+
 ## Tasks Completed
 
 ### 1. UI Dead Code Warnings Fixed

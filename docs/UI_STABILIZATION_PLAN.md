@@ -1,6 +1,6 @@
 # Continuum Studio UI Stabilization Plan
 **Date**: 2026-02-07  
-**Status**: Planning  
+**Status**: Historical planning — many checkboxes below were completed by **April 2026** (orchestrator, CLI agents, activity feed, lazy WebSockets, etc.). See **`docs/STATUS_APRIL_2026.md`** for what shipped; keep this file for the original milestone breakdown.  
 **Priority**: Medium (stabilize before adding features)
 
 ---

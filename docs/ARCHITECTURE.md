@@ -1,7 +1,7 @@
 # Continuum Studio Architecture
 
-**Last Updated**: 2026-02-07  
-**Status**: Active Development (iced migration complete)
+**Last Updated**: 2026-04-25  
+**Status**: Active Development (desktop UI: `ui-iced/`; legacy egui tree: `ui/`)
 
 ## Overview
 
@@ -107,8 +107,8 @@ AI harness orchestrator with formal verification capabilities.
 D-Bus service for interactive AI agent dialogs with web fallback.
 
 **Key Features**:
-- Native dialog rendering via GTK
-- Web UI on port 8080 (for mobile access)
+- Native dialog rendering (default **Iced** GUI; optional egui feature in crate)
+- Web UI on port 8080 (for mobile access, orchestrator WebSocket, activity stream)
 - Hold mode for complex decisions
 - Multiple dialog types (choice, confirm, text, slider, file picker)
 - CLI tool (`synapsix-dialog-cli`)
@@ -290,7 +290,7 @@ See the following D2 diagrams for visual architecture:
 | Studio Core | Elixir | Fault tolerance, hot reloading, BEAM distribution |
 | Agent Bridge | Elixir | BEAM benefits, same VM as Core |
 | Synapsix | Elixir + Rust NIFs | Fault tolerance + performance-critical parsing/solving |
-| Dialog Daemon | Rust | D-Bus integration, native GTK dialogs |
+| Dialog Daemon | Rust | D-Bus + Iced/optional egui, web UI on 8080 |
 | Chat Pipeline NIFs | Rust | High-performance parsing, embedding operations |
 | NeSy Solver | Rust + Z3 | Formal verification with SMT solver |
 
@@ -312,7 +312,5 @@ See the following D2 diagrams for visual architecture:
 
 ## License
 
-AGPL-3.0 for core components, SSPL for infrastructure services.
-
-See [LICENSING_STRATEGY.md](./research/LICENSING_STRATEGY.md) for details.
+This repository is **SSPL-1.0** unless noted otherwise; Synapsix and some dependencies use other licenses. See the repo `LICENSE` and [LICENSING_STRATEGY.md](./LICENSING_STRATEGY.md) for details.
 

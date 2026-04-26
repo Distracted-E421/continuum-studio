@@ -1,5 +1,7 @@
 # Continuum Studio Status - February 2026
 
+> **Superseded for “current state”** by [`STATUS_APRIL_2026.md`](./STATUS_APRIL_2026.md). Kept as a month snapshot.
+
 **Date**: 2026-02-07  
 **Status**: Active Development
 

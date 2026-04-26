@@ -1,5 +1,7 @@
 # Migration Assessment: nixos-cursor → continuum-studio
 
+> **Historical (January 2026)** — Pre-migration planning. **Outcome:** Desktop UI is `ui-iced/` (iced); dialog daemon lives in `synapsix/dialog/`. For current status use `docs/STATUS_APRIL_2026.md` and repo `README.md`.
+
 ## Overview
 
 This document assesses code in the `nixos-cursor` repository for migration to `continuum-studio`.

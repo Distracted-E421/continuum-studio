@@ -14,21 +14,14 @@ This directory contains roadmaps for Continuum Studio development. Continuum Stu
 
 ---
 
-## Current State (2026-02-20)
+## Current state
 
-### What Works
-- ✅ Basic iced UI rendering (Dashboard, partial views)
-- ✅ Studio Core (Elixir) - event bus, state, socket acceptor
-- ✅ Agent Bridge - Claude provider, Ollama provider
-- ✅ Cost tracking & rate limiting
-- ✅ Provider middleware pipeline
+Use **`docs/STATUS_APRIL_2026.md`** for the canonical April 2026 status (desktop tabs, Android, performance work). The checklist below is kept for roadmap themes, not a live bug list.
 
-### What Needs Work
-- ⚠️ UI Socket IPC to Core (needs testing)
-- ⚠️ Chat Pipeline view (partial)
-- ⚠️ Cursor harness provider (needs Synapsix)
-- ❌ Mobile app ↔ Desktop sync
-- ❌ OpenAI provider
+### Themes still evolving
+- Deeper mobile ↔ desktop sync (where not yet productized)
+- Optional OpenAI (and other) providers in Agent Bridge
+- Ongoing socket/IPC hardening (see [Socket IPC](SOCKET_IPC_ROADMAP.md))
 
 ---
 
@@ -117,11 +110,11 @@ cargo run --release
 
 ## Related Documentation
 
-- [Status February 2026](../STATUS_FEBRUARY_2026.md) - Current state
+- [Status April 2026](../STATUS_APRIL_2026.md) - Current state
 - [Architecture](../ARCHITECTURE.md) - System design
-- [UI Stabilization Plan](../UI_STABILIZATION_PLAN.md) - Detailed UI work
+- [UI Stabilization Plan](../UI_STABILIZATION_PLAN.md) - Historical planning (many items done; see status doc)
 - [Agent Bridge Architecture](../AGENT_BRIDGE_ARCHITECTURE.md) - Provider system
 
 ---
 
-**Last Updated**: 2026-02-20
+**Last Updated**: 2026-04-25

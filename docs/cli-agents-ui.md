@@ -28,6 +28,7 @@
 
 **Backend (March 2026):**
 
+- **Port split (defaults):** Phoenix exposes CLI agents, presets, and WebSocket `ws/cli-agents` on **`http://localhost:4001`**. The dialog daemon (orchestrator triage, some agent-dialog HTTP) uses **`http://localhost:8080`** — see `cli_agents_client.rs` constants.
 - Plug.Router API (`synapsix/lib/synapsix/harnesses/cursor/cli_api.ex`):
   - `GET /api/cli-agents` - List agents
   - `GET /api/cli-agents/:id` - Get agent details
