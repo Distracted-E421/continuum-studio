@@ -3,6 +3,7 @@ package com.example.continuumstudio.ui.dialog
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -1804,14 +1805,37 @@ fun ActiveDialogCard(
                         onValueChange = onTextChange,
                     )
                     "confirm" -> {
-                        // Show hint instead of buttons
-                        Text(
-                            text = "Hold card to respond",
-                            fontSize = 14.sp,
-                            color = Color(0xFF757575),
+                        // Yes/No buttons for confirm dialogs
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                            textAlign = TextAlign.Center,
-                        )
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { onConfirm(false) },
+                                modifier = Modifier.weight(1f).height(56.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFFBDBDBD)
+                                ),
+                                border = BorderStroke(1.dp, Color(0xFF424242))
+                            ) {
+                                Text(
+                                    text = dialog.dialogType.noLabel ?: "No",
+                                    fontSize = 16.sp
+                                )
+                            }
+                            Button(
+                                onClick = { onConfirm(true) },
+                                modifier = Modifier.weight(1f).height(56.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text(
+                                    text = dialog.dialogType.yesLabel ?: "Yes",
+                                    fontSize = 16.sp
+                                )
+                            }
+                        }
                     }
                     "slider" -> SliderContentRedesigned(
                         min = dialog.dialogType.min ?: 0f,
@@ -1847,7 +1871,7 @@ fun ActiveDialogCard(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Explicit Submit button for choice/text/slider dialogs
-                if (dialog.dialogType.type in listOf("choice", "text", "slider")) {
+                if (dialog.dialogType.type in listOf("choice", "text", "slider", "confirm")) {
                     val hasSelection = when (dialog.dialogType.type) {
                         "choice" -> {
                             if (dialog.dialogType.allowMultiple == true) {
@@ -1858,6 +1882,7 @@ fun ActiveDialogCard(
                         }
                         "text" -> selectedValue.isNotEmpty()
                         "slider" -> true // Sliders always have a value
+                        "confirm" -> selectedValue.isNotEmpty() // Yes/No selection made
                         else -> false
                     }
                     
