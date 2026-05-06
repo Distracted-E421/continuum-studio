@@ -3,10 +3,10 @@
 //! Connects to the ActivityFeed service via WebSocket for real-time updates
 //! and HTTP for queries and posting agent updates.
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
-use futures_util::StreamExt;
 use url::Url;
 
 /// Default Synapsix API base URLs
@@ -190,29 +190,27 @@ async fn feed_connect_and_handle(
 
     while let Some(msg_result) = read.next().await {
         match msg_result {
-            Ok(WsMessage::Text(text)) => {
-                match serde_json::from_str::<WsServerMessage>(&text) {
-                    Ok(server_msg) => match server_msg {
-                        WsServerMessage::Connected { .. } => {
-                            log::info!("[feed_ws] Connected to Activity Feed");
-                        }
-                        WsServerMessage::Init { entries, stats, .. } => {
-                            log::info!("[feed_ws] Received {} initial entries", entries.len());
-                            let _ = tx.send(FeedEvent::InitialState { entries, stats });
-                        }
-                        WsServerMessage::EntryAdded { entry } => {
-                            let _ = tx.send(FeedEvent::EntryAdded(entry));
-                        }
-                        WsServerMessage::Heartbeat { .. } | WsServerMessage::Pong { .. } => {}
-                        WsServerMessage::Error { message } => {
-                            let _ = tx.send(FeedEvent::Error(message));
-                        }
-                    },
-                    Err(e) => {
-                        log::warn!("[feed_ws] Failed to parse: {}", e);
+            Ok(WsMessage::Text(text)) => match serde_json::from_str::<WsServerMessage>(&text) {
+                Ok(server_msg) => match server_msg {
+                    WsServerMessage::Connected { .. } => {
+                        log::info!("[feed_ws] Connected to Activity Feed");
                     }
+                    WsServerMessage::Init { entries, stats, .. } => {
+                        log::info!("[feed_ws] Received {} initial entries", entries.len());
+                        let _ = tx.send(FeedEvent::InitialState { entries, stats });
+                    }
+                    WsServerMessage::EntryAdded { entry } => {
+                        let _ = tx.send(FeedEvent::EntryAdded(entry));
+                    }
+                    WsServerMessage::Heartbeat { .. } | WsServerMessage::Pong { .. } => {}
+                    WsServerMessage::Error { message } => {
+                        let _ = tx.send(FeedEvent::Error(message));
+                    }
+                },
+                Err(e) => {
+                    log::warn!("[feed_ws] Failed to parse: {}", e);
                 }
-            }
+            },
             Ok(WsMessage::Close(_)) => break,
             Err(e) => return Err(format!("Feed WS read error: {}", e)),
             _ => {}
@@ -258,16 +256,15 @@ impl FeedHttpClient {
             "links": links,
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/update", self.base_url))
             .json(&payload)
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        resp.json::<FeedEntry>()
-            .await
-            .map_err(|e| e.to_string())
+        resp.json::<FeedEntry>().await.map_err(|e| e.to_string())
     }
 
     /// Get feed summary text (for context injection)
@@ -282,13 +279,15 @@ impl FeedHttpClient {
             summary: String,
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .get(&url)
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        let data = resp.json::<SummaryResponse>()
+        let data = resp
+            .json::<SummaryResponse>()
             .await
             .map_err(|e| e.to_string())?;
 
@@ -297,15 +296,14 @@ impl FeedHttpClient {
 
     /// Get feed statistics
     pub async fn get_stats(&self) -> Result<FeedStats, String> {
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{}/stats", self.base_url))
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        resp.json::<FeedStats>()
-            .await
-            .map_err(|e| e.to_string())
+        resp.json::<FeedStats>().await.map_err(|e| e.to_string())
     }
 
     /// Trigger a git poll
@@ -355,10 +353,10 @@ mod tests {
     fn test_feed_source_serialization() {
         let json = serde_json::to_string(&FeedSource::Git).unwrap();
         assert_eq!(json, "\"git\"");
-        
+
         let s: FeedSource = serde_json::from_str("\"agent\"").unwrap();
         assert_eq!(s, FeedSource::Agent);
-        
+
         // Unknown values should deserialize to Unknown
         let s: FeedSource = serde_json::from_str("\"something_else\"").unwrap();
         assert_eq!(s, FeedSource::Unknown);
@@ -371,13 +369,13 @@ mod tests {
             url: "https://github.com/user/repo/commit/abc123".to_string(),
             link_type: "commit".to_string(),
         };
-        
+
         let json = serde_json::to_string(&link);
         assert!(json.is_ok());
-        
+
         let restored: Result<FeedLink, _> = serde_json::from_str(&json.unwrap());
         assert!(restored.is_ok());
-        
+
         let restored = restored.unwrap();
         assert_eq!(restored.label, "View Commit");
     }
@@ -398,13 +396,13 @@ mod tests {
             repo: None,
             tags: vec!["test".to_string()],
         };
-        
+
         let json = serde_json::to_string(&entry);
         assert!(json.is_ok());
-        
+
         let restored: Result<FeedEntry, _> = serde_json::from_str(&json.unwrap());
         assert!(restored.is_ok());
-        
+
         let restored = restored.unwrap();
         assert_eq!(restored.id, "entry-123");
         assert_eq!(restored.source, FeedSource::Agent);

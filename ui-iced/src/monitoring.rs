@@ -123,7 +123,8 @@ impl SessionHistory {
 
         // Add new data
         self.cpu_history.push_back(metrics.cpu_percent);
-        self.memory_history.push_back(metrics.memory_bytes as f32 / 1024.0 / 1024.0); // Convert to MB
+        self.memory_history
+            .push_back(metrics.memory_bytes as f32 / 1024.0 / 1024.0); // Convert to MB
         self.thread_history.push_back(metrics.thread_count);
         self.fd_history.push_back(metrics.fd_count);
         self.timestamps.push_back(metrics.timestamp);
@@ -189,7 +190,7 @@ impl SessionMonitor {
     pub fn collect_metrics(&mut self, pid: u32) -> Option<SessionMetrics> {
         // Read /proc/[pid]/stat for process stats
         let stat = self.read_proc_stat(pid)?;
-        
+
         // Read /proc/[pid]/statm for memory info
         let (vsize, rss) = self.read_proc_statm(pid)?;
 
@@ -253,7 +254,8 @@ impl SessionMonitor {
     /// Clean up stale sessions
     pub fn cleanup_stale(&mut self, active_pids: &[u32]) {
         self.histories.retain(|pid, _| active_pids.contains(pid));
-        self.prev_cpu_ticks.retain(|pid, _| active_pids.contains(pid));
+        self.prev_cpu_ticks
+            .retain(|pid, _| active_pids.contains(pid));
     }
 
     // Private helper methods
@@ -261,15 +263,15 @@ impl SessionMonitor {
     fn read_proc_stat(&self, pid: u32) -> Option<ProcStat> {
         let path = format!("/proc/{}/stat", pid);
         let content = std::fs::read_to_string(&path).ok()?;
-        
+
         // Parse the stat file - format is: pid (comm) state ppid pgrp session tty_nr tpgid flags
         // We need to handle the comm field which can contain spaces and parentheses
         let _start_comm = content.find('(')?;
         let end_comm = content.rfind(')')?;
-        
+
         let after_comm = &content[end_comm + 2..]; // Skip ") "
         let fields: Vec<&str> = after_comm.split_whitespace().collect();
-        
+
         if fields.len() < 20 {
             return None;
         }
@@ -286,7 +288,7 @@ impl SessionMonitor {
         let path = format!("/proc/{}/statm", pid);
         let content = std::fs::read_to_string(&path).ok()?;
         let fields: Vec<&str> = content.split_whitespace().collect();
-        
+
         if fields.len() < 2 {
             return None;
         }
@@ -329,12 +331,14 @@ impl SessionMonitor {
 
             if total_delta > 0 {
                 let percent = (proc_delta as f64 / total_delta as f64 * 100.0) as f32;
-                self.prev_cpu_ticks.insert(pid, (current_ticks, current_total));
+                self.prev_cpu_ticks
+                    .insert(pid, (current_ticks, current_total));
                 return percent.clamp(0.0, 100.0);
             }
         }
 
-        self.prev_cpu_ticks.insert(pid, (current_ticks, current_total));
+        self.prev_cpu_ticks
+            .insert(pid, (current_ticks, current_total));
         0.0 // First reading, can't calculate delta
     }
 
@@ -358,8 +362,8 @@ impl SessionMonitor {
 /// Parsed /proc/[pid]/stat data
 struct ProcStat {
     state: char,
-    utime: u64,   // User time
-    stime: u64,   // System time
+    utime: u64, // User time
+    stime: u64, // System time
     num_threads: u32,
 }
 
@@ -398,12 +402,24 @@ pub struct DashboardData {
 
 impl DashboardData {
     pub fn from_metrics(metrics: &[SessionMetrics]) -> Self {
-        let healthy_count = metrics.iter().filter(|m| m.health == HealthStatus::Healthy).count();
-        let warning_count = metrics.iter().filter(|m| m.health == HealthStatus::Warning).count();
-        let critical_count = metrics.iter().filter(|m| m.health == HealthStatus::Critical).count();
+        let healthy_count = metrics
+            .iter()
+            .filter(|m| m.health == HealthStatus::Healthy)
+            .count();
+        let warning_count = metrics
+            .iter()
+            .filter(|m| m.health == HealthStatus::Warning)
+            .count();
+        let critical_count = metrics
+            .iter()
+            .filter(|m| m.health == HealthStatus::Critical)
+            .count();
 
         let total_cpu: f32 = metrics.iter().map(|m| m.cpu_percent).sum();
-        let total_memory_mb: f32 = metrics.iter().map(|m| m.memory_bytes as f32 / 1024.0 / 1024.0).sum();
+        let total_memory_mb: f32 = metrics
+            .iter()
+            .map(|m| m.memory_bytes as f32 / 1024.0 / 1024.0)
+            .sum();
         let total_threads: u32 = metrics.iter().map(|m| m.thread_count).sum();
         let total_fds: u32 = metrics.iter().map(|m| m.fd_count).sum();
 
@@ -436,14 +452,23 @@ mod tests {
     #[test]
     fn test_health_assessment() {
         let monitor = SessionMonitor::new();
-        
+
         // Healthy
-        assert_eq!(monitor.assess_health(10.0, 500 * 1024 * 1024, 20, 100), HealthStatus::Healthy);
-        
+        assert_eq!(
+            monitor.assess_health(10.0, 500 * 1024 * 1024, 20, 100),
+            HealthStatus::Healthy
+        );
+
         // Warning
-        assert_eq!(monitor.assess_health(60.0, 500 * 1024 * 1024, 20, 100), HealthStatus::Warning);
-        
+        assert_eq!(
+            monitor.assess_health(60.0, 500 * 1024 * 1024, 20, 100),
+            HealthStatus::Warning
+        );
+
         // Critical
-        assert_eq!(monitor.assess_health(95.0, 500 * 1024 * 1024, 20, 100), HealthStatus::Critical);
+        assert_eq!(
+            monitor.assess_health(95.0, 500 * 1024 * 1024, 20, 100),
+            HealthStatus::Critical
+        );
     }
 }

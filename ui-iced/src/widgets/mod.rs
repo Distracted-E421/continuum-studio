@@ -31,16 +31,16 @@ pub use task_queue::{
     AgentType,
     // Layout types
     PanelLayout,
+    // Core types re-exported from task_queue_client (for convenience)
+    Priority,
+    QueueStats,
+    Task,
     // History types
     TaskHistoryEntry,
     TaskQueueAction,
     TaskQueueColors,
     TaskQueueMessage,
     TaskQueueWidget,
-    WidgetSize as TaskQueueSize,
-    // Core types re-exported from task_queue_client (for convenience)
-    Priority,
-    QueueStats,
-    Task,
     TaskStatus,
+    WidgetSize as TaskQueueSize,
 };

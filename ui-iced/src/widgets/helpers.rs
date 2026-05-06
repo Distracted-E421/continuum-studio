@@ -5,25 +5,16 @@ use iced::{Alignment, Element, Length};
 
 /// Create a section header with title
 pub fn section_header<'a, Message: 'a>(title: &'a str) -> Element<'a, Message> {
-    text(title)
-        .size(18)
-        .into()
+    text(title).size(18).into()
 }
 
 /// Create a card container with padding and background
-pub fn card<'a, Message: 'a>(
-    content: impl Into<Element<'a, Message>>,
-) -> Element<'a, Message> {
-    container(content)
-        .padding(16)
-        .into()
+pub fn card<'a, Message: 'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content).padding(16).into()
 }
 
 /// Create a labeled value row
-pub fn labeled_value<'a, Message: 'a>(
-    label: &'a str,
-    value: &'a str,
-) -> Element<'a, Message> {
+pub fn labeled_value<'a, Message: 'a>(label: &'a str, value: &'a str) -> Element<'a, Message> {
     iced::widget::row![
         text(label).size(12),
         Space::new().width(Length::Fill),

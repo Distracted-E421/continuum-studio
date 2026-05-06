@@ -10,17 +10,12 @@ use iced::{Color, Theme};
 
 // Re-export from shared theme crate
 pub use synapsix_theme::{
-    CosmicPalette as SharedPalette,
-    CosmicPreset,
-    DesignTokens,
-    Radii,
-    Spacing,
-    Theme as SynapsixTheme,
-    Typography,
+    CosmicPalette as SharedPalette, CosmicPreset, DesignTokens, Radii, Spacing,
+    Theme as SynapsixTheme, Typography,
 };
 
 /// COSMIC-inspired color palette
-/// 
+///
 /// This wraps the shared `synapsix_theme::CosmicPalette` and provides
 /// iced-specific convenience methods.
 #[derive(Debug, Clone, Copy)]
@@ -155,7 +150,7 @@ impl CosmicPalette {
 }
 
 /// COSMIC theme presets
-/// 
+///
 /// This wraps `synapsix_theme::CosmicPreset` for compatibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CosmicThemePreset {
@@ -216,13 +211,16 @@ impl CosmicThemePreset {
 }
 
 /// Try to detect system COSMIC theme (stub for future implementation)
-/// 
+///
 /// In the future, this could read from:
 /// - `~/.config/cosmic/com.system76.CosmicTheme.Dark/v1/`
 /// - `~/.config/cosmic/com.system76.CosmicTheme.Light/v1/`
 pub fn detect_system_cosmic_theme() -> Option<CosmicPalette> {
     // Check if we're running on COSMIC
-    if std::env::var("XDG_CURRENT_DESKTOP").ok()?.contains("COSMIC") {
+    if std::env::var("XDG_CURRENT_DESKTOP")
+        .ok()?
+        .contains("COSMIC")
+    {
         // Future: Actually read COSMIC theme files
         // For now, return dark as default COSMIC theme
         Some(CosmicPalette::dark())
@@ -261,7 +259,7 @@ mod tests {
         let preset = CosmicThemePreset::Dark;
         let palette = preset.palette();
         let shared = palette.shared();
-        
+
         // Verify we can access raw RGB values
         let bg = shared.bg_base;
         assert!(bg[0] < 50); // Dark theme should have dark background

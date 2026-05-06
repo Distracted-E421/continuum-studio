@@ -73,12 +73,7 @@ impl OrchestratorPanelState {
     }
 
     /// Add a dialog to the triage queue
-    pub fn add_to_triage(
-        &mut self,
-        dialog: PendingDialog,
-        state: TriageState,
-        reasoning: String,
-    ) {
+    pub fn add_to_triage(&mut self, dialog: PendingDialog, state: TriageState, reasoning: String) {
         let timeout = std::time::Duration::from_secs(30);
         self.engine.add_to_triage(TriageItem {
             dialog,
@@ -160,10 +155,34 @@ pub fn view_mode_selector<'a, Message: Clone + 'a>(
     to_message: impl Fn(OrchestratorMessage) -> Message + Clone + 'a,
 ) -> Element<'a, Message> {
     let modes = [
-        (OrchestratorMode::UserActive, "🟢", "User Active", "You handle all dialogs", false),
-        (OrchestratorMode::UserDelegate, "🟡", "Delegated", "Auto-handle routine, escalate high/critical", false),
-        (OrchestratorMode::Spectator, "🟠", "Spectator", "Auto-handle all, you can claim within timeout", true),
-        (OrchestratorMode::Autonomous, "🔴", "Autonomous", "Full auto, critical queued for later", true),
+        (
+            OrchestratorMode::UserActive,
+            "🟢",
+            "User Active",
+            "You handle all dialogs",
+            false,
+        ),
+        (
+            OrchestratorMode::UserDelegate,
+            "🟡",
+            "Delegated",
+            "Auto-handle routine, escalate high/critical",
+            false,
+        ),
+        (
+            OrchestratorMode::Spectator,
+            "🟠",
+            "Spectator",
+            "Auto-handle all, you can claim within timeout",
+            true,
+        ),
+        (
+            OrchestratorMode::Autonomous,
+            "🔴",
+            "Autonomous",
+            "Full auto, critical queued for later",
+            true,
+        ),
     ];
 
     let current_mode = state.mode;
@@ -177,7 +196,7 @@ pub fn view_mode_selector<'a, Message: Clone + 'a>(
             let to_msg = to_message.clone();
             let mode_val = *mode;
             let needs_confirm = *requires_confirm && !is_current;
-            
+
             button(
                 row![
                     text(*emoji).size(16),
@@ -202,7 +221,9 @@ pub fn view_mode_selector<'a, Message: Clone + 'a>(
                     }
                 } else {
                     match status {
-                        iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.25, 0.25, 0.28),
+                        iced::widget::button::Status::Hovered => {
+                            iced::Color::from_rgb(0.25, 0.25, 0.28)
+                        }
                         _ => iced::Color::from_rgb(0.15, 0.15, 0.18),
                     }
                 };
@@ -295,12 +316,14 @@ pub fn view_mode_confirm_dialog<'a, Message: Clone + 'a>(
                 Space::new().width(Length::Fill),
             ],
             Space::new().height(8),
-            text(format!("Switch to {} {}?", pending_mode.emoji(), pending_mode.label()))
-                .size(13),
+            text(format!(
+                "Switch to {} {}?",
+                pending_mode.emoji(),
+                pending_mode.label()
+            ))
+            .size(13),
             Space::new().height(8),
-            text(warning_text)
-                .size(11)
-                .color(warning_color),
+            text(warning_text).size(11).color(warning_color),
             Space::new().height(12),
             row![
                 button(text("Cancel").size(12))
@@ -308,7 +331,9 @@ pub fn view_mode_confirm_dialog<'a, Message: Clone + 'a>(
                     .on_press(to_msg(OrchestratorMessage::CancelModeChange))
                     .style(|_theme, status| {
                         let bg = match status {
-                            iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.25, 0.25, 0.28),
+                            iced::widget::button::Status::Hovered => {
+                                iced::Color::from_rgb(0.25, 0.25, 0.28)
+                            }
                             _ => iced::Color::from_rgb(0.18, 0.18, 0.2),
                         };
                         iced::widget::button::Style {
@@ -327,7 +352,9 @@ pub fn view_mode_confirm_dialog<'a, Message: Clone + 'a>(
                     .on_press(to_msg2(OrchestratorMessage::ConfirmModeChange))
                     .style(|_theme, status| {
                         let bg = match status {
-                            iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.5, 0.35, 0.2),
+                            iced::widget::button::Status::Hovered => {
+                                iced::Color::from_rgb(0.5, 0.35, 0.2)
+                            }
                             _ => iced::Color::from_rgb(0.4, 0.28, 0.15),
                         };
                         iced::widget::button::Style {
@@ -401,7 +428,9 @@ pub fn view_triage_queue<'a, Message: Clone + 'a>(
         .padding([4, 8])
         .on_press(to_msg(OrchestratorMessage::ClearTriage))
         .style(|_theme, _status| iced::widget::button::Style {
-            background: Some(iced::Background::Color(iced::Color::from_rgb(0.3, 0.15, 0.15))),
+            background: Some(iced::Background::Color(iced::Color::from_rgb(
+                0.3, 0.15, 0.15,
+            ))),
             text_color: iced::Color::from_rgb(0.9, 0.6, 0.6),
             border: iced::Border {
                 radius: 3.0.into(),
@@ -435,7 +464,7 @@ fn view_triage_item<'a, Message: Clone + 'a>(
     let dialog = &item.dialog;
     let elapsed = Instant::now().duration_since(item.added_at);
     let remaining = item.timeout.saturating_sub(elapsed);
-    
+
     let state_emoji = match item.state {
         TriageState::Manual => "⏸️",
         TriageState::AutoApprove => "✅",
@@ -527,7 +556,9 @@ fn view_triage_item<'a, Message: Clone + 'a>(
         Space::new().width(6),
         text(title_owned).size(13),
         Space::new().width(Length::Fill),
-        text(source_badge).size(10).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+        text(source_badge)
+            .size(10)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
         Space::new().width(8),
         text(dialog.priority.emoji()).size(12).color(priority_color),
     ]
@@ -538,7 +569,7 @@ fn view_triage_item<'a, Message: Clone + 'a>(
     } else {
         dialog.prompt.clone()
     };
-    
+
     let reasoning_owned = item.reasoning.clone();
 
     let info_row = row![
@@ -601,15 +632,23 @@ pub fn view_orchestrator_panel<'a, Message: Clone + 'a>(
 
     let connection_status = if state.daemon_connected {
         row![
-            text("●").size(8).color(iced::Color::from_rgb(0.3, 0.7, 0.3)),
+            text("●")
+                .size(8)
+                .color(iced::Color::from_rgb(0.3, 0.7, 0.3)),
             Space::new().width(4),
-            text("Connected").size(10).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            text("Connected")
+                .size(10)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
         ]
     } else {
         row![
-            text("●").size(8).color(iced::Color::from_rgb(0.7, 0.3, 0.3)),
+            text("●")
+                .size(8)
+                .color(iced::Color::from_rgb(0.7, 0.3, 0.3)),
             Space::new().width(4),
-            text("Disconnected").size(10).color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+            text("Disconnected")
+                .size(10)
+                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
         ]
     };
 
@@ -622,13 +661,15 @@ pub fn view_orchestrator_panel<'a, Message: Clone + 'a>(
 
     let undoable_count = state.engine.undoable_decisions().len();
     let history_count = state.engine.recent_history(10).len();
-    
+
     let undo_btn = if undoable_count > 0 {
         button(text(format!("↩ Undo ({})", undoable_count)).size(11))
             .padding([4, 8])
             .on_press(to_msg(OrchestratorMessage::UndoLastDecision))
             .style(|_theme, _status| iced::widget::button::Style {
-                background: Some(iced::Background::Color(iced::Color::from_rgb(0.25, 0.25, 0.3))),
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.25, 0.25, 0.3,
+                ))),
                 text_color: iced::Color::from_rgb(0.7, 0.7, 0.9),
                 border: iced::Border {
                     radius: 3.0.into(),
@@ -640,7 +681,9 @@ pub fn view_orchestrator_panel<'a, Message: Clone + 'a>(
         button(text("No undos").size(11))
             .padding([4, 8])
             .style(|_theme, _status| iced::widget::button::Style {
-                background: Some(iced::Background::Color(iced::Color::from_rgb(0.15, 0.15, 0.18))),
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.15, 0.15, 0.18,
+                ))),
                 text_color: iced::Color::from_rgb(0.4, 0.4, 0.4),
                 border: iced::Border {
                     radius: 3.0.into(),
@@ -727,12 +770,7 @@ pub fn view_orchestrator_panel<'a, Message: Clone + 'a>(
 
     content = content.push(Space::new().height(8));
     content = content.push(
-        row![
-            history_btn,
-            Space::new().width(Length::Fill),
-            undo_btn,
-        ]
-        .align_y(Alignment::Center),
+        row![history_btn, Space::new().width(Length::Fill), undo_btn,].align_y(Alignment::Center),
     );
 
     container(content)
@@ -768,7 +806,9 @@ pub fn view_decision_history<'a, Message: Clone + 'a>(
                     .on_press(to_message(OrchestratorMessage::ToggleHistory))
                     .style(|_theme, status| {
                         let bg = match status {
-                            iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.22, 0.22, 0.25),
+                            iced::widget::button::Status::Hovered => {
+                                iced::Color::from_rgb(0.22, 0.22, 0.25)
+                            }
                             _ => iced::Color::from_rgb(0.15, 0.15, 0.18),
                         };
                         iced::widget::button::Style {
@@ -859,7 +899,9 @@ pub fn view_decision_history<'a, Message: Clone + 'a>(
                     .align_y(Alignment::Center),
                     Space::new().height(4),
                     row![
-                        text("→").size(10).color(iced::Color::from_rgb(0.4, 0.5, 0.4)),
+                        text("→")
+                            .size(10)
+                            .color(iced::Color::from_rgb(0.4, 0.5, 0.4)),
                         Space::new().width(4),
                         text(response_preview)
                             .size(11)
@@ -901,7 +943,9 @@ pub fn view_decision_history<'a, Message: Clone + 'a>(
                 .on_press(to_msg(OrchestratorMessage::ToggleHistory))
                 .style(|_theme, status| {
                     let bg = match status {
-                        iced::widget::button::Status::Hovered => iced::Color::from_rgb(0.22, 0.22, 0.25),
+                        iced::widget::button::Status::Hovered => {
+                            iced::Color::from_rgb(0.22, 0.22, 0.25)
+                        }
                         _ => iced::Color::from_rgb(0.15, 0.15, 0.18),
                     };
                     iced::widget::button::Style {
@@ -1013,11 +1057,18 @@ mod tests {
 
         assert!(state.engine.triage_queue().is_empty());
 
-        state.add_to_triage(dialog.clone(), TriageState::AutoApprove, "Test reason".to_string());
+        state.add_to_triage(
+            dialog.clone(),
+            TriageState::AutoApprove,
+            "Test reason".to_string(),
+        );
 
         assert_eq!(state.engine.triage_queue().len(), 1);
         assert_eq!(state.engine.triage_queue()[0].dialog.id, "test-dialog-1");
-        assert_eq!(state.engine.triage_queue()[0].state, TriageState::AutoApprove);
+        assert_eq!(
+            state.engine.triage_queue()[0].state,
+            TriageState::AutoApprove
+        );
     }
 
     #[test]
@@ -1061,7 +1112,10 @@ mod tests {
     fn test_format_duration() {
         assert_eq!(format_duration(std::time::Duration::from_secs(5)), "5s");
         assert_eq!(format_duration(std::time::Duration::from_secs(65)), "1m 5s");
-        assert_eq!(format_duration(std::time::Duration::from_secs(3665)), "1h 1m");
+        assert_eq!(
+            format_duration(std::time::Duration::from_secs(3665)),
+            "1h 1m"
+        );
     }
 
     #[test]
@@ -1084,7 +1138,10 @@ mod tests {
 
         // Set pending mode change (simulates RequestModeChange)
         state.pending_mode_change = Some(OrchestratorMode::Autonomous);
-        assert_eq!(state.pending_mode_change, Some(OrchestratorMode::Autonomous));
+        assert_eq!(
+            state.pending_mode_change,
+            Some(OrchestratorMode::Autonomous)
+        );
 
         // Confirm (simulates ConfirmModeChange)
         let confirmed_mode = state.pending_mode_change.take();

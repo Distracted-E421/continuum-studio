@@ -23,23 +23,21 @@ pub struct LogEntry {
 impl LogEntry {
     /// Format as a single line for display
     pub fn format(&self) -> String {
-        let elapsed = self.timestamp
+        let elapsed = self
+            .timestamp
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default();
         let secs = elapsed.as_secs();
         let hours = (secs / 3600) % 24;
         let mins = (secs / 60) % 60;
         let secs = secs % 60;
-        
+
         format!(
             "[{:02}:{:02}:{:02}] {:5} {} - {}",
-            hours, mins, secs,
-            self.level,
-            self.target,
-            self.message
+            hours, mins, secs, self.level, self.target, self.message
         )
     }
-    
+
     /// Get color for this log level
     pub fn level_color(&self) -> iced::Color {
         match self.level {
@@ -65,7 +63,7 @@ impl LogBuffer {
             entries: Arc::new(Mutex::new(VecDeque::with_capacity(MAX_LOG_ENTRIES))),
         }
     }
-    
+
     /// Add a log entry
     pub fn push(&self, entry: LogEntry) {
         let mut entries = self.entries.lock().unwrap();
@@ -74,12 +72,12 @@ impl LogBuffer {
         }
         entries.push_back(entry);
     }
-    
+
     /// Get all entries
     pub fn entries(&self) -> Vec<LogEntry> {
         self.entries.lock().unwrap().iter().cloned().collect()
     }
-    
+
     /// Get entries filtered by level
     pub fn entries_filtered(&self, min_level: Level) -> Vec<LogEntry> {
         self.entries
@@ -90,22 +88,22 @@ impl LogBuffer {
             .cloned()
             .collect()
     }
-    
+
     /// Clear all entries
     pub fn clear(&self) {
         self.entries.lock().unwrap().clear();
     }
-    
+
     /// Get entry count
     pub fn len(&self) -> usize {
         self.entries.lock().unwrap().len()
     }
-    
+
     /// Check if buffer is empty
     pub fn is_empty(&self) -> bool {
         self.entries.lock().unwrap().is_empty()
     }
-    
+
     /// Format all entries as a string for copying
     pub fn format_all(&self) -> String {
         self.entries
@@ -150,7 +148,7 @@ impl Log for CaptureLogger {
                 target: record.target().to_string(),
                 message: format!("{}", record.args()),
             });
-            
+
             // Also print to stderr for terminal users
             eprintln!(
                 "[{}] {:5} {} - {}",
@@ -169,11 +167,11 @@ impl Log for CaptureLogger {
 pub fn init_logger(level: LevelFilter) -> LogBuffer {
     let buffer = LogBuffer::new();
     let logger = CaptureLogger::new(buffer.clone(), level);
-    
+
     log::set_boxed_logger(Box::new(logger))
         .map(|()| log::set_max_level(level))
         .expect("Failed to set logger");
-    
+
     buffer
 }
 
@@ -191,17 +189,17 @@ mod tests {
     #[test]
     fn test_log_buffer_push_and_entries() {
         let buffer = LogBuffer::new();
-        
+
         buffer.push(LogEntry {
             timestamp: SystemTime::now(),
             level: Level::Info,
             target: "test".to_string(),
             message: "Hello".to_string(),
         });
-        
+
         assert_eq!(buffer.len(), 1);
         assert!(!buffer.is_empty());
-        
+
         let entries = buffer.entries();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].message, "Hello");
@@ -210,14 +208,14 @@ mod tests {
     #[test]
     fn test_log_buffer_clear() {
         let buffer = LogBuffer::new();
-        
+
         buffer.push(LogEntry {
             timestamp: SystemTime::now(),
             level: Level::Info,
             target: "test".to_string(),
             message: "Hello".to_string(),
         });
-        
+
         assert_eq!(buffer.len(), 1);
         buffer.clear();
         assert!(buffer.is_empty());
@@ -226,7 +224,7 @@ mod tests {
     #[test]
     fn test_log_buffer_max_entries() {
         let buffer = LogBuffer::new();
-        
+
         for i in 0..MAX_LOG_ENTRIES + 100 {
             buffer.push(LogEntry {
                 timestamp: SystemTime::now(),
@@ -235,7 +233,7 @@ mod tests {
                 message: format!("Message {}", i),
             });
         }
-        
+
         assert_eq!(buffer.len(), MAX_LOG_ENTRIES);
         let entries = buffer.entries();
         assert_eq!(entries[0].message, "Message 100");
@@ -244,7 +242,7 @@ mod tests {
     #[test]
     fn test_log_buffer_level_filter() {
         let buffer = LogBuffer::new();
-        
+
         buffer.push(LogEntry {
             timestamp: SystemTime::now(),
             level: Level::Error,
@@ -269,10 +267,10 @@ mod tests {
             target: "test".to_string(),
             message: "Debug".to_string(),
         });
-        
+
         let filtered = buffer.entries_filtered(Level::Warn);
         assert_eq!(filtered.len(), 2);
-        
+
         let filtered = buffer.entries_filtered(Level::Info);
         assert_eq!(filtered.len(), 3);
     }
@@ -285,7 +283,7 @@ mod tests {
             target: "mymodule".to_string(),
             message: "Test message".to_string(),
         };
-        
+
         let formatted = entry.format();
         assert!(formatted.contains("INFO"));
         assert!(formatted.contains("mymodule"));
@@ -295,7 +293,7 @@ mod tests {
     #[test]
     fn test_format_all() {
         let buffer = LogBuffer::new();
-        
+
         buffer.push(LogEntry {
             timestamp: SystemTime::UNIX_EPOCH,
             level: Level::Info,
@@ -308,7 +306,7 @@ mod tests {
             target: "test".to_string(),
             message: "Second".to_string(),
         });
-        
+
         let all = buffer.format_all();
         assert!(all.contains("First"));
         assert!(all.contains("Second"));

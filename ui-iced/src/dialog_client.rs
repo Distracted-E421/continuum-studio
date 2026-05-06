@@ -91,7 +91,6 @@ impl std::str::FromStr for OrchestratorMode {
 }
 
 impl OrchestratorMode {
-
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::UserActive => "user_active",
@@ -121,7 +120,10 @@ impl OrchestratorMode {
 
     /// Whether this mode allows auto-handling dialogs
     pub fn allows_auto_handle(&self) -> bool {
-        matches!(self, Self::UserDelegate | Self::Spectator | Self::Autonomous)
+        matches!(
+            self,
+            Self::UserDelegate | Self::Spectator | Self::Autonomous
+        )
     }
 }
 
@@ -356,7 +358,10 @@ impl DialogClient {
     }
 
     /// Set orchestrator mode
-    pub async fn set_orchestrator_mode(&self, mode: OrchestratorMode) -> Result<OrchestratorMode, String> {
+    pub async fn set_orchestrator_mode(
+        &self,
+        mode: OrchestratorMode,
+    ) -> Result<OrchestratorMode, String> {
         let conn = self
             .connection
             .as_ref()
@@ -380,11 +385,11 @@ impl DialogClient {
         // Parse the JSON and extract new_mode
         let json: serde_json::Value = serde_json::from_str(&result)
             .map_err(|e| format!("Failed to parse mode response: {}", e))?;
-        
+
         let new_mode = json["new_mode"]
             .as_str()
             .ok_or_else(|| "Missing new_mode in response".to_string())?;
-        
+
         Ok(new_mode.parse().unwrap())
     }
 
@@ -413,10 +418,16 @@ impl DialogClient {
             serde_json::from_str(&result).map_err(|e| format!("Failed to parse info: {}", e))?;
 
         Ok(OrchestratorModeInfo {
-            mode: json["mode"].as_str().unwrap_or("user_active").parse().unwrap(),
+            mode: json["mode"]
+                .as_str()
+                .unwrap_or("user_active")
+                .parse()
+                .unwrap(),
             since_secs: json["since_secs"].as_u64().unwrap_or(0),
             inactivity_timeout_secs: json["inactivity_timeout_secs"].as_u64().unwrap_or(300),
-            spectator_claim_timeout_secs: json["spectator_claim_timeout_secs"].as_u64().unwrap_or(30),
+            spectator_claim_timeout_secs: json["spectator_claim_timeout_secs"]
+                .as_u64()
+                .unwrap_or(30),
         })
     }
 
@@ -481,7 +492,9 @@ pub fn spawn_dialog_monitor() -> mpsc::Receiver<DialogClientMessage> {
 
                     // Get initial hold mode state
                     if let Ok(hold_mode) = client.get_hold_mode().await {
-                        let _ = tx.send(DialogClientMessage::HoldModeChanged(hold_mode)).await;
+                        let _ = tx
+                            .send(DialogClientMessage::HoldModeChanged(hold_mode))
+                            .await;
                     }
                 }
             } else if !available && was_connected {
@@ -510,17 +523,35 @@ mod tests {
 
     #[test]
     fn test_orchestrator_mode_parse_known_values() {
-        assert_eq!("user_active".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::UserActive);
-        assert_eq!("user_delegate".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::UserDelegate);
-        assert_eq!("spectator".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::Spectator);
-        assert_eq!("autonomous".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::Autonomous);
+        assert_eq!(
+            "user_active".parse::<OrchestratorMode>().unwrap(),
+            OrchestratorMode::UserActive
+        );
+        assert_eq!(
+            "user_delegate".parse::<OrchestratorMode>().unwrap(),
+            OrchestratorMode::UserDelegate
+        );
+        assert_eq!(
+            "spectator".parse::<OrchestratorMode>().unwrap(),
+            OrchestratorMode::Spectator
+        );
+        assert_eq!(
+            "autonomous".parse::<OrchestratorMode>().unwrap(),
+            OrchestratorMode::Autonomous
+        );
     }
 
     #[test]
     fn test_orchestrator_mode_parse_unknown() {
         // Unknown values default to UserActive
-        assert_eq!("unknown".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::UserActive);
-        assert_eq!("".parse::<OrchestratorMode>().unwrap(), OrchestratorMode::UserActive);
+        assert_eq!(
+            "unknown".parse::<OrchestratorMode>().unwrap(),
+            OrchestratorMode::UserActive
+        );
+        assert_eq!(
+            "".parse::<OrchestratorMode>().unwrap(),
+            OrchestratorMode::UserActive
+        );
     }
 
     #[test]
@@ -564,20 +595,18 @@ mod tests {
     #[test]
     fn test_dialog_type_serialization() {
         let choice = DialogType::Choice {
-            options: vec![
-                ChoiceOption {
-                    value: "a".to_string(),
-                    label: "Option A".to_string(),
-                    description: None,
-                },
-            ],
+            options: vec![ChoiceOption {
+                value: "a".to_string(),
+                label: "Option A".to_string(),
+                description: None,
+            }],
             default: Some("a".to_string()),
             allow_multiple: false,
         };
-        
+
         let json = serde_json::to_string(&choice);
         assert!(json.is_ok());
-        
+
         let json_str = json.unwrap();
         assert!(json_str.contains("\"type\":\"Choice\""));
     }
@@ -595,13 +624,13 @@ mod tests {
             },
             timeout_ms: Some(30000),
         };
-        
+
         let json = serde_json::to_string(&request);
         assert!(json.is_ok());
-        
+
         let deserialized: Result<DialogRequest, _> = serde_json::from_str(&json.unwrap());
         assert!(deserialized.is_ok());
-        
+
         let restored = deserialized.unwrap();
         assert_eq!(restored.id, "test-123");
         assert_eq!(restored.timeout_ms, Some(30000));

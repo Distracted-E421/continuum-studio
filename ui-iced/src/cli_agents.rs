@@ -1303,7 +1303,9 @@ pub enum CLIAgentTask {
     },
 
     // Clipboard operations
-    CopyPromptToClipboard { prompt: String },
+    CopyPromptToClipboard {
+        prompt: String,
+    },
 }
 
 // =============================================================================
@@ -1927,21 +1929,20 @@ where
         .collect();
 
     // Preset selector container with scrollable list
-    let preset_list_container = container(
-        scrollable(column(preset_buttons).spacing(2)).height(Length::Fixed(150.0)),
-    )
-    .padding(8)
-    .style(|_| container::Style {
-        background: Some(iced::Background::Color(iced::Color::from_rgb(
-            0.1, 0.1, 0.12,
-        ))),
-        border: iced::Border {
-            radius: 6.0.into(),
-            width: 1.0,
-            color: iced::Color::from_rgb(0.2, 0.2, 0.25),
-        },
-        ..Default::default()
-    });
+    let preset_list_container =
+        container(scrollable(column(preset_buttons).spacing(2)).height(Length::Fixed(150.0)))
+            .padding(8)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.1, 0.1, 0.12,
+                ))),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgb(0.2, 0.2, 0.25),
+                },
+                ..Default::default()
+            });
 
     let preset_selector = column![
         row![
@@ -1992,7 +1993,9 @@ where
             row![
                 button(text("✎ Edit").size(10))
                     .padding([3, 8])
-                    .on_press(to_msg_edit(CLIAgentMessage::OpenPresetEditor(Some(preset_id))))
+                    .on_press(to_msg_edit(CLIAgentMessage::OpenPresetEditor(Some(
+                        preset_id
+                    ))))
                     .style(|_theme, status| {
                         let bg = match status {
                             button::Status::Hovered => iced::Color::from_rgb(0.25, 0.35, 0.45),
@@ -3659,7 +3662,11 @@ mod tests {
         // word_estimate = 2 * 1.3 = 2
         // result = (2*2 + 2) / 3 = 2
         let tokens = estimate_tokens("Hello world");
-        assert!(tokens > 0 && tokens <= 5, "Expected 1-5 tokens, got {}", tokens);
+        assert!(
+            tokens > 0 && tokens <= 5,
+            "Expected 1-5 tokens, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -3672,7 +3679,11 @@ mod tests {
         // char_estimate = 51/4 = 12
         // word_estimate = 5 * 1.3 = 6
         // result = (12*2 + 6) / 3 = 10
-        assert!(tokens > 5 && tokens <= 20, "Expected 5-20 tokens, got {}", tokens);
+        assert!(
+            tokens > 5 && tokens <= 20,
+            "Expected 5-20 tokens, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -3682,7 +3693,11 @@ mod tests {
         // char_estimate = 5000/4 = 1250
         // word_estimate = 1000 * 1.3 = 1300
         // result = (1250*2 + 1300) / 3 = 1266
-        assert!(tokens > 1000 && tokens < 2000, "Expected ~1200 tokens, got {}", tokens);
+        assert!(
+            tokens > 1000 && tokens < 2000,
+            "Expected ~1200 tokens, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -3719,10 +3734,10 @@ mod tests {
     fn test_toggle_prompt_preview() {
         let mut state = CLIAgentsState::new();
         assert!(!state.show_prompt_preview);
-        
+
         state.update(CLIAgentMessage::TogglePromptPreview);
         assert!(state.show_prompt_preview);
-        
+
         state.update(CLIAgentMessage::TogglePromptPreview);
         assert!(!state.show_prompt_preview);
     }
@@ -3731,7 +3746,7 @@ mod tests {
     fn test_build_full_prompt_no_preset() {
         let mut state = CLIAgentsState::new();
         state.launch_form.prompt = "My task".to_string();
-        
+
         let full = state.build_full_prompt();
         assert!(full.contains("[Default Prefix]"));
         assert!(full.contains("My task"));
@@ -3754,7 +3769,7 @@ mod tests {
         });
         state.selected_preset = Some("test".to_string());
         state.launch_form.prompt = "My task".to_string();
-        
+
         let full = state.build_full_prompt();
         assert!(full.contains("PREFIX_CONTENT"));
         assert!(full.contains("My task"));
@@ -3765,10 +3780,10 @@ mod tests {
     fn test_toggle_batch_preview() {
         let mut state = CLIAgentsState::new();
         assert!(!state.show_batch_preview);
-        
+
         state.update(CLIAgentMessage::ToggleBatchPreview);
         assert!(state.show_batch_preview);
-        
+
         state.update(CLIAgentMessage::ToggleBatchPreview);
         assert!(!state.show_batch_preview);
     }
@@ -3777,7 +3792,7 @@ mod tests {
     fn test_copy_batch_prompt_task() {
         let mut state = CLIAgentsState::new();
         state.batch_form.prompt = "Batch task prompt".to_string();
-        
+
         let task = state.update(CLIAgentMessage::CopyBatchPrompt);
         assert!(task.is_some());
         match task {

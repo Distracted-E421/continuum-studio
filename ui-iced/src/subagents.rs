@@ -26,16 +26,15 @@ pub const DBUS_INTERFACE: &str = "sh.synapsix.TerminalMonitor1";
 
 /// NATO phonetic alphabet for agent names
 const NATO_ALPHABET: &[&str] = &[
-    "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
-    "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
-    "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey",
-    "X-ray", "Yankee", "Zulu",
+    "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet",
+    "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango",
+    "Uniform", "Victor", "Whiskey", "X-ray", "Yankee", "Zulu",
 ];
 
 /// Color names for agent identification
 const COLORS: &[&str] = &[
-    "Red", "Blue", "Green", "Gold", "Silver", "Orange", "Purple", "Cyan",
-    "Magenta", "Lime", "Coral", "Teal", "Navy", "Crimson", "Amber", "Jade",
+    "Red", "Blue", "Green", "Gold", "Silver", "Orange", "Purple", "Cyan", "Magenta", "Lime",
+    "Coral", "Teal", "Navy", "Crimson", "Amber", "Jade",
 ];
 
 /// Color values (RGB) for visual display
@@ -74,24 +73,25 @@ pub struct AgentCodeName {
 /// Generate a deterministic code name from a terminal ID
 /// Uses a hash to ensure the same terminal always gets the same name
 pub fn generate_codename(terminal_id: &str) -> AgentCodeName {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
-    
+    use std::hash::{Hash, Hasher};
+
     let mut hasher = DefaultHasher::new();
     terminal_id.hash(&mut hasher);
     let hash = hasher.finish();
-    
+
     // Use different bits of hash for NATO and color
     let nato_idx = (hash as usize) % NATO_ALPHABET.len();
     let color_idx = ((hash >> 8) as usize) % COLORS.len();
-    
+
     let phonetic = NATO_ALPHABET[nato_idx].to_string();
     let color = COLORS[color_idx].to_string();
-    let rgb = COLOR_RGB.iter()
+    let rgb = COLOR_RGB
+        .iter()
         .find(|(c, _)| *c == color)
         .map(|(_, rgb)| *rgb)
         .unwrap_or((0.5, 0.5, 0.5));
-    
+
     AgentCodeName {
         name: format!("{}-{}", phonetic, color),
         phonetic,
@@ -111,23 +111,23 @@ impl CodeNameRegistry {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Get or generate a code name for a terminal
     pub fn get_or_create(&mut self, terminal_id: &str) -> AgentCodeName {
         if let Some(name) = self.names.get(terminal_id) {
             return name.clone();
         }
-        
+
         let codename = generate_codename(terminal_id);
         self.names.insert(terminal_id.to_string(), codename.clone());
         codename
     }
-    
+
     /// Get code name if it exists (doesn't create new)
     pub fn get(&self, terminal_id: &str) -> Option<&AgentCodeName> {
         self.names.get(terminal_id)
     }
-    
+
     /// Clear all code names (useful for testing)
     pub fn clear(&mut self) {
         self.names.clear();
@@ -362,7 +362,10 @@ pub mod dbus_client {
     }
 
     /// Get sub-agent commands
-    pub async fn get_subagents(conn: &Connection, limit: u32) -> Result<Vec<CommandRecord>, String> {
+    pub async fn get_subagents(
+        conn: &Connection,
+        limit: u32,
+    ) -> Result<Vec<CommandRecord>, String> {
         let proxy = get_proxy(conn).await.map_err(|e| e.to_string())?;
         let result: String = proxy
             .call_method("GetSubagentCommands", &(limit,))

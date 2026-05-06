@@ -165,13 +165,15 @@ impl CoordinatorHttpClient {
             agents: Vec<Agent>,
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .get(&self.base_url)
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        let data = resp.json::<AgentsResponse>()
+        let data = resp
+            .json::<AgentsResponse>()
             .await
             .map_err(|e| e.to_string())?;
 
@@ -180,15 +182,14 @@ impl CoordinatorHttpClient {
 
     /// Get a specific agent
     pub async fn get_agent(&self, agent_id: &str) -> Result<Agent, String> {
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{}/{}", self.base_url, agent_id))
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        resp.json::<Agent>()
-            .await
-            .map_err(|e| e.to_string())
+        resp.json::<Agent>().await.map_err(|e| e.to_string())
     }
 
     /// Register a new agent
@@ -206,16 +207,15 @@ impl CoordinatorHttpClient {
             "session_id": session_id,
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/register", self.base_url))
             .json(&payload)
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        resp.json::<Agent>()
-            .await
-            .map_err(|e| e.to_string())
+        resp.json::<Agent>().await.map_err(|e| e.to_string())
     }
 
     /// Update agent focus
@@ -246,13 +246,15 @@ impl CoordinatorHttpClient {
             conflicts: Vec<Conflict>,
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{}/conflicts", self.base_url))
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        let data = resp.json::<ConflictsResponse>()
+        let data = resp
+            .json::<ConflictsResponse>()
             .await
             .map_err(|e| e.to_string())?;
 
@@ -260,13 +262,20 @@ impl CoordinatorHttpClient {
     }
 
     /// Resolve a conflict
-    pub async fn resolve_conflict(&self, conflict_id: &str, resolution: &str) -> Result<(), String> {
+    pub async fn resolve_conflict(
+        &self,
+        conflict_id: &str,
+        resolution: &str,
+    ) -> Result<(), String> {
         let payload = serde_json::json!({
             "resolution": resolution,
         });
 
         self.client
-            .post(format!("{}/conflicts/{}/resolve", self.base_url, conflict_id))
+            .post(format!(
+                "{}/conflicts/{}/resolve",
+                self.base_url, conflict_id
+            ))
             .json(&payload)
             .send()
             .await
@@ -281,13 +290,15 @@ impl CoordinatorHttpClient {
             context: String,
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{}/{}/context", self.base_url, agent_id))
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        let data = resp.json::<ContextResponse>()
+        let data = resp
+            .json::<ContextResponse>()
             .await
             .map_err(|e| e.to_string())?;
 
@@ -295,7 +306,11 @@ impl CoordinatorHttpClient {
     }
 
     /// Suggest an agent for a task
-    pub async fn suggest_agent(&self, project: Option<&str>, repo: Option<&str>) -> Result<String, String> {
+    pub async fn suggest_agent(
+        &self,
+        project: Option<&str>,
+        repo: Option<&str>,
+    ) -> Result<String, String> {
         let payload = serde_json::json!({
             "project": project,
             "repo": repo,
@@ -306,14 +321,16 @@ impl CoordinatorHttpClient {
             suggested_agent: String,
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/suggest", self.base_url))
             .json(&payload)
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        let data = resp.json::<SuggestResponse>()
+        let data = resp
+            .json::<SuggestResponse>()
             .await
             .map_err(|e| e.to_string())?;
 
@@ -369,7 +386,7 @@ mod tests {
     fn test_agent_type_serialization() {
         let json = serde_json::to_string(&AgentType::SessionAgent).unwrap();
         assert_eq!(json, "\"session_agent\"");
-        
+
         let json = serde_json::to_string(&AgentType::SubAgent).unwrap();
         assert_eq!(json, "\"sub_agent\"");
     }
@@ -378,10 +395,10 @@ mod tests {
     fn test_agent_type_deserialization() {
         let t: AgentType = serde_json::from_str("\"session_agent\"").unwrap();
         assert_eq!(t, AgentType::SessionAgent);
-        
+
         let t: AgentType = serde_json::from_str("\"sub_agent\"").unwrap();
         assert_eq!(t, AgentType::SubAgent);
-        
+
         // Unknown values should deserialize to Unknown
         let t: AgentType = serde_json::from_str("\"something_else\"").unwrap();
         assert_eq!(t, AgentType::Unknown);
@@ -417,13 +434,13 @@ mod tests {
             last_activity: Some("2026-04-07T12:30:00Z".to_string()),
             file_claims: vec!["src/main.rs".to_string()],
         };
-        
+
         let json = serde_json::to_string(&agent);
         assert!(json.is_ok());
-        
+
         let deserialized: Result<Agent, _> = serde_json::from_str(&json.unwrap());
         assert!(deserialized.is_ok());
-        
+
         let restored = deserialized.unwrap();
         assert_eq!(restored.id, "test-agent-123");
         assert_eq!(restored.agent_type, AgentType::SessionAgent);
@@ -441,13 +458,13 @@ mod tests {
             resolved: false,
             resolution: None,
         };
-        
+
         let json = serde_json::to_string(&conflict);
         assert!(json.is_ok());
-        
+
         let deserialized: Result<Conflict, _> = serde_json::from_str(&json.unwrap());
         assert!(deserialized.is_ok());
-        
+
         let restored = deserialized.unwrap();
         assert_eq!(restored.id, "conflict-001");
         assert_eq!(restored.agents.len(), 2);

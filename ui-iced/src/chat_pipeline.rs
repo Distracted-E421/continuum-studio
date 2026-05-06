@@ -375,7 +375,9 @@ pub struct SanitizationOptions {
     pub custom_patterns: Vec<String>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Augmentation options
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -390,7 +392,9 @@ pub struct AugmentationOptions {
     pub model: Option<String>,
 }
 
-fn default_multiplier() -> u32 { 2 }
+fn default_multiplier() -> u32 {
+    2
+}
 
 /// Training export request body
 #[derive(Debug, Clone, Default, Serialize)]
@@ -667,7 +671,10 @@ impl ChatApiClient {
             .map_err(|e| format!("Task failed: {}", e))?
     }
 
-    pub async fn export_conversation(id: String, format: ExportFormat) -> Result<ExportResult, String> {
+    pub async fn export_conversation(
+        id: String,
+        format: ExportFormat,
+    ) -> Result<ExportResult, String> {
         tokio::task::spawn_blocking(move || {
             let url = format!("{}/export/{}?format={}", CHAT_API_BASE, id, format.as_str());
             let agent = ureq::AgentBuilder::new()
@@ -680,7 +687,11 @@ impl ChatApiClient {
             let content = response
                 .into_string()
                 .map_err(|e| format!("Failed to read export: {}", e))?;
-            let filename = format!("conversation_{}.{}", &id[..8.min(id.len())], format.extension());
+            let filename = format!(
+                "conversation_{}.{}",
+                &id[..8.min(id.len())],
+                format.extension()
+            );
             Ok(ExportResult {
                 conversation_id: id,
                 format,
@@ -714,9 +725,13 @@ impl ChatApiClient {
     // Training Data Export API
     // -------------------------------------------------------------------------
 
-    fn post_json<T: serde::de::DeserializeOwned, B: Serialize>(path: &str, body: &B) -> Result<T, String> {
+    fn post_json<T: serde::de::DeserializeOwned, B: Serialize>(
+        path: &str,
+        body: &B,
+    ) -> Result<T, String> {
         let url = format!("{}{}", CHAT_API_BASE, path);
-        let body_json = serde_json::to_string(body).map_err(|e| format!("Serialize error: {}", e))?;
+        let body_json =
+            serde_json::to_string(body).map_err(|e| format!("Serialize error: {}", e))?;
         let agent = ureq::AgentBuilder::new()
             .timeout(std::time::Duration::from_secs(300)) // Long timeout for exports
             .build();
@@ -738,7 +753,9 @@ impl ChatApiClient {
     }
 
     /// Fetch training export stats with optional filters
-    pub async fn fetch_training_stats(filters: TrainingFilters) -> Result<TrainingStatsResponse, String> {
+    pub async fn fetch_training_stats(
+        filters: TrainingFilters,
+    ) -> Result<TrainingStatsResponse, String> {
         let mut params = vec![];
         if let Some(min) = filters.min_turns {
             params.push(format!("min_turns={}", min));
@@ -771,7 +788,10 @@ impl ChatApiClient {
     }
 
     /// Fetch sample conversations for preview
-    pub async fn fetch_training_sample(n: u32, filters: TrainingFilters) -> Result<TrainingSampleResponse, String> {
+    pub async fn fetch_training_sample(
+        n: u32,
+        filters: TrainingFilters,
+    ) -> Result<TrainingSampleResponse, String> {
         let mut params = vec![format!("n={}", n)];
         if let Some(min) = filters.min_turns {
             params.push(format!("min_turns={}", min));
@@ -794,17 +814,25 @@ impl ChatApiClient {
     }
 
     /// Preview training export (dry run, no files written)
-    pub async fn training_preview(request: TrainingExportRequest) -> Result<TrainingPreviewResponse, String> {
-        tokio::task::spawn_blocking(move || Self::post_json::<TrainingPreviewResponse, _>("/training/preview", &request))
-            .await
-            .map_err(|e| format!("Task failed: {}", e))?
+    pub async fn training_preview(
+        request: TrainingExportRequest,
+    ) -> Result<TrainingPreviewResponse, String> {
+        tokio::task::spawn_blocking(move || {
+            Self::post_json::<TrainingPreviewResponse, _>("/training/preview", &request)
+        })
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
     }
 
     /// Run full training data export
-    pub async fn training_export(request: TrainingExportRequest) -> Result<TrainingExportResponse, String> {
-        tokio::task::spawn_blocking(move || Self::post_json::<TrainingExportResponse, _>("/training/export", &request))
-            .await
-            .map_err(|e| format!("Task failed: {}", e))?
+    pub async fn training_export(
+        request: TrainingExportRequest,
+    ) -> Result<TrainingExportResponse, String> {
+        tokio::task::spawn_blocking(move || {
+            Self::post_json::<TrainingExportResponse, _>("/training/export", &request)
+        })
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
     }
 }
 

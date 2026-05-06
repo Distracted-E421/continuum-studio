@@ -31,8 +31,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Zone layout presets
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ZoneLayout {
     /// Main window fills most of the screen, side panels on the right
     #[default]
@@ -48,7 +47,6 @@ pub enum ZoneLayout {
     /// Dashboard: main centered, tools arrayed around
     Dashboard,
 }
-
 
 /// A zone definition (logical screen region)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,14 +107,17 @@ impl ZoneManager {
         };
 
         // Create default zone covering the whole screen
-        manager.zones.insert("primary".to_string(), Zone {
-            handle: "primary".to_string(),
-            x: 0,
-            y: 0,
-            width: screen_width,
-            height: screen_height,
-            output: None,
-        });
+        manager.zones.insert(
+            "primary".to_string(),
+            Zone {
+                handle: "primary".to_string(),
+                x: 0,
+                y: 0,
+                width: screen_width,
+                height: screen_height,
+                output: None,
+            },
+        );
 
         manager
     }
@@ -195,7 +196,7 @@ impl ZoneManager {
             ZoneLayout::Dashboard => self.layout_dashboard(),
             _ => self.layout_main_with_side_panel(), // Fallback
         };
-        
+
         LayoutApplication {
             main: main_config,
             side_panel: panel_config,
@@ -211,7 +212,7 @@ impl ZoneManager {
             ZoneLayout::Dashboard => self.layout_dashboard(),
             _ => self.layout_main_with_side_panel(),
         };
-        
+
         let active_windows = vec![
             ActiveWindow {
                 window_type: "Main".to_string(),
@@ -228,7 +229,7 @@ impl ZoneManager {
                 height: panel_config.height,
             },
         ];
-        
+
         ZoneSnapshot {
             layout: self.layout,
             screen_width: self.screen_width,
@@ -238,7 +239,7 @@ impl ZoneManager {
             active_windows,
         }
     }
-    
+
     /// Write current zone snapshot to file for external tools (Phosphor)
     pub fn export_snapshot(&self) {
         let snapshot = self.snapshot();
@@ -293,8 +294,7 @@ pub struct ActiveWindow {
 impl ZoneSnapshot {
     /// Write snapshot to the well-known file path
     pub fn write_to_file(&self) -> Result<(), std::io::Error> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(ZONE_SNAPSHOT_PATH, json)
     }
 }
@@ -316,10 +316,10 @@ mod tests {
     fn test_zone_manager_set_layout() {
         let mut manager = ZoneManager::new(1920, 1080);
         assert_eq!(manager.layout(), ZoneLayout::MainWithSidePanel);
-        
+
         manager.set_layout(ZoneLayout::Dashboard);
         assert_eq!(manager.layout(), ZoneLayout::Dashboard);
-        
+
         manager.set_layout(ZoneLayout::SplitHorizontal);
         assert_eq!(manager.layout(), ZoneLayout::SplitHorizontal);
     }
@@ -328,7 +328,7 @@ mod tests {
     fn test_layout_main_with_side_panel() {
         let manager = ZoneManager::new(1920, 1080);
         let (main, panel) = manager.layout_main_with_side_panel();
-        
+
         // Main should be on the left
         assert!(main.x < panel.x);
         // Panel width should be capped at screen_width / 3
@@ -343,14 +343,14 @@ mod tests {
     fn test_layout_dashboard() {
         let manager = ZoneManager::new(1920, 1080);
         let (main, panel) = manager.layout_dashboard();
-        
+
         // Main should be roughly centered (65% of screen)
         let expected_main_width = (1920.0 * 0.65) as i32;
         assert_eq!(main.width, expected_main_width);
-        
+
         // Panel should be to the right of main
         assert!(panel.x > main.x);
-        
+
         // Both should be vertically centered (same y)
         assert_eq!(main.y, panel.y);
     }
@@ -359,7 +359,7 @@ mod tests {
     fn test_calculate_layout_returns_correct_type() {
         let manager = ZoneManager::new(1920, 1080);
         let layout = manager.calculate_layout();
-        
+
         // Should return valid positions
         assert!(layout.main.width > 0);
         assert!(layout.main.height > 0);
@@ -371,16 +371,16 @@ mod tests {
     fn test_snapshot_serialization() {
         let manager = ZoneManager::new(1920, 1080);
         let snapshot = manager.snapshot();
-        
+
         // Should serialize to JSON
         let json = serde_json::to_string(&snapshot);
         assert!(json.is_ok());
-        
+
         // Should deserialize back
         let json_str = json.unwrap();
         let deserialized: Result<ZoneSnapshot, _> = serde_json::from_str(&json_str);
         assert!(deserialized.is_ok());
-        
+
         let restored = deserialized.unwrap();
         assert_eq!(restored.screen_width, 1920);
         assert_eq!(restored.screen_height, 1080);
@@ -397,7 +397,7 @@ mod tests {
     fn test_small_screen_constraints() {
         let manager = ZoneManager::new(800, 600);
         let (main, panel) = manager.layout_main_with_side_panel();
-        
+
         // Panel should be capped at screen_width / 3
         assert!(panel.width <= 800 / 3);
         // Main should still have reasonable width

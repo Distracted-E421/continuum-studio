@@ -116,14 +116,9 @@ impl Default for DecisionEngineConfig {
 #[derive(Debug, Clone)]
 pub enum DecisionResult {
     /// Should be auto-handled with this response
-    AutoHandle {
-        response: String,
-        reasoning: String,
-    },
+    AutoHandle { response: String, reasoning: String },
     /// Requires user attention
-    RequireUser {
-        reasoning: String,
-    },
+    RequireUser { reasoning: String },
     /// Add to triage queue with suggested action
     Triage {
         state: TriageState,
@@ -195,13 +190,17 @@ impl DecisionEngine {
                     DialogPriority::Low | DialogPriority::Normal => {
                         // Can potentially auto-handle routine dialogs
                         if let Some((response, reasoning)) = self.suggest_response(dialog) {
-                            DecisionResult::AutoHandle { response, reasoning }
+                            DecisionResult::AutoHandle {
+                                response,
+                                reasoning,
+                            }
                         } else {
                             // No confident suggestion, add to triage
                             DecisionResult::Triage {
                                 state: TriageState::AutoApprove,
                                 suggested_response: self.suggest_default_response(dialog),
-                                reasoning: "Routine dialog - will auto-approve unless overridden".to_string(),
+                                reasoning: "Routine dialog - will auto-approve unless overridden"
+                                    .to_string(),
                                 timeout: self.get_timeout_for_agent(dialog),
                             }
                         }
@@ -212,7 +211,11 @@ impl DecisionEngine {
                             reasoning: format!(
                                 "Priority {} - escalating to user{}",
                                 effective_priority.as_str(),
-                                if detected_critical { " (critical keywords detected)" } else { "" }
+                                if detected_critical {
+                                    " (critical keywords detected)"
+                                } else {
+                                    ""
+                                }
                             ),
                         }
                     }
@@ -228,14 +231,19 @@ impl DecisionEngine {
                             DecisionResult::Triage {
                                 state: TriageState::AutoApprove,
                                 suggested_response: Some(response),
-                                reasoning: format!("Spectator mode: {} (user can claim within {:?})", reasoning, timeout),
+                                reasoning: format!(
+                                    "Spectator mode: {} (user can claim within {:?})",
+                                    reasoning, timeout
+                                ),
                                 timeout,
                             }
                         } else {
                             DecisionResult::Triage {
                                 state: TriageState::AutoApprove,
                                 suggested_response: self.suggest_default_response(dialog),
-                                reasoning: "Spectator mode: Will auto-approve; user can claim to override".to_string(),
+                                reasoning:
+                                    "Spectator mode: Will auto-approve; user can claim to override"
+                                        .to_string(),
                                 timeout,
                             }
                         }
@@ -247,7 +255,11 @@ impl DecisionEngine {
                             suggested_response: None,
                             reasoning: format!(
                                 "Critical dialog - requires user decision{}",
-                                if detected_critical { " (critical keywords detected)" } else { "" }
+                                if detected_critical {
+                                    " (critical keywords detected)"
+                                } else {
+                                    ""
+                                }
                             ),
                             timeout: self.get_timeout_for_agent(dialog),
                         }
@@ -260,13 +272,19 @@ impl DecisionEngine {
                     DialogPriority::Low | DialogPriority::Normal | DialogPriority::High => {
                         // Auto-handle all routine dialogs
                         if let Some((response, reasoning)) = self.suggest_response(dialog) {
-                            DecisionResult::AutoHandle { response, reasoning }
+                            DecisionResult::AutoHandle {
+                                response,
+                                reasoning,
+                            }
                         } else {
                             // Use default response
                             DecisionResult::AutoHandle {
-                                response: self.suggest_default_response(dialog)
+                                response: self
+                                    .suggest_default_response(dialog)
                                     .unwrap_or_else(|| "continue".to_string()),
-                                reasoning: "Autonomous mode: Using default response to keep agent running".to_string(),
+                                reasoning:
+                                    "Autonomous mode: Using default response to keep agent running"
+                                        .to_string(),
                             }
                         }
                     }
@@ -277,7 +295,11 @@ impl DecisionEngine {
                             suggested_response: None,
                             reasoning: format!(
                                 "Critical dialog queued for user review{}",
-                                if detected_critical { " (critical keywords detected)" } else { "" }
+                                if detected_critical {
+                                    " (critical keywords detected)"
+                                } else {
+                                    ""
+                                }
                             ),
                             timeout: Duration::from_secs(86400), // 24 hours
                         }
@@ -290,7 +312,10 @@ impl DecisionEngine {
     /// Detect if dialog contains critical keywords
     fn detect_critical_keywords(&self, text: &str) -> bool {
         let text_lower = text.to_lowercase();
-        self.config.critical_keywords.iter().any(|kw| text_lower.contains(kw))
+        self.config
+            .critical_keywords
+            .iter()
+            .any(|kw| text_lower.contains(kw))
     }
 
     /// Suggest a response based on dialog type and content
@@ -315,7 +340,9 @@ impl DecisionEngine {
         }
 
         // Session continuation dialogs - ALWAYS continue to save requests
-        if prompt_lower.contains("session") && (prompt_lower.contains("continue") || prompt_lower.contains("end")) {
+        if prompt_lower.contains("session")
+            && (prompt_lower.contains("continue") || prompt_lower.contains("end"))
+        {
             if let Some(ref options) = dialog.options {
                 for opt in options {
                     let val_lower = opt.value.to_lowercase();
@@ -372,7 +399,8 @@ impl DecisionEngine {
     pub fn record_decision(&mut self, record: DecisionRecord) {
         // Add to undoable if within undo window
         if record.undoable {
-            self.undoable_decisions.push((record.clone(), Instant::now()));
+            self.undoable_decisions
+                .push((record.clone(), Instant::now()));
         }
 
         // Add to history
@@ -408,11 +436,11 @@ impl DecisionEngine {
     pub fn undo_last(&mut self) -> Option<DecisionRecord> {
         let undo_window = Duration::from_secs(self.config.undo_window_secs);
         let now = Instant::now();
-        
+
         // Clean up expired entries first
         self.undoable_decisions
             .retain(|(_, instant)| now.duration_since(*instant) < undo_window);
-        
+
         // Pop the most recent undoable decision
         self.undoable_decisions.pop().map(|(record, _)| record)
     }
@@ -437,7 +465,11 @@ impl DecisionEngine {
 
     /// Remove item from triage queue by dialog ID
     pub fn remove_from_triage(&mut self, dialog_id: &str) -> Option<TriageItem> {
-        if let Some(pos) = self.triage_queue.iter().position(|i| i.dialog.id == dialog_id) {
+        if let Some(pos) = self
+            .triage_queue
+            .iter()
+            .position(|i| i.dialog.id == dialog_id)
+        {
             Some(self.triage_queue.remove(pos))
         } else {
             None
@@ -446,7 +478,11 @@ impl DecisionEngine {
 
     /// Update triage state for a dialog
     pub fn set_triage_state(&mut self, dialog_id: &str, state: TriageState) -> bool {
-        if let Some(item) = self.triage_queue.iter_mut().find(|i| i.dialog.id == dialog_id) {
+        if let Some(item) = self
+            .triage_queue
+            .iter_mut()
+            .find(|i| i.dialog.id == dialog_id)
+        {
             item.state = state;
             true
         } else {
@@ -539,7 +575,7 @@ mod tests {
     fn test_user_active_requires_user() {
         let engine = DecisionEngine::new(DecisionEngineConfig::default());
         let dialog = make_test_dialog(DialogPriority::Low, "Do you want to continue?");
-        
+
         match engine.evaluate(&dialog) {
             DecisionResult::RequireUser { .. } => {}
             _ => panic!("Expected RequireUser in UserActive mode"),
@@ -551,7 +587,7 @@ mod tests {
         let mut engine = DecisionEngine::new(DecisionEngineConfig::default());
         engine.set_mode(OrchestratorMode::Autonomous);
         let dialog = make_test_dialog(DialogPriority::Normal, "Do you want to continue?");
-        
+
         match engine.evaluate(&dialog) {
             DecisionResult::AutoHandle { response, .. } => {
                 assert_eq!(response, "continue");
@@ -565,9 +601,12 @@ mod tests {
         let mut engine = DecisionEngine::new(DecisionEngineConfig::default());
         engine.set_mode(OrchestratorMode::Autonomous);
         let dialog = make_test_dialog(DialogPriority::Normal, "Delete all files?");
-        
+
         match engine.evaluate(&dialog) {
-            DecisionResult::Triage { state: TriageState::Paused, .. } => {}
+            DecisionResult::Triage {
+                state: TriageState::Paused,
+                ..
+            } => {}
             _ => panic!("Expected Triage with Paused for critical dialog"),
         }
     }
@@ -578,11 +617,14 @@ mod tests {
         engine.set_mode(OrchestratorMode::UserDelegate);
         let dialog = make_test_dialog(
             DialogPriority::Normal,
-            "Session complete. What would you like to do?"
+            "Session complete. What would you like to do?",
         );
-        
+
         match engine.evaluate(&dialog) {
-            DecisionResult::AutoHandle { response, reasoning } => {
+            DecisionResult::AutoHandle {
+                response,
+                reasoning,
+            } => {
                 assert_eq!(response, "continue");
                 assert!(reasoning.contains("session") || reasoning.contains("continue"));
             }

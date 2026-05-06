@@ -250,25 +250,15 @@ where
             .map(|agent| view_agent_card(agent, to_message.clone()))
             .collect();
 
-        scrollable(
-            column(cards)
-                .spacing(12)
-                .padding(8)
-                .width(Length::Fill),
-        )
-        .height(Length::Fill)
-        .into()
+        scrollable(column(cards).spacing(12).padding(8).width(Length::Fill))
+            .height(Length::Fill)
+            .into()
     };
 
-    let main_view = column![
-        error_banner,
-        header,
-        Space::new().height(16),
-        content,
-    ]
-    .spacing(8)
-    .padding(16)
-    .into();
+    let main_view = column![error_banner, header, Space::new().height(16), content,]
+        .spacing(8)
+        .padding(16)
+        .into();
 
     // Overlay assign task modal
     if state.show_assign_modal {
@@ -314,30 +304,30 @@ where
         });
 
     let capabilities_row = if agent.capabilities.is_empty() {
-        row![text("(no capabilities)").size(11).color(iced::Color::from_rgb(0.5, 0.5, 0.5))]
+        row![text("(no capabilities)")
+            .size(11)
+            .color(iced::Color::from_rgb(0.5, 0.5, 0.5))]
     } else {
-        row(
-            agent
-                .capabilities
-                .iter()
-                .map(|c| {
-                    container(text(c).size(10))
-                        .padding([2, 6])
-                        .style(|_| container::Style {
-                            background: Some(iced::Background::Color(iced::Color::from_rgb(
-                                0.25, 0.35, 0.45,
-                            ))),
-                            border: iced::Border {
-                                radius: 4.0.into(),
-                                width: 0.0,
-                                color: iced::Color::TRANSPARENT,
-                            },
-                            ..Default::default()
-                        })
-                        .into()
-                })
-                .collect::<Vec<_>>(),
-        )
+        row(agent
+            .capabilities
+            .iter()
+            .map(|c| {
+                container(text(c).size(10))
+                    .padding([2, 6])
+                    .style(|_| container::Style {
+                        background: Some(iced::Background::Color(iced::Color::from_rgb(
+                            0.25, 0.35, 0.45,
+                        ))),
+                        border: iced::Border {
+                            radius: 4.0.into(),
+                            width: 0.0,
+                            color: iced::Color::TRANSPARENT,
+                        },
+                        ..Default::default()
+                    })
+                    .into()
+            })
+            .collect::<Vec<_>>())
         .spacing(4)
     };
 
@@ -409,11 +399,7 @@ where
 
     let submit_btn = button(text("Submit").size(13))
         .padding([8, 16])
-        .on_press_maybe(if can_submit {
-            Some(submit_msg)
-        } else {
-            None
-        })
+        .on_press_maybe(if can_submit { Some(submit_msg) } else { None })
         .style(|_theme, _status| button::Style {
             background: Some(iced::Background::Color(iced::Color::from_rgb(
                 0.2, 0.5, 0.3,

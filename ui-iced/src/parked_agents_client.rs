@@ -183,7 +183,7 @@ mod tests {
                 }
             ]
         }"#;
-        
+
         let response: ParkedAgentsResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.agents.len(), 1);
         assert_eq!(response.agents[0].agent_id, "agent-123");
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn test_parked_agent_json_to_parked_agent() {
         use chrono::TimeZone;
-        
+
         let json_agent = ParkedAgentJson {
             agent_id: "agent-456".to_string(),
             workspace: "/home/dev/code".to_string(),
@@ -209,7 +209,7 @@ mod tests {
             capabilities: vec!["fast_shell".to_string()],
             last_heartbeat: Some(Utc.with_ymd_and_hms(2026, 4, 7, 12, 30, 0).unwrap()),
         };
-        
+
         let parked: ParkedAgent = json_agent.into();
         assert_eq!(parked.agent_id, "agent-456");
         assert_eq!(parked.workspace, "/home/dev/code");
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn test_parked_agent_json_without_heartbeat() {
         use chrono::TimeZone;
-        
+
         let parked_time = Utc.with_ymd_and_hms(2026, 4, 7, 12, 0, 0).unwrap();
         let json_agent = ParkedAgentJson {
             agent_id: "agent-789".to_string(),
@@ -228,7 +228,7 @@ mod tests {
             capabilities: vec![],
             last_heartbeat: None,
         };
-        
+
         let parked: ParkedAgent = json_agent.into();
         assert_eq!(parked.last_heartbeat, parked_time);
     }

@@ -3,13 +3,13 @@
 //! Connects to ws://localhost:8080/ws/activity for real-time agent activity
 //! (commands, dialogs) from the synapsix-dialog daemon.
 
-use chrono::{DateTime, Utc};
 use crate::activity_feed::ActivityEvent;
+use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use url::Url;
 
 /// Default dialog daemon WebSocket URL

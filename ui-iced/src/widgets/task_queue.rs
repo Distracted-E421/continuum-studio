@@ -79,7 +79,7 @@ pub struct Agent {
     #[serde(default)]
     pub current_task_id: Option<String>,
     #[serde(default)]
-    pub parent_id: Option<String>,  // For sub-agents
+    pub parent_id: Option<String>, // For sub-agents
     #[serde(default)]
     pub project: Option<String>,
     #[serde(default)]
@@ -237,7 +237,7 @@ impl TaskQueueWidget {
             colors: TaskQueueColors::default(),
         }
     }
-    
+
     /// Set panel layout
     pub fn with_layout(mut self, layout: PanelLayout) -> Self {
         self.layout = layout;
@@ -327,7 +327,9 @@ impl TaskQueueWidget {
                 self.task_history = history;
                 // Trim to max
                 if self.task_history.len() > self.max_history {
-                    self.task_history = self.task_history.split_off(self.task_history.len() - self.max_history);
+                    self.task_history = self
+                        .task_history
+                        .split_off(self.task_history.len() - self.max_history);
                 }
                 None
             }
@@ -355,12 +357,11 @@ impl TaskQueueWidget {
                 self.selected_task_id = Some(task_id);
                 None
             }
-            TaskQueueMessage::StartTask(task_id) => {
-                Some(TaskQueueAction::StartTask(task_id))
-            }
-            TaskQueueMessage::CompleteCurrentTask => {
-                self.current_task.as_ref().map(|t| TaskQueueAction::CompleteTask(t.id.clone()))
-            }
+            TaskQueueMessage::StartTask(task_id) => Some(TaskQueueAction::StartTask(task_id)),
+            TaskQueueMessage::CompleteCurrentTask => self
+                .current_task
+                .as_ref()
+                .map(|t| TaskQueueAction::CompleteTask(t.id.clone())),
             TaskQueueMessage::QuickAddInputChanged(text) => {
                 self.quick_add_input = text;
                 None
@@ -374,9 +375,7 @@ impl TaskQueueWidget {
                     None
                 }
             }
-            TaskQueueMessage::Refresh => {
-                Some(TaskQueueAction::Refresh)
-            }
+            TaskQueueMessage::Refresh => Some(TaskQueueAction::Refresh),
 
             // User actions - Agents
             TaskQueueMessage::SelectAgent(agent_id) => {
@@ -395,7 +394,8 @@ impl TaskQueueWidget {
     /// Update derived state (current task, stats) from tasks list
     fn update_derived_state(&mut self) {
         // Find current task (in_progress)
-        self.current_task = self.tasks
+        self.current_task = self
+            .tasks
             .iter()
             .find(|t| t.status == TaskStatus::InProgress)
             .cloned();
@@ -403,10 +403,26 @@ impl TaskQueueWidget {
         // Update stats
         self.stats = QueueStats {
             total: self.tasks.len(),
-            pending: self.tasks.iter().filter(|t| t.status == TaskStatus::Pending).count(),
-            in_progress: self.tasks.iter().filter(|t| t.status == TaskStatus::InProgress).count(),
-            completed: self.tasks.iter().filter(|t| t.status == TaskStatus::Completed).count(),
-            cancelled: self.tasks.iter().filter(|t| t.status == TaskStatus::Cancelled).count(),
+            pending: self
+                .tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Pending)
+                .count(),
+            in_progress: self
+                .tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::InProgress)
+                .count(),
+            completed: self
+                .tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Completed)
+                .count(),
+            cancelled: self
+                .tasks
+                .iter()
+                .filter(|t| t.status == TaskStatus::Cancelled)
+                .count(),
         };
 
         self.last_update = Some(Instant::now());
@@ -414,11 +430,12 @@ impl TaskQueueWidget {
 
     /// Get pending tasks sorted by priority
     pub fn pending_tasks(&self) -> Vec<&Task> {
-        let mut pending: Vec<_> = self.tasks
+        let mut pending: Vec<_> = self
+            .tasks
             .iter()
             .filter(|t| t.status == TaskStatus::Pending || t.status == TaskStatus::Claimed)
             .collect();
-        
+
         // Sort by priority (critical first)
         pending.sort_by_key(|t| match t.priority {
             Priority::Critical => 0,
@@ -427,7 +444,7 @@ impl TaskQueueWidget {
             Priority::Low => 3,
             Priority::Backlog => 4,
         });
-        
+
         pending
     }
 
@@ -444,13 +461,17 @@ impl TaskQueueWidget {
     /// Compact view
     fn view_compact(&self) -> Element<'_, TaskQueueMessage> {
         let c = &self.colors;
-        
+
         let header = row![
             text("📋 Tasks").size(14).color(c.text_primary),
             Space::new().width(Length::Fill),
             text(if self.connected { "●" } else { "○" })
                 .size(10)
-                .color(if self.connected { c.success } else { c.text_secondary }),
+                .color(if self.connected {
+                    c.success
+                } else {
+                    c.text_secondary
+                }),
             text(format!("{}", self.stats.pending))
                 .size(12)
                 .color(c.text_secondary),
@@ -463,34 +484,30 @@ impl TaskQueueWidget {
                 text(format!("● {}", truncate(&task.content, 25)))
                     .size(13)
                     .color(c.text_primary),
-                text(format!("{} · {}", task.status.label(), task.priority.label()))
-                    .size(11)
-                    .color(c.text_secondary),
+                text(format!(
+                    "{} · {}",
+                    task.status.label(),
+                    task.priority.label()
+                ))
+                .size(11)
+                .color(c.text_secondary),
             ]
             .spacing(2)
         } else {
-            column![
-                text("No current task")
-                    .size(13)
-                    .color(c.text_secondary),
-            ]
+            column![text("No current task").size(13).color(c.text_secondary),]
         };
 
-        container(
-            column![header, content]
-                .spacing(8)
-                .padding(12)
-        )
-        .style(move |_| container::Style {
-            background: Some(iced::Background::Color(c.bg)),
-            border: iced::Border {
-                radius: 10.0.into(),
-                width: 1.0,
-                color: c.border,
-            },
-            ..Default::default()
-        })
-        .into()
+        container(column![header, content].spacing(8).padding(12))
+            .style(move |_| container::Style {
+                background: Some(iced::Background::Color(c.bg)),
+                border: iced::Border {
+                    radius: 10.0.into(),
+                    width: 1.0,
+                    color: c.border,
+                },
+                ..Default::default()
+            })
+            .into()
     }
 
     /// Standard view with current + pending tasks
@@ -502,7 +519,11 @@ impl TaskQueueWidget {
             Space::new().width(Length::Fill),
             text(if self.connected { "●" } else { "○" })
                 .size(10)
-                .color(if self.connected { c.success } else { c.text_secondary }),
+                .color(if self.connected {
+                    c.success
+                } else {
+                    c.text_secondary
+                }),
         ]
         .spacing(4)
         .align_y(Alignment::Center);
@@ -521,9 +542,7 @@ impl TaskQueueWidget {
                         .size(11)
                         .color(c.text_secondary),
                     text("·").size(11).color(c.text_secondary),
-                    text(task.priority.label())
-                        .size(11)
-                        .color(c.text_secondary),
+                    text(task.priority.label()).size(11).color(c.text_secondary),
                 ]
                 .spacing(4),
                 button(text("Complete ✓").size(11).color(c.text_primary))
@@ -532,11 +551,7 @@ impl TaskQueueWidget {
             ]
             .spacing(4)
         } else {
-            column![
-                text("No current task")
-                    .size(12)
-                    .color(c.text_secondary),
-            ]
+            column![text("No current task").size(12).color(c.text_secondary),]
         };
 
         let pending = self.pending_tasks();
@@ -552,7 +567,7 @@ impl TaskQueueWidget {
                             .size(12)
                             .color(c.text_primary),
                     ]
-                    .spacing(6)
+                    .spacing(6),
                 )
                 .on_press(TaskQueueMessage::StartTask(task_id))
                 .padding([4, 8])
@@ -576,7 +591,7 @@ impl TaskQueueWidget {
                 text("Add Task").size(12).color(c.text_primary),
             ]
             .spacing(4)
-            .align_y(Alignment::Center)
+            .align_y(Alignment::Center),
         )
         .on_press(TaskQueueMessage::QuickAddSubmit)
         .padding([6, 12]);
@@ -591,7 +606,7 @@ impl TaskQueueWidget {
                 add_button,
             ]
             .spacing(8)
-            .padding(12)
+            .padding(12),
         )
         .style(move |_| container::Style {
             background: Some(iced::Background::Color(c.bg)),
@@ -616,7 +631,11 @@ impl TaskQueueWidget {
             Space::new().width(Length::Fill),
             text(if self.connected { "●" } else { "○" })
                 .size(10)
-                .color(if self.connected { c.success } else { c.text_secondary }),
+                .color(if self.connected {
+                    c.success
+                } else {
+                    c.text_secondary
+                }),
             button(text("🔄").size(14))
                 .on_press(TaskQueueMessage::Refresh)
                 .padding([4, 8]),
@@ -630,15 +649,11 @@ impl TaskQueueWidget {
                 column![
                     text("▶ CURRENT").size(11).color(c.text_secondary),
                     Space::new().height(4),
-                    text(&task.content)
-                        .size(14)
-                        .color(c.text_primary),
+                    text(&task.content).size(14).color(c.text_primary),
                     Space::new().height(4),
                     row![
                         text(task.priority.emoji()).size(12),
-                        text(task.priority.label())
-                            .size(11)
-                            .color(c.text_secondary),
+                        text(task.priority.label()).size(11).color(c.text_secondary),
                         text("·").size(11).color(c.text_secondary),
                         text(task.assigned_to.as_deref().unwrap_or("unassigned"))
                             .size(11)
@@ -646,14 +661,12 @@ impl TaskQueueWidget {
                     ]
                     .spacing(4),
                     Space::new().height(8),
-                    row![
-                        button(text("Complete ✓").size(11).color(c.text_primary))
-                            .on_press(TaskQueueMessage::CompleteCurrentTask)
-                            .padding([6, 12]),
-                    ]
+                    row![button(text("Complete ✓").size(11).color(c.text_primary))
+                        .on_press(TaskQueueMessage::CompleteCurrentTask)
+                        .padding([6, 12]),]
                     .spacing(8),
                 ]
-                .padding(12)
+                .padding(12),
             )
             .style(move |_| container::Style {
                 background: Some(iced::Background::Color(c.bg_elevated)),
@@ -673,40 +686,37 @@ impl TaskQueueWidget {
 
         // Pending tasks section
         let pending = self.pending_tasks();
-        let pending_header = row![
-            text(format!("PENDING ({})", pending.len()))
-                .size(11)
-                .color(c.text_secondary),
-        ];
+        let pending_header = row![text(format!("PENDING ({})", pending.len()))
+            .size(11)
+            .color(c.text_secondary),];
 
         let pending_items: Vec<Element<TaskQueueMessage>> = pending
             .iter()
             .map(|task| {
                 let task_id = task.id.clone();
                 let content = task.content.clone();
-                let project_text = task.project.clone().unwrap_or_else(|| "no project".to_string());
+                let project_text = task
+                    .project
+                    .clone()
+                    .unwrap_or_else(|| "no project".to_string());
                 let priority_emoji = task.priority.emoji();
-                
+
                 container(
                     button(
                         row![
                             text(priority_emoji).size(14),
                             column![
-                                text(content)
-                                    .size(13)
-                                    .color(c.text_primary),
-                                text(project_text)
-                                    .size(10)
-                                    .color(c.text_secondary),
+                                text(content).size(13).color(c.text_primary),
+                                text(project_text).size(10).color(c.text_secondary),
                             ]
                             .spacing(2),
                         ]
                         .spacing(8)
-                        .align_y(Alignment::Center)
+                        .align_y(Alignment::Center),
                     )
                     .on_press(TaskQueueMessage::StartTask(task_id))
                     .padding([8, 12])
-                    .width(Length::Fill)
+                    .width(Length::Fill),
                 )
                 .into()
             })
@@ -718,11 +728,9 @@ impl TaskQueueWidget {
                 .color(c.text_secondary)
                 .into()
         } else {
-            scrollable(
-                column(pending_items).spacing(4)
-            )
-            .height(Length::Fill)
-            .into()
+            scrollable(column(pending_items).spacing(4))
+                .height(Length::Fill)
+                .into()
         };
 
         // Quick add input
@@ -769,7 +777,7 @@ impl TaskQueueWidget {
                 stats_footer,
             ]
             .spacing(8)
-            .padding(16)
+            .padding(16),
         )
         .style(move |_| container::Style {
             background: Some(iced::Background::Color(c.bg)),
@@ -804,10 +812,14 @@ impl TaskQueueWidget {
         .align_y(Alignment::Center);
 
         // Separate session agents and sub-agents
-        let session_agents: Vec<_> = self.agents.iter()
+        let session_agents: Vec<_> = self
+            .agents
+            .iter()
             .filter(|a| a.agent_type == AgentType::SessionAgent)
             .collect();
-        let sub_agents: Vec<_> = self.agents.iter()
+        let sub_agents: Vec<_> = self
+            .agents
+            .iter()
             .filter(|a| a.agent_type == AgentType::SubAgent)
             .collect();
 
@@ -817,7 +829,8 @@ impl TaskQueueWidget {
                 .color(c.text_secondary)
                 .into()
         } else {
-            let items: Vec<Element<TaskQueueMessage>> = session_agents.iter()
+            let items: Vec<Element<TaskQueueMessage>> = session_agents
+                .iter()
                 .map(|agent| self.view_agent_item(agent))
                 .collect();
             column![
@@ -829,9 +842,10 @@ impl TaskQueueWidget {
         };
 
         let sub_section: Element<TaskQueueMessage> = if sub_agents.is_empty() {
-            column![].into()  // Empty when no sub-agents
+            column![].into() // Empty when no sub-agents
         } else {
-            let items: Vec<Element<TaskQueueMessage>> = sub_agents.iter()
+            let items: Vec<Element<TaskQueueMessage>> = sub_agents
+                .iter()
                 .map(|agent| self.view_agent_item(agent))
                 .collect();
             column![
@@ -847,17 +861,12 @@ impl TaskQueueWidget {
                 header,
                 Space::new().height(8),
                 scrollable(
-                    column![
-                        session_section,
-                        Space::new().height(8),
-                        sub_section,
-                    ]
-                    .spacing(4)
+                    column![session_section, Space::new().height(8), sub_section,].spacing(4)
                 )
                 .height(Length::Fill),
             ]
             .spacing(8)
-            .padding(12)
+            .padding(12),
         )
         .style(move |_| container::Style {
             background: Some(iced::Background::Color(c.bg)),
@@ -886,7 +895,9 @@ impl TaskQueueWidget {
             AgentStatus::Completed => c.accent,
         };
 
-        let name = agent.name.as_deref()
+        let name = agent
+            .name
+            .as_deref()
             .unwrap_or(&agent.id[..8.min(agent.id.len())]);
 
         let task_info = if let Some(task_id) = &agent.current_task_id {
@@ -905,22 +916,16 @@ impl TaskQueueWidget {
                 text(agent.agent_type.emoji()).size(14),
                 column![
                     row![
-                        text(name)
-                            .size(12)
-                            .color(c.text_primary),
-                        text(agent.status.emoji())
-                            .size(10)
-                            .color(status_color),
+                        text(name).size(12).color(c.text_primary),
+                        text(agent.status.emoji()).size(10).color(status_color),
                     ]
                     .spacing(4),
-                    text(task_info)
-                        .size(10)
-                        .color(c.text_secondary),
+                    text(task_info).size(10).color(c.text_secondary),
                 ]
                 .spacing(2),
             ]
             .spacing(8)
-            .align_y(Alignment::Center)
+            .align_y(Alignment::Center),
         )
         .on_press(TaskQueueMessage::SelectAgent(agent_id))
         .padding([6, 10])
@@ -962,9 +967,11 @@ impl TaskQueueWidget {
         .spacing(8)
         .align_y(Alignment::Center);
 
-        let history_items: Vec<Element<TaskQueueMessage>> = self.task_history.iter()
-            .rev()  // Most recent first
-            .take(20)  // Limit display
+        let history_items: Vec<Element<TaskQueueMessage>> = self
+            .task_history
+            .iter()
+            .rev() // Most recent first
+            .take(20) // Limit display
             .map(|entry| self.view_history_item(entry))
             .collect();
 
@@ -974,21 +981,15 @@ impl TaskQueueWidget {
                 .color(c.text_secondary)
                 .into()
         } else {
-            scrollable(
-                column(history_items).spacing(4)
-            )
-            .height(Length::Fill)
-            .into()
+            scrollable(column(history_items).spacing(4))
+                .height(Length::Fill)
+                .into()
         };
 
         container(
-            column![
-                header,
-                Space::new().height(8),
-                history_list,
-            ]
-            .spacing(8)
-            .padding(12)
+            column![header, Space::new().height(8), history_list,]
+                .spacing(8)
+                .padding(12),
         )
         .style(move |_| container::Style {
             background: Some(iced::Background::Color(c.bg)),
@@ -1005,7 +1006,10 @@ impl TaskQueueWidget {
     }
 
     /// Render a single history item
-    fn view_history_item<'a>(&'a self, entry: &'a TaskHistoryEntry) -> Element<'a, TaskQueueMessage> {
+    fn view_history_item<'a>(
+        &'a self,
+        entry: &'a TaskHistoryEntry,
+    ) -> Element<'a, TaskQueueMessage> {
         let c = &self.colors;
         let task = &entry.task;
 
@@ -1020,9 +1024,7 @@ impl TaskQueueWidget {
             _ => c.text_secondary,
         };
 
-        let duration_text = entry.duration_secs
-            .map(format_duration)
-            .unwrap_or_default();
+        let duration_text = entry.duration_secs.map(format_duration).unwrap_or_default();
 
         container(
             row![
@@ -1049,7 +1051,7 @@ impl TaskQueueWidget {
                 .spacing(2),
             ]
             .spacing(8)
-            .align_y(Alignment::Center)
+            .align_y(Alignment::Center),
         )
         .style(move |_| container::Style {
             background: Some(iced::Background::Color(c.bg_elevated)),
@@ -1073,30 +1075,22 @@ impl TaskQueueWidget {
         match self.layout {
             PanelLayout::Single(panel) => self.view_panel(panel),
             PanelLayout::SideBySide(left, right) => {
-                row![
-                    self.view_panel(left),
-                    self.view_panel(right),
-                ]
-                .spacing(8)
-                .into()
+                row![self.view_panel(left), self.view_panel(right),]
+                    .spacing(8)
+                    .into()
             }
             PanelLayout::Stacked(top, bottom) => {
-                column![
-                    self.view_panel(top),
-                    self.view_panel(bottom),
-                ]
-                .spacing(8)
-                .into()
+                column![self.view_panel(top), self.view_panel(bottom),]
+                    .spacing(8)
+                    .into()
             }
-            PanelLayout::ThreeColumn(left, center, right) => {
-                row![
-                    self.view_panel(left),
-                    self.view_panel(center),
-                    self.view_panel(right),
-                ]
-                .spacing(8)
-                .into()
-            }
+            PanelLayout::ThreeColumn(left, center, right) => row![
+                self.view_panel(left),
+                self.view_panel(center),
+                self.view_panel(right),
+            ]
+            .spacing(8)
+            .into(),
         }
     }
 
@@ -1112,7 +1106,7 @@ impl TaskQueueWidget {
     /// Panel switcher toolbar
     pub fn view_panel_switcher(&self) -> Element<'_, TaskQueueMessage> {
         let c = &self.colors;
-        
+
         let active_panel = match self.layout {
             PanelLayout::Single(p) => Some(p),
             _ => None,
@@ -1142,14 +1136,14 @@ fn panel_tab_button<'a>(
 ) -> Element<'a, TaskQueueMessage> {
     let is_active = active == Some(panel);
     let c = *c;
-    
+
     button(
         row![
             text(icon).size(12),
             text(label).size(11).color(c.text_primary),
         ]
         .spacing(4)
-        .align_y(Alignment::Center)
+        .align_y(Alignment::Center),
     )
     .on_press(TaskQueueMessage::SwitchPanel(panel))
     .padding([6, 10])
@@ -1193,7 +1187,7 @@ pub enum TaskQueueMessage {
     // Connection events
     Connected,
     Disconnected,
-    
+
     // Task data events
     TasksLoaded(Vec<Task>),
     TaskAdded(Task),
@@ -1201,21 +1195,21 @@ pub enum TaskQueueMessage {
     TaskCompleted(String),
     TaskRemoved(String),
     StatsUpdated(QueueStats),
-    
+
     // Agent data events
     AgentsUpdated(Vec<Agent>),
     AgentAdded(Agent),
     AgentRemoved(String),
     AgentStatusChanged { id: String, status: AgentStatus },
-    
+
     // History events
     HistoryLoaded(Vec<TaskHistoryEntry>),
     HistoryEntryAdded(TaskHistoryEntry),
-    
+
     // Layout events
     SetLayout(PanelLayout),
     SwitchPanel(ActivePanel),
-    
+
     // User interactions - Tasks
     SelectTask(String),
     StartTask(String),
@@ -1223,10 +1217,10 @@ pub enum TaskQueueMessage {
     QuickAddInputChanged(String),
     QuickAddSubmit,
     Refresh,
-    
+
     // User interactions - Agents
     SelectAgent(String),
-    
+
     // User interactions - History
     ClearHistory,
 }
@@ -1251,6 +1245,11 @@ fn truncate(s: &str, max_len: usize) -> String {
     if s.chars().count() <= max_len {
         s.to_string()
     } else {
-        format!("{}…", s.chars().take(max_len.saturating_sub(1)).collect::<String>())
+        format!(
+            "{}…",
+            s.chars()
+                .take(max_len.saturating_sub(1))
+                .collect::<String>()
+        )
     }
 }

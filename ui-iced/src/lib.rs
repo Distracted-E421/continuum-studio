@@ -5,6 +5,7 @@
 
 pub mod activity_feed;
 pub mod activity_stream_client;
+pub mod canvas;
 pub mod chat_pipeline;
 pub mod cli_agents;
 pub mod cli_agents_client;
@@ -20,6 +21,7 @@ pub mod orchestrator_panel;
 pub mod parked_agents;
 pub mod parked_agents_client;
 pub mod profiling;
+pub mod scp;
 pub mod services;
 pub mod sessions;
 pub mod settings;
@@ -36,6 +38,17 @@ pub use activity_feed::{
     FilterType,
 };
 pub use activity_stream_client::{spawn_activity_stream, DEFAULT_ACTIVITY_WS_URL};
+pub use canvas::Canvas as ScpCanvas;
+pub use canvas::{
+    canvas_dbus_subscription, canvas_tab_bar, handle_deep_link, view_activity_stream,
+    view_thinking_vis, ActivityFilters, ActivityLayoutError, ActivityStreamCanvas,
+    ActivityStreamMessage, Canvas, CanvasChromeMessage, CanvasError, CanvasPaneMessage,
+    CanvasPersistence, CanvasRegistry, DeepLink, DecisionGraphMsg, DecisionTreeCanvas,
+    DecisionTreeMsg, DisclosureLevel, GroupBy, HostedCanvas, ScpActivityWsEvent, StubCanvas,
+    StubCanvasMsg, ThinkingParser, ThinkingPreference, ThinkingViewMode, ThinkingVisCanvas,
+    ThinkingVisMessage, TreeLayout, ViewMode, ZOOM_MAX, ZOOM_MIN, CANVAS_DBUS_INTERFACE,
+    CANVAS_DBUS_PATH, CANVAS_DBUS_WELL_KNOWN, DEFAULT_SCP_ACTIVITY_WS_URL,
+};
 pub use cli_agents::{
     view_cli_agents_tab, AgentMode as CLIAgentMode, CLIAgent, CLIAgentEvent, CLIAgentMessage,
     CLIAgentStatus, CLIAgentTask, CLIAgentsState, CLIAgentsView, CLIEventType,

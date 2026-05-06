@@ -62,7 +62,10 @@ pub enum CoreRequest {
     /// List installed versions only
     GetInstalled,
     /// Launch a specific version
-    LaunchVersion { version: String, folder: Option<String> },
+    LaunchVersion {
+        version: String,
+        folder: Option<String>,
+    },
     /// Download/install a version
     InstallVersion { version: String },
     /// Uninstall a version (AppImage only)
@@ -131,23 +134,34 @@ impl CoreRequest {
             CoreRequest::InstallVersion { version } => {
                 ("versions_download", serde_json::json!({"version": version}))
             }
-            CoreRequest::UninstallVersion { version } => {
-                ("versions_uninstall", serde_json::json!({"version": version}))
-            }
-            CoreRequest::UninstallVersionExtended { version, remove_data, keep_auth } => {
-                ("versions_uninstall", serde_json::json!({
+            CoreRequest::UninstallVersion { version } => (
+                "versions_uninstall",
+                serde_json::json!({"version": version}),
+            ),
+            CoreRequest::UninstallVersionExtended {
+                version,
+                remove_data,
+                keep_auth,
+            } => (
+                "versions_uninstall",
+                serde_json::json!({
                     "version": version,
                     "remove_data": remove_data,
                     "keep_auth": keep_auth,
-                }))
-            }
-            CoreRequest::BatchUninstallVersions { versions, remove_data, keep_auth } => {
-                ("versions_batch_uninstall", serde_json::json!({
+                }),
+            ),
+            CoreRequest::BatchUninstallVersions {
+                versions,
+                remove_data,
+                keep_auth,
+            } => (
+                "versions_batch_uninstall",
+                serde_json::json!({
                     "versions": versions,
                     "remove_data": remove_data,
                     "keep_auth": keep_auth,
-                }))
-            }
+                }),
+            ),
             CoreRequest::GetDiskUsageAll => ("versions_disk_usage_all", serde_json::json!({})),
             CoreRequest::RefreshVersions => ("versions_refresh", serde_json::json!({})),
             CoreRequest::UpdateVersions => ("versions_update", serde_json::json!({})),
@@ -170,24 +184,27 @@ impl CoreRequest {
             CoreRequest::RefreshWorkspaceGit { id } => {
                 ("workspaces_refresh_git", serde_json::json!({"id": id}))
             }
-            CoreRequest::GetAuthStatus { version } => {
-                ("auth_version_status", serde_json::json!({"version": version}))
-            }
+            CoreRequest::GetAuthStatus { version } => (
+                "auth_version_status",
+                serde_json::json!({"version": version}),
+            ),
             CoreRequest::GetAuthStatuses => ("auth_list_statuses", serde_json::json!({})),
             CoreRequest::ExtractAuth { version } => {
                 ("auth_extract", serde_json::json!({"version": version}))
             }
-            CoreRequest::ApplyAuth { source, target } => {
-                ("auth_apply", serde_json::json!({"source": source, "target": target}))
-            }
+            CoreRequest::ApplyAuth { source, target } => (
+                "auth_apply",
+                serde_json::json!({"source": source, "target": target}),
+            ),
             CoreRequest::ListProfiles => ("auth_list_profiles", serde_json::json!({})),
             CoreRequest::Ping => ("ping", serde_json::json!({})),
         };
-        
+
         serde_json::json!({
             "command": command,
             "params": params
-        }).to_string()
+        })
+        .to_string()
     }
 }
 
@@ -220,7 +237,10 @@ pub enum CoreResponse {
     /// Workspace pinned status changed
     WorkspacePinned { id: String, pinned: bool },
     /// Workspace git stats updated
-    WorkspaceGitStats { id: String, git_stats: Option<GitStats> },
+    WorkspaceGitStats {
+        id: String,
+        git_stats: Option<GitStats>,
+    },
     /// Auth status for a single version
     AuthStatus(AuthStatus),
     /// Auth statuses for all installed versions
@@ -230,9 +250,17 @@ pub enum CoreResponse {
     /// Auth extraction failed (Phase 2)
     AuthExtractFailed { version: String, error: String },
     /// Auth applied successfully (Phase 2)
-    AuthApplied { source: String, target: String, email: String },
+    AuthApplied {
+        source: String,
+        target: String,
+        email: String,
+    },
     /// Auth application failed (Phase 2)
-    AuthApplyFailed { source: String, target: String, error: String },
+    AuthApplyFailed {
+        source: String,
+        target: String,
+        error: String,
+    },
     /// List of stored auth profiles (Phase 2)
     AuthProfiles(Vec<AuthProfile>),
     /// Pong response
@@ -266,15 +294,16 @@ pub enum CoreResponse {
 impl CoreResponse {
     /// Parse from JSON format sent by Elixir Core
     pub fn from_json(json_str: &str) -> Result<Self, String> {
-        let value: serde_json::Value = serde_json::from_str(json_str)
-            .map_err(|e| format!("JSON parse error: {}", e))?;
-        
-        let event = value.get("event")
+        let value: serde_json::Value =
+            serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {}", e))?;
+
+        let event = value
+            .get("event")
             .and_then(|v| v.as_str())
             .ok_or("Missing event field")?;
-        
+
         let data = value.get("data").cloned().unwrap_or(serde_json::json!({}));
-        
+
         match event {
             "versions_list" => {
                 let mut versions: Vec<CursorVersion> = serde_json::from_value(data)
@@ -291,50 +320,59 @@ impl CoreResponse {
                 Ok(CoreResponse::InstalledVersions(versions))
             }
             "version_running" => {
-                let version = data.get("version")
+                let version = data
+                    .get("version")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let data_dir = data.get("data_dir")
+                let data_dir = data
+                    .get("data_dir")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
                 Ok(CoreResponse::VersionRunning { version, data_dir })
             }
             "version_download_started" => {
-                let version = data.get("version")
+                let version = data
+                    .get("version")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
                 Ok(CoreResponse::DownloadStarted { version })
             }
             "version_downloaded" => {
-                let version = data.get("version")
+                let version = data
+                    .get("version")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let path = data.get("path")
+                let path = data
+                    .get("path")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
                 Ok(CoreResponse::DownloadCompleted { version, path })
             }
             "version_download_failed" => {
-                let version = data.get("version")
+                let version = data
+                    .get("version")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let error = data.get("error")
+                let error = data
+                    .get("error")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown error")
                     .to_string();
                 Ok(CoreResponse::DownloadFailed { version, error })
             }
             "launch_result" => {
-                let success = data.get("success")
+                let success = data
+                    .get("success")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                let message = data.get("message")
+                let message = data
+                    .get("message")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -361,13 +399,25 @@ impl CoreResponse {
                 Ok(CoreResponse::WorkspaceRegistered(workspace))
             }
             "workspace_pinned" => {
-                let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let pinned = data.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+                let id = data
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let pinned = data
+                    .get("pinned")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 Ok(CoreResponse::WorkspacePinned { id, pinned })
             }
             "workspace_git_stats" => {
-                let id = data.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let git_stats: Option<GitStats> = data.get("git_stats")
+                let id = data
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let git_stats: Option<GitStats> = data
+                    .get("git_stats")
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
                 Ok(CoreResponse::WorkspaceGitStats { id, git_stats })
             }
@@ -387,45 +437,61 @@ impl CoreResponse {
                 Ok(CoreResponse::AuthExtracted(profile))
             }
             "auth_extract_failed" => {
-                let version = data.get("version")
+                let version = data
+                    .get("version")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let error = data.get("error")
+                let error = data
+                    .get("error")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown error")
                     .to_string();
                 Ok(CoreResponse::AuthExtractFailed { version, error })
             }
             "auth_applied" => {
-                let source = data.get("source")
+                let source = data
+                    .get("source")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let target = data.get("target")
+                let target = data
+                    .get("target")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let email = data.get("email")
+                let email = data
+                    .get("email")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                Ok(CoreResponse::AuthApplied { source, target, email })
+                Ok(CoreResponse::AuthApplied {
+                    source,
+                    target,
+                    email,
+                })
             }
             "auth_apply_failed" => {
-                let source = data.get("source")
+                let source = data
+                    .get("source")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let target = data.get("target")
+                let target = data
+                    .get("target")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let error = data.get("error")
+                let error = data
+                    .get("error")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown error")
                     .to_string();
-                Ok(CoreResponse::AuthApplyFailed { source, target, error })
+                Ok(CoreResponse::AuthApplyFailed {
+                    source,
+                    target,
+                    error,
+                })
             }
             "auth_profiles" => {
                 let profiles: Vec<AuthProfile> = serde_json::from_value(data)
@@ -433,18 +499,20 @@ impl CoreResponse {
                 Ok(CoreResponse::AuthProfiles(profiles))
             }
             "versions_refresh_result" => {
-                let current_latest = data.get("current_latest")
+                let current_latest = data
+                    .get("current_latest")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let upstream_latest = data.get("upstream_latest")
+                let upstream_latest = data
+                    .get("upstream_latest")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let new_versions: Vec<String> = data.get("new_versions")
+                let new_versions: Vec<String> = data
+                    .get("new_versions")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                     .unwrap_or_default();
-                let new_count = data.get("new_count")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize;
+                let new_count =
+                    data.get("new_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 Ok(CoreResponse::VersionsRefreshResult {
                     current_latest,
                     upstream_latest,
@@ -454,35 +522,41 @@ impl CoreResponse {
             }
             "versions_update_started" => Ok(CoreResponse::VersionsUpdateStarted),
             "versions_updated" => {
-                let new_count = data.get("new_count")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize;
+                let new_count =
+                    data.get("new_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 Ok(CoreResponse::VersionsUpdated { new_count })
             }
             "versions_update_failed" => {
-                let reason = data.get("reason")
+                let reason = data
+                    .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown error")
                     .to_string();
                 Ok(CoreResponse::VersionsUpdateFailed { reason })
             }
             "versions_updater_status" => {
-                let current_latest = data.get("current_latest")
+                let current_latest = data
+                    .get("current_latest")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let upstream_latest = data.get("upstream_latest")
+                let upstream_latest = data
+                    .get("upstream_latest")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let new_versions_available = data.get("new_versions_available")
+                let new_versions_available = data
+                    .get("new_versions_available")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
-                let last_check = data.get("last_check")
+                let last_check = data
+                    .get("last_check")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let last_update = data.get("last_update")
+                let last_update = data
+                    .get("last_update")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let check_interval_hours = data.get("check_interval_hours")
+                let check_interval_hours = data
+                    .get("check_interval_hours")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(1.0);
                 Ok(CoreResponse::UpdaterStatus {
@@ -496,7 +570,8 @@ impl CoreResponse {
             }
             "pong" => Ok(CoreResponse::Pong),
             "error" => {
-                let message = data.get("message")
+                let message = data
+                    .get("message")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown error")
                     .to_string();
@@ -547,7 +622,7 @@ pub struct CursorVersion {
     /// Version notes (e.g., "Last version with custom modes")
     #[serde(default)]
     pub notes: Option<String>,
-    
+
     // UI state fields (not from Elixir)
     #[serde(skip)]
     pub status: VersionStatus,
@@ -935,7 +1010,7 @@ mod tests {
         assert_eq!(ConnectionState::Connected, ConnectionState::Connected);
         assert_eq!(ConnectionState::Connecting, ConnectionState::Connecting);
         assert_ne!(ConnectionState::Connected, ConnectionState::Disconnected);
-        
+
         assert_eq!(
             ConnectionState::Reconnecting { attempt: 1 },
             ConnectionState::Reconnecting { attempt: 1 }

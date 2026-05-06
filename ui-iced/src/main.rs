@@ -12,6 +12,10 @@ use tokio::sync::mpsc;
 
 use continuum_studio_iced::profile_span;
 
+use continuum_studio_iced::activity_feed::{
+    view_activity_feed, ActivityFeedState, ActivityMessage,
+};
+use continuum_studio_iced::activity_stream_client::spawn_activity_stream;
 use continuum_studio_iced::chat_pipeline::{
     fmt_bytes,
     fmt_num,
@@ -40,17 +44,6 @@ use continuum_studio_iced::cli_agents::{
     view_cli_agents_tab, CLIAgentMessage, CLIAgentTask, CLIAgentsState,
 };
 use continuum_studio_iced::cli_agents_client::{CLIAgentsHttpClient, SpawnAgentWithPresetParams};
-use continuum_studio_iced::orchestrator_panel::{
-    view_orchestrator_panel, OrchestratorMessage, OrchestratorPanelState,
-};
-use continuum_studio_iced::activity_feed::{
-    view_activity_feed, ActivityFeedState, ActivityMessage,
-};
-use continuum_studio_iced::parked_agents::{
-    view_parked_agents_panel, ParkedAgentTask, ParkedMessage,
-};
-use continuum_studio_iced::parked_agents_client::ParkedAgentsHttpClient;
-use continuum_studio_iced::dialog_client::OrchestratorMode;
 use continuum_studio_iced::coordinator_client::{
     Agent as CoordAgent, AgentStatus as CoordAgentStatus, Conflict as CoordConflict,
     CoordinatorHttpClient,
@@ -59,12 +52,19 @@ use continuum_studio_iced::core::{
     spawn_core_connection, AuthProfile, AuthState, AuthStatus, ConnectionState, CoreRequest,
     CoreResponse, CursorVersion, VersionStatus, Workspace, DEFAULT_SOCKET_PATH,
 };
+use continuum_studio_iced::dialog_client::OrchestratorMode;
 use continuum_studio_iced::feed_client::{
     spawn_feed_websocket, FeedEntry, FeedEvent, FeedHttpClient, FeedSource, FeedStats,
 };
-use continuum_studio_iced::activity_stream_client::spawn_activity_stream;
 use continuum_studio_iced::log_capture::{init_logger, LogBuffer};
 use continuum_studio_iced::monitoring::{DashboardData, SessionMetrics, SessionMonitor};
+use continuum_studio_iced::orchestrator_panel::{
+    view_orchestrator_panel, OrchestratorMessage, OrchestratorPanelState,
+};
+use continuum_studio_iced::parked_agents::{
+    view_parked_agents_panel, ParkedAgentTask, ParkedMessage,
+};
+use continuum_studio_iced::parked_agents_client::ParkedAgentsHttpClient;
 use continuum_studio_iced::services::{ServiceConfig, ServiceInfo, ServiceManager, ServiceStatus};
 use continuum_studio_iced::sessions::{CursorSession, SessionTracker};
 use continuum_studio_iced::settings::{CosmicPreset, Settings, ThemePreference};
@@ -74,6 +74,11 @@ use continuum_studio_iced::subagents::{
 use continuum_studio_iced::theme::{AppColors, CosmicThemePreset};
 use continuum_studio_iced::updater::{
     ForgeType, InstallationType, UpdateChannel, UpdateChecker, UpdateInfo,
+};
+use continuum_studio_iced::{
+    canvas_dbus_subscription, canvas_tab_bar, handle_deep_link, view_activity_stream,
+    ActivityStreamCanvas, ActivityStreamMessage, Canvas as SynapsixCanvas, CanvasChromeMessage,
+    CanvasPaneMessage, CanvasPersistence, CanvasRegistry, DeepLink,
 };
 use std::collections::HashMap;
 
@@ -237,12 +242,89 @@ fn window_title(state: &ContinuumStudio, window_id: window::Id) -> String {
         .unwrap_or_else(|| "Continuum Studio".to_string())
 }
 
+fn schedule_scp_canvas_save(state: &mut ContinuumStudio, id: &str) {
+    state.scp_canvas_dirty.insert(id.to_string());
+    state.scp_canvas_save_deadline =
+        Some(std::time::Instant::now() + std::time::Duration::from_millis(800));
+}
+
+fn scp_canvas_tab_subscriptions(state: &ContinuumStudio) -> Subscription<Message> {
+    if state.current_view != View::Cursor || state.cursor_tab != CursorTab::ScpCanvases {
+        return Subscription::none();
+    }
+    let subs: Vec<_> = state
+        .scp_canvas_tabs
+        .iter()
+        .filter_map(|id| {
+            state.scp_canvas_registry.get(id).map(|c| {
+                c.subscription()
+                    .with(id.clone())
+                    .map(|(cid, m)| Message::ScpCanvasPane(cid, m))
+            })
+        })
+        .collect();
+    Subscription::batch(subs)
+}
+
+fn scp_canvas_autosave_subscription(state: &ContinuumStudio) -> Subscription<Message> {
+    if state.scp_canvas_dirty.is_empty() {
+        return Subscription::none();
+    }
+    iced::time::every(std::time::Duration::from_millis(200)).map(|_| Message::ScpCanvasAutosaveTick)
+}
+
+fn view_scp_canvas_workspace(state: &ContinuumStudio) -> Element<'_, Message> {
+    use continuum_studio_iced::scp::CanvasType;
+
+    let chrome = canvas_tab_bar(
+        &state.scp_canvas_tabs,
+        state.scp_active_canvas.as_deref(),
+        &state.scp_canvas_registry,
+    )
+    .map(Message::ScpCanvasChrome);
+
+    let open_row = row![
+        button("+ Activity stream").on_press(Message::OpenScpCanvas(
+            CanvasType::ActivityStream,
+            serde_json::json!({}),
+        )),
+        button("+ Decision tree").on_press(Message::OpenScpCanvas(
+            CanvasType::DecisionTree,
+            serde_json::json!({}),
+        )),
+        button("+ Thinking").on_press(Message::OpenScpCanvas(
+            CanvasType::ThinkingVis,
+            serde_json::json!({}),
+        )),
+        button("+ Topology").on_press(Message::OpenScpCanvas(
+            CanvasType::Topology,
+            serde_json::json!({}),
+        )),
+    ]
+    .spacing(8)
+    .padding([4, 0]);
+
+    let body: Element<Message> = if let Some(id) = state.scp_active_canvas.as_ref() {
+        state
+            .scp_canvas_registry
+            .get(id)
+            .map(|c| c.view().map(move |m| Message::ScpCanvasPane(id.clone(), m)))
+            .unwrap_or_else(|| text("Missing canvas").into())
+    } else {
+        text("synapsix://canvas/… deep links (D-Bus OpenCanvas) or use the buttons above.")
+            .size(13)
+            .into()
+    };
+
+    column![chrome, open_row, body].spacing(12).into()
+}
+
 /// Combined subscription for all windows
 fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
     // Lazy WebSocket optimization: only connect when tab is visible
     let on_activity_tab =
         state.current_view == View::Cursor && state.cursor_tab == CursorTab::AgentActivity;
-    
+
     Subscription::batch([
         // Core IPC connection
         core_subscription(),
@@ -254,10 +336,21 @@ fn subscription(state: &ContinuumStudio) -> Subscription<Message> {
         task_queue_subscription(true),
         // Dialog daemon monitor (always active for dialog panel)
         dialog_daemon_subscription(),
+        canvas_dbus_subscription().map(Message::DeepLinkUri),
+        scp_canvas_autosave_subscription(state),
+        scp_canvas_tab_subscriptions(state),
         // Activity feed WebSocket connection (lazy: only when on AgentActivity tab)
         activity_feed_subscription(on_activity_tab),
         // Agent activity stream from dialog daemon (lazy: only when on AgentActivity tab)
         activity_stream_subscription(on_activity_tab),
+        scp_activity_stream_subscription(
+            matches!(state.task_queue_panel, TaskQueuePanel::ActivityStream)
+                || matches!(
+                    state.task_queue_secondary_panel,
+                    TaskQueuePanel::ActivityStream
+                ),
+            state.activity_stream_canvas.ws_url().to_string(),
+        ),
         // Agent coordinator polling (lazy: only when on Dashboard view)
         coordinator_poll_subscription(state.current_view == View::Dashboard),
         // CLI agents WebSocket (only when on Cursor view + CLIAgents tab)
@@ -298,9 +391,7 @@ fn toast_timeout_subscription(toast: Option<&Toast>) -> iced::Subscription<Messa
             let timeout = std::time::Duration::from_secs(3);
             if elapsed >= timeout {
                 // Already expired, dismiss immediately via a one-shot
-                iced::Subscription::run(|| {
-                    futures::stream::once(async { Message::DismissToast })
-                })
+                iced::Subscription::run(|| futures::stream::once(async { Message::DismissToast }))
             } else {
                 // Schedule dismissal after remaining time
                 let remaining = timeout - elapsed;
@@ -313,8 +404,7 @@ fn toast_timeout_subscription(toast: Option<&Toast>) -> iced::Subscription<Messa
 
 /// Memory stats logging subscription (every 60 seconds)
 fn memory_stats_subscription() -> iced::Subscription<Message> {
-    iced::time::every(std::time::Duration::from_secs(60))
-        .map(|_| Message::UpdateMemoryStats)
+    iced::time::every(std::time::Duration::from_secs(60)).map(|_| Message::UpdateMemoryStats)
 }
 
 /// Subscription to monitor dialog daemon status
@@ -463,6 +553,14 @@ fn task_queue_websocket_worker() -> impl iced::futures::Stream<Item = Message> {
             }
         },
     )
+}
+
+/// SCP Activity Aggregator WebSocket (`/scp/activity`), wired into Activity Stream canvas
+fn scp_activity_stream_subscription(active: bool, ws_url: String) -> iced::Subscription<Message> {
+    if !active {
+        return iced::Subscription::none();
+    }
+    ActivityStreamCanvas::websocket_subscription(ws_url).map(Message::ActivityStream)
 }
 
 /// Activity feed WebSocket subscription
@@ -673,30 +771,26 @@ fn keyboard_shortcut_subscription() -> iced::Subscription<Message> {
     use iced::keyboard::{self, Key, Modifiers};
 
     event::listen_with(|event, _status, _id| match event {
-        Event::Keyboard(keyboard::Event::KeyPressed {
-            key,
-            modifiers,
-            ..
-        }) => {
+        Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
             let ctrl = modifiers.contains(Modifiers::CTRL);
 
             match (ctrl, &key) {
                 // Ctrl+1: UserActive mode
-                (true, Key::Character(c)) if c.as_str() == "1" => {
-                    Some(Message::KeyboardShortcut(KeyboardShortcut::SetModeUserActive))
-                }
+                (true, Key::Character(c)) if c.as_str() == "1" => Some(Message::KeyboardShortcut(
+                    KeyboardShortcut::SetModeUserActive,
+                )),
                 // Ctrl+2: UserDelegate mode
-                (true, Key::Character(c)) if c.as_str() == "2" => {
-                    Some(Message::KeyboardShortcut(KeyboardShortcut::SetModeUserDelegate))
-                }
+                (true, Key::Character(c)) if c.as_str() == "2" => Some(Message::KeyboardShortcut(
+                    KeyboardShortcut::SetModeUserDelegate,
+                )),
                 // Ctrl+3: Spectator mode
-                (true, Key::Character(c)) if c.as_str() == "3" => {
-                    Some(Message::KeyboardShortcut(KeyboardShortcut::SetModeSpectator))
-                }
+                (true, Key::Character(c)) if c.as_str() == "3" => Some(Message::KeyboardShortcut(
+                    KeyboardShortcut::SetModeSpectator,
+                )),
                 // Ctrl+4: Autonomous mode
-                (true, Key::Character(c)) if c.as_str() == "4" => {
-                    Some(Message::KeyboardShortcut(KeyboardShortcut::SetModeAutonomous))
-                }
+                (true, Key::Character(c)) if c.as_str() == "4" => Some(Message::KeyboardShortcut(
+                    KeyboardShortcut::SetModeAutonomous,
+                )),
                 // Ctrl+H: Toggle history
                 (true, Key::Character(c)) if c.as_str() == "h" => {
                     Some(Message::KeyboardShortcut(KeyboardShortcut::ToggleHistory))
@@ -718,14 +812,16 @@ fn keyboard_shortcut_subscription() -> iced::Subscription<Message> {
 
 /// Triage timeout subscription - processes expired triage items
 /// Only polls when there are items in the triage queue (P1 optimization)
-fn triage_timeout_subscription(active: bool, has_triage_items: bool) -> iced::Subscription<Message> {
+fn triage_timeout_subscription(
+    active: bool,
+    has_triage_items: bool,
+) -> iced::Subscription<Message> {
     if !active || !has_triage_items {
         return iced::Subscription::none();
     }
 
     // Check every second for triage items that need auto-handling
-    iced::time::every(std::time::Duration::from_secs(1))
-        .map(|_| Message::ProcessTriageTimeouts)
+    iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::ProcessTriageTimeouts)
 }
 
 /// Agent dialog polling subscription
@@ -858,6 +954,33 @@ impl ContinuumStudio {
             Task::batch(tasks)
         };
 
+        let scp_canvas_persistence = continuum_studio_iced::CanvasPersistence::open_default()
+            .unwrap_or_else(|e| {
+                log::warn!("SCP canvas persistence unavailable ({}); using :memory:", e);
+                continuum_studio_iced::CanvasPersistence::open(":memory:")
+                    .expect("scp canvas memory db")
+            });
+
+        let mut scp_canvas_registry = continuum_studio_iced::CanvasRegistry::new();
+        let mut scp_canvas_tabs = Vec::new();
+        let mut scp_active_canvas = None;
+        match scp_canvas_persistence.list_sessions() {
+            Ok(sessions) => {
+                for s in sessions {
+                    match scp_canvas_persistence.load(&s.id) {
+                        Ok(c) => {
+                            let sid = c.id().to_string();
+                            scp_canvas_registry.register(c);
+                            scp_canvas_tabs.push(sid);
+                        }
+                        Err(e) => log::warn!("Skip restoring SCP canvas {}: {}", s.id, e),
+                    }
+                }
+                scp_active_canvas = scp_canvas_tabs.first().cloned();
+            }
+            Err(e) => log::warn!("SCP canvas session list failed: {}", e),
+        }
+
         (
             Self {
                 settings,
@@ -940,11 +1063,19 @@ impl ContinuumStudio {
                 connection_tracker: continuum_studio_iced::offline::ConnectionTracker::new(),
                 // Orchestrator Panel: manage CLI agent dialogs
                 orchestrator_state: OrchestratorPanelState::default(),
-                parked_agents_state: continuum_studio_iced::parked_agents::ParkedAgentsPanelState::default(),
+                parked_agents_state:
+                    continuum_studio_iced::parked_agents::ParkedAgentsPanelState::default(),
                 parked_agents_http: ParkedAgentsHttpClient::new(),
                 agent_activity_state: ActivityFeedState::new(),
+                activity_stream_canvas: ActivityStreamCanvas::default(),
                 memory_stats: MemoryStats::default(),
                 toast: None,
+                scp_canvas_registry,
+                scp_canvas_persistence,
+                scp_active_canvas,
+                scp_canvas_tabs,
+                scp_canvas_dirty: std::collections::HashSet::new(),
+                scp_canvas_save_deadline: None,
             },
             startup_task,
         )
@@ -1212,10 +1343,19 @@ struct ContinuumStudio {
     parked_agents_http: ParkedAgentsHttpClient,
     /// Agent activity feed state (FileEdit, Command, ToolCall, Dialog events)
     agent_activity_state: ActivityFeedState,
+    /// SCP Activity Stream canvas (aggregator-backed)
+    activity_stream_canvas: ActivityStreamCanvas,
     /// Memory statistics for performance monitoring
     memory_stats: MemoryStats,
     /// Toast notification (ephemeral feedback, auto-dismisses after 3s)
     toast: Option<Toast>,
+    /// SCP canvas tabs (multi-canvas workspace)
+    scp_canvas_registry: CanvasRegistry,
+    scp_canvas_persistence: CanvasPersistence,
+    scp_active_canvas: Option<String>,
+    scp_canvas_tabs: Vec<String>,
+    scp_canvas_dirty: std::collections::HashSet<String>,
+    scp_canvas_save_deadline: Option<std::time::Instant>,
 }
 
 /// Memory statistics for monitoring app state growth
@@ -1240,11 +1380,15 @@ impl MemoryStats {
     /// Compute current stats from app state
     fn compute(state: &ContinuumStudio) -> Self {
         Self {
-            agents_tracked: state.cli_agents_state.agents.len()
-                + state.coordinator_agents.len(),
+            agents_tracked: state.cli_agents_state.agents.len() + state.coordinator_agents.len(),
             dialogs_cached: state.cli_agents_state.pending_dialogs.len(),
-            activity_items: state.agent_activity_state.events.len(),
-            decision_history: state.orchestrator_state.engine.recent_history(usize::MAX).len(),
+            activity_items: state.agent_activity_state.events.len()
+                + state.activity_stream_canvas.event_count(),
+            decision_history: state
+                .orchestrator_state
+                .engine
+                .recent_history(usize::MAX)
+                .len(),
             triage_queue: state.orchestrator_state.engine.triage_queue().len(),
             updated_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1297,6 +1441,8 @@ enum TaskQueuePanel {
     NewTask,
     /// Activity feed timeline
     Feed,
+    /// SCP Activity Stream (Synapsix aggregator WebSocket)
+    ActivityStream,
     /// Agent coordinator dashboard
     Coordination,
 }
@@ -1349,15 +1495,16 @@ struct WindowState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum CursorTab {
     #[default]
-    Sessions,     // Running Cursor instances
-    SubAgents,    // Sub-agent monitoring
-    CLIAgents,    // Headless CLI agents (NEW!)
+    Sessions, // Running Cursor instances
+    SubAgents,     // Sub-agent monitoring
+    CLIAgents,     // Headless CLI agents (NEW!)
     Orchestrator,  // Orchestrator mode and dialog triage
     ParkedAgents,  // Parked agents awaiting task assignment
     AgentActivity, // Agent activity feed (file edits, commands, dialogs)
     Auth,          // Authentication management
-    Versions,     // Version management
-    Workspaces,   // .code-workspace management
+    Versions,      // Version management
+    ScpCanvases,   // SCP multi-canvas (Synapsix Canvas Protocol)
+    Workspaces,    // .code-workspace management
 }
 
 /// Application messages (Elm architecture)
@@ -1418,6 +1565,8 @@ enum Message {
     ParkedAgentAction(ParkedMessage),
     /// Agent activity feed actions (FileEdit, Command, ToolCall, Dialog events)
     AgentActivityFeed(ActivityMessage),
+    /// SCP unified activity stream canvas (`/scp/activity`)
+    ActivityStream(ActivityStreamMessage),
     /// Task queue actions
     TaskQueueAction(TaskQueueMsg),
 
@@ -1456,6 +1605,15 @@ enum Message {
     ShowToast(String, ToastLevel),
     /// Dismiss the current toast
     DismissToast,
+
+    // === SCP multi-canvas workspace ===
+    DeepLinkUri(String),
+    OpenScpCanvas(continuum_studio_iced::scp::CanvasType, serde_json::Value),
+    CloseScpCanvas(String),
+    SelectScpCanvas(String),
+    ScpCanvasPane(String, CanvasPaneMessage),
+    ScpCanvasAutosaveTick,
+    ScpCanvasChrome(CanvasChromeMessage),
 }
 
 /// Keyboard shortcuts for quick actions
@@ -1928,7 +2086,10 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             }
             // Trigger preset and workspace override fetch when switching to CLI Agents tab
             if tab == CursorTab::ParkedAgents {
-                return Task::perform(async { ParkedMessage::RefreshList }, Message::ParkedAgentAction);
+                return Task::perform(
+                    async { ParkedMessage::RefreshList },
+                    Message::ParkedAgentAction,
+                );
             }
             if tab == CursorTab::CLIAgents && state.cli_agents_state.presets.is_empty() {
                 let client1 = state.cli_agents_http.clone();
@@ -2217,6 +2378,10 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
             state.agent_activity_state.update(msg);
             return Task::none();
         }
+        Message::ActivityStream(msg) => {
+            return SynapsixCanvas::update(&mut state.activity_stream_canvas, msg)
+                .map(Message::ActivityStream);
+        }
         Message::TaskQueueAction(msg) => {
             return handle_task_queue_message(state, msg);
         }
@@ -2247,6 +2412,90 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
         Message::DismissToast => {
             state.toast = None;
         }
+
+        // === SCP canvas workspace ===
+        Message::DeepLinkUri(uri) => match DeepLink::parse(&uri) {
+            Ok(link) => {
+                match handle_deep_link(
+                    link,
+                    &mut state.scp_canvas_registry,
+                    &state.scp_canvas_persistence,
+                    &mut state.scp_canvas_tabs,
+                    &mut state.scp_active_canvas,
+                ) {
+                    Ok(id) => {
+                        state.current_view = View::Cursor;
+                        state.cursor_tab = CursorTab::ScpCanvases;
+                        schedule_scp_canvas_save(state, &id);
+                    }
+                    Err(e) => log::warn!("Deep link: {}", e),
+                }
+            }
+            Err(e) => log::warn!("Bad deep link URI: {}", e),
+        },
+        Message::OpenScpCanvas(ty, params) => match CanvasRegistry::create(ty, params) {
+            Ok(canvas) => {
+                let id = canvas.id().to_string();
+                let _ = state.scp_canvas_persistence.save(&canvas);
+                state.scp_canvas_registry.register(canvas);
+                if !state.scp_canvas_tabs.contains(&id) {
+                    state.scp_canvas_tabs.push(id.clone());
+                }
+                state.scp_active_canvas = Some(id);
+                state.cursor_tab = CursorTab::ScpCanvases;
+                state.current_view = View::Cursor;
+            }
+            Err(e) => log::warn!("OpenScpCanvas: {}", e),
+        },
+        Message::CloseScpCanvas(id) => {
+            state.scp_canvas_tabs.retain(|x| x != &id);
+            state.scp_canvas_registry.remove(&id);
+            let _ = state.scp_canvas_persistence.delete(&id);
+            state.scp_canvas_dirty.remove(&id);
+            if state.scp_active_canvas.as_ref() == Some(&id) {
+                state.scp_active_canvas = state.scp_canvas_tabs.last().cloned();
+            }
+        }
+        Message::SelectScpCanvas(id) => {
+            state.scp_active_canvas = Some(id);
+        }
+        Message::ScpCanvasPane(id, msg) => {
+            let save_target = id.clone();
+            schedule_scp_canvas_save(state, &save_target);
+            if let Some(c) = state.scp_canvas_registry.get_mut(&id) {
+                return c
+                    .update(msg)
+                    .map(move |m| Message::ScpCanvasPane(id.clone(), m));
+            }
+        }
+        Message::ScpCanvasAutosaveTick => {
+            if let Some(deadline) = state.scp_canvas_save_deadline {
+                if std::time::Instant::now() >= deadline {
+                    state.scp_canvas_save_deadline = None;
+                    let ids: Vec<_> = state.scp_canvas_dirty.iter().cloned().collect();
+                    state.scp_canvas_dirty.clear();
+                    for cid in ids {
+                        if let Some(c) = state.scp_canvas_registry.get(&cid) {
+                            let _ = state.scp_canvas_persistence.save(c);
+                        }
+                    }
+                }
+            }
+        }
+        Message::ScpCanvasChrome(m) => match m {
+            CanvasChromeMessage::SelectTab(id) => {
+                state.scp_active_canvas = Some(id);
+            }
+            CanvasChromeMessage::CloseTab(id) => {
+                state.scp_canvas_tabs.retain(|x| x != &id);
+                state.scp_canvas_registry.remove(&id);
+                let _ = state.scp_canvas_persistence.delete(&id);
+                state.scp_canvas_dirty.remove(&id);
+                if state.scp_active_canvas.as_ref() == Some(&id) {
+                    state.scp_active_canvas = state.scp_canvas_tabs.last().cloned();
+                }
+            }
+        },
 
         // === Multi-Window Message Handlers ===
         Message::OpenWindow(window_type) => {
@@ -3103,13 +3352,15 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 } => {
                     log::info!(
                         "Version check: {} new versions available (current: {:?}, upstream: {:?})",
-                        new_count, current_latest, upstream_latest
+                        new_count,
+                        current_latest,
+                        upstream_latest
                     );
                     state.new_versions_available = new_versions;
                     state.upstream_latest = upstream_latest;
                     state.checking_version_updates = false;
                     state.last_version_check = Some(chrono::Local::now().to_rfc3339());
-                    
+
                     // Show toast if new versions available
                     if new_count > 0 {
                         return Task::done(Message::ShowToast(
@@ -3154,7 +3405,9 @@ fn update(state: &mut ContinuumStudio, message: Message) -> Task<Message> {
                 } => {
                     log::info!(
                         "Updater status: current={:?}, upstream={:?}, new={}",
-                        current_latest, upstream_latest, new_versions_available
+                        current_latest,
+                        upstream_latest,
+                        new_versions_available
                     );
                     state.upstream_latest = upstream_latest;
                     state.last_version_check = last_check;
@@ -3233,28 +3486,39 @@ fn view_toast(toast: &Toast) -> Element<'_, Message> {
             ..Default::default()
         });
 
-    let toast_content = row![icon, Space::new().width(8), message, Space::new().width(12), dismiss_btn]
-        .align_y(iced::Alignment::Center);
+    let toast_content = row![
+        icon,
+        Space::new().width(8),
+        message,
+        Space::new().width(12),
+        dismiss_btn
+    ]
+    .align_y(iced::Alignment::Center);
 
     let bg_color = toast.level.color();
 
-    let toast_box = container(toast_content)
-        .padding([8, 16])
-        .style(move |_| iced::widget::container::Style {
-            background: Some(iced::Background::Color(bg_color)),
-            border: iced::Border {
-                radius: 6.0.into(),
-                width: 1.0,
-                color: iced::Color::from_rgba(1.0, 1.0, 1.0, 0.1),
-            },
-            text_color: Some(iced::Color::WHITE),
-            ..Default::default()
-        });
+    let toast_box =
+        container(toast_content)
+            .padding([8, 16])
+            .style(move |_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(bg_color)),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: 1.0,
+                    color: iced::Color::from_rgba(1.0, 1.0, 1.0, 0.1),
+                },
+                text_color: Some(iced::Color::WHITE),
+                ..Default::default()
+            });
 
     // Position at bottom-center of screen
     container(
-        column![Space::new().height(Length::Fill), toast_box, Space::new().height(20),]
-            .align_x(iced::Alignment::Center),
+        column![
+            Space::new().height(Length::Fill),
+            toast_box,
+            Space::new().height(20),
+        ]
+        .align_x(iced::Alignment::Center),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -3295,6 +3559,7 @@ fn view_task_queue_window(state: &ContinuumStudio) -> Element<'_, Message> {
     let history_active = matches!(state.task_queue_panel, TaskQueuePanel::History);
     let new_task_active = matches!(state.task_queue_panel, TaskQueuePanel::NewTask);
     let feed_active = matches!(state.task_queue_panel, TaskQueuePanel::Feed);
+    let scp_active = matches!(state.task_queue_panel, TaskQueuePanel::ActivityStream);
     let coord_active = matches!(state.task_queue_panel, TaskQueuePanel::Coordination);
 
     let tasks_bg = if tasks_active {
@@ -3318,6 +3583,11 @@ fn view_task_queue_window(state: &ContinuumStudio) -> Element<'_, Message> {
         colors.surface
     };
     let feed_bg = if feed_active {
+        colors.accent
+    } else {
+        colors.surface
+    };
+    let scp_bg = if scp_active {
         colors.accent
     } else {
         colors.surface
@@ -3348,6 +3618,17 @@ fn view_task_queue_window(state: &ContinuumStudio) -> Element<'_, Message> {
                 .padding([6, 12])
                 .style(move |_theme, _status| button::Style {
                     background: Some(iced::Background::Color(feed_bg)),
+                    text_color: colors.text_primary,
+                    border: iced::Border::default().rounded(4),
+                    ..Default::default()
+                }),
+            button(text("SCP").size(12).color(colors.text_primary))
+                .on_press(Message::TaskQueueAction(TaskQueueMsg::SwitchPanel(
+                    TaskQueuePanel::ActivityStream
+                )))
+                .padding([6, 12])
+                .style(move |_theme, _status| button::Style {
+                    background: Some(iced::Background::Color(scp_bg)),
                     text_color: colors.text_primary,
                     border: iced::Border::default().rounded(4),
                     ..Default::default()
@@ -3434,6 +3715,7 @@ fn view_task_queue_window(state: &ContinuumStudio) -> Element<'_, Message> {
             make_sec_btn(TaskQueuePanel::Tasks, "Tasks"),
             make_sec_btn(TaskQueuePanel::Agents, "Agents"),
             make_sec_btn(TaskQueuePanel::Feed, "Feed"),
+            make_sec_btn(TaskQueuePanel::ActivityStream, "SCP"),
             make_sec_btn(TaskQueuePanel::History, "History"),
             make_sec_btn(TaskQueuePanel::Coordination, "Coord"),
         ]
@@ -3452,6 +3734,7 @@ fn view_task_queue_window(state: &ContinuumStudio) -> Element<'_, Message> {
             TaskQueuePanel::History => view_task_queue_history_panel(state),
             TaskQueuePanel::NewTask => view_task_queue_new_task_panel(state),
             TaskQueuePanel::Feed => view_activity_feed_panel(state),
+            TaskQueuePanel::ActivityStream => view_scp_activity_stream_panel(state),
             TaskQueuePanel::Coordination => view_coordinator_panel(state),
         },
         TaskQueueLayout::SideBySide => row![
@@ -3549,6 +3832,7 @@ fn view_panel_container<'a>(
         TaskQueuePanel::History => "History",
         TaskQueuePanel::NewTask => "New Task",
         TaskQueuePanel::Feed => "Activity Feed",
+        TaskQueuePanel::ActivityStream => "SCP Activity Stream",
         TaskQueuePanel::Coordination => "Agent Coordinator",
     };
 
@@ -3560,6 +3844,7 @@ fn view_panel_container<'a>(
         TaskQueuePanel::History => view_task_queue_history_panel(state),
         TaskQueuePanel::NewTask => view_task_queue_new_task_panel(state),
         TaskQueuePanel::Feed => view_activity_feed_panel(state),
+        TaskQueuePanel::ActivityStream => view_scp_activity_stream_panel(state),
         TaskQueuePanel::Coordination => view_coordinator_panel(state),
     };
 
@@ -4758,7 +5043,12 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
         .cli_agents_state
         .agents
         .values()
-        .filter(|a| matches!(a.status, continuum_studio_iced::cli_agents::CLIAgentStatus::Running))
+        .filter(|a| {
+            matches!(
+                a.status,
+                continuum_studio_iced::cli_agents::CLIAgentStatus::Running
+            )
+        })
         .count();
 
     let total_count = session_agents.len() + sub_agents.len() + cli_agent_count;
@@ -4816,9 +5106,7 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
                     )
                     .padding([2, 4]),
                     column![
-                        text(workspace_name)
-                            .size(12)
-                            .color(colors.text_primary),
+                        text(workspace_name).size(12).color(colors.text_primary),
                         text(&agent.id[..8.min(agent.id.len())])
                             .size(10)
                             .color(colors.text_secondary),
@@ -4850,11 +5138,7 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
             );
         } else {
             for agent in &sub_agents {
-                let focus_desc = agent
-                    .focus
-                    .description
-                    .as_deref()
-                    .unwrap_or("working...");
+                let focus_desc = agent.focus.description.as_deref().unwrap_or("working...");
                 let agent_row = row![
                     container(
                         text(agent.status.icon())
@@ -4866,9 +5150,7 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
                         text(&agent.id[..8.min(agent.id.len())])
                             .size(12)
                             .color(colors.text_primary),
-                        text(focus_desc)
-                            .size(10)
-                            .color(colors.text_secondary),
+                        text(focus_desc).size(10).color(colors.text_secondary),
                     ]
                     .spacing(2),
                 ]
@@ -4886,7 +5168,12 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
             .cli_agents_state
             .agents
             .values()
-            .filter(|a| matches!(a.status, continuum_studio_iced::cli_agents::CLIAgentStatus::Running))
+            .filter(|a| {
+                matches!(
+                    a.status,
+                    continuum_studio_iced::cli_agents::CLIAgentStatus::Running
+                )
+            })
             .collect();
 
         let mut section = column![
@@ -4904,11 +5191,7 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
             );
         } else {
             for agent in &running_cli_agents {
-                let workspace_name = agent
-                    .workspace
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("unknown");
+                let workspace_name = agent.workspace.rsplit('/').next().unwrap_or("unknown");
                 let agent_row = row![
                     container(
                         text("▶")
@@ -4917,9 +5200,7 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
                     )
                     .padding([2, 4]),
                     column![
-                        text(workspace_name)
-                            .size(12)
-                            .color(colors.text_primary),
+                        text(workspace_name).size(12).color(colors.text_primary),
                         text(&agent.id[..8.min(agent.id.len())])
                             .size(10)
                             .color(colors.text_secondary),
@@ -4947,7 +5228,12 @@ fn view_task_queue_agents_panel(state: &ContinuumStudio) -> Element<'_, Message>
         header,
         Space::new().height(12),
         scrollable(
-            column![session_agents_section, sub_agents_section, cli_agents_section,].spacing(0)
+            column![
+                session_agents_section,
+                sub_agents_section,
+                cli_agents_section,
+            ]
+            .spacing(0)
         )
         .height(Length::Fill),
         info_text,
@@ -5919,6 +6205,7 @@ fn view_cursor(state: &ContinuumStudio) -> Element<'_, Message> {
         tab_button("📋 Activity", CursorTab::AgentActivity),
         tab_button("🔑 Auth", CursorTab::Auth),
         tab_button("📦 Versions", CursorTab::Versions),
+        tab_button("📐 SCP canvases", CursorTab::ScpCanvases),
         tab_button("📁 Workspaces", CursorTab::Workspaces),
     ]
     .spacing(4)
@@ -5943,6 +6230,7 @@ fn view_cursor(state: &ContinuumStudio) -> Element<'_, Message> {
         CursorTab::AgentActivity => view_agent_activity(state),
         CursorTab::Auth => view_auth(state),
         CursorTab::Versions => view_cursor_versions(state),
+        CursorTab::ScpCanvases => view_scp_canvas_workspace(state),
         CursorTab::Workspaces => view_workspaces(state),
     };
 
@@ -6105,16 +6393,22 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<'_, Message> {
         container(
             row![
                 text("🆕").size(14),
-                text(format!("{} update{} available!", new_version_count, if new_version_count > 1 { "s" } else { "" }))
-                    .size(12)
-                    .color(iced::Color::from_rgb(0.3, 0.8, 0.5)),
+                text(format!(
+                    "{} update{} available!",
+                    new_version_count,
+                    if new_version_count > 1 { "s" } else { "" }
+                ))
+                .size(12)
+                .color(iced::Color::from_rgb(0.3, 0.8, 0.5)),
             ]
             .spacing(6)
             .align_y(Alignment::Center),
         )
         .padding([6, 12])
         .style(|_theme| container::Style {
-            background: Some(iced::Background::Color(iced::Color::from_rgba(0.2, 0.6, 0.3, 0.2))),
+            background: Some(iced::Background::Color(iced::Color::from_rgba(
+                0.2, 0.6, 0.3, 0.2,
+            ))),
             border: iced::Border {
                 radius: 6.0.into(),
                 width: 1.0,
@@ -6163,7 +6457,8 @@ fn view_cursor_versions(state: &ContinuumStudio) -> Element<'_, Message> {
                     text("Cursor Versions").size(20),
                     Space::new().width(12),
                     updates_indicator,
-                ].align_y(Alignment::Center),
+                ]
+                .align_y(Alignment::Center),
                 row![
                     text(format!("{} total", total))
                         .size(12)
@@ -12040,7 +12335,9 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
                 dialog.source,
                 dialog.workspace.as_deref().unwrap_or("unknown")
             );
-            state.orchestrator_state.add_to_triage(dialog.clone(), triage_state, reasoning);
+            state
+                .orchestrator_state
+                .add_to_triage(dialog.clone(), triage_state, reasoning);
         }
         log::info!(
             "Added {} dialogs to orchestrator triage queue (total: {})",
@@ -12182,7 +12479,11 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
                     for id in ids {
                         match client.get_agent(&id).await {
                             Ok(details) => {
-                                agents.push(continuum_studio_iced::cli_agents::CLIAgent::from_details(details));
+                                agents.push(
+                                    continuum_studio_iced::cli_agents::CLIAgent::from_details(
+                                        details,
+                                    ),
+                                );
                             }
                             Err(e) => {
                                 log::warn!("Failed to fetch agent {}: {}", id, e);
@@ -12510,10 +12811,7 @@ fn handle_cli_agent_message(state: &mut ContinuumStudio, msg: CLIAgentMessage) -
                     }
                     Err(e) => {
                         log::error!("Failed to copy prompt: {}", e);
-                        Message::ShowToast(
-                            format!("Copy failed: {}", e),
-                            ToastLevel::Error,
-                        )
+                        Message::ShowToast(format!("Copy failed: {}", e), ToastLevel::Error)
                     }
                 },
             )
@@ -12608,7 +12906,11 @@ fn handle_orchestrator_message(
                 Task::perform(
                     async move {
                         client
-                            .respond_to_dialog(&dialog_id, &selection, Some("Approved via triage".to_string()))
+                            .respond_to_dialog(
+                                &dialog_id,
+                                &selection,
+                                Some("Approved via triage".to_string()),
+                            )
                             .await
                     },
                     move |result| {
@@ -12658,7 +12960,11 @@ fn handle_orchestrator_message(
             Task::perform(
                 async move {
                     client
-                        .respond_to_dialog(&dialog_id, &cancel_selection, Some("Declined via triage".to_string()))
+                        .respond_to_dialog(
+                            &dialog_id,
+                            &cancel_selection,
+                            Some("Declined via triage".to_string()),
+                        )
                         .await
                 },
                 move |result| {
@@ -12692,12 +12998,12 @@ fn handle_orchestrator_message(
                     record.dialog_id,
                     record.response
                 );
-                
+
                 // Decrement auto-handled count if it was auto-handled
                 if record.auto_handled && state.orchestrator_state.stats.auto_handled_today > 0 {
                     state.orchestrator_state.stats.auto_handled_today -= 1;
                 }
-                
+
                 // Re-create the PendingDialog from the record and add to pending for user review
                 let pending = continuum_studio_iced::cli_agents::PendingDialog {
                     id: record.dialog_id.clone(),
@@ -12715,7 +13021,7 @@ fn handle_orchestrator_message(
                     workspace: record.workspace.clone(),
                     orchestrator_id: None,
                 };
-                
+
                 // Add to pending dialogs for manual review
                 state.cli_agents_state.pending_dialogs.push(pending);
                 state.orchestrator_state.stats.user_handled_today += 1;
@@ -12762,7 +13068,10 @@ fn handle_orchestrator_message(
         TriageResponseResult(dialog_id, result) => {
             match result {
                 Ok(()) => {
-                    log::info!("Triage response sent successfully for dialog: {}", dialog_id);
+                    log::info!(
+                        "Triage response sent successfully for dialog: {}",
+                        dialog_id
+                    );
                 }
                 Err(e) => {
                     log::error!("Failed to send triage response for {}: {}", dialog_id, e);
@@ -12771,7 +13080,10 @@ fn handle_orchestrator_message(
             Task::none()
         }
         RequestModeChange(mode) => {
-            log::info!("Requesting mode change to {:?} (pending confirmation)", mode);
+            log::info!(
+                "Requesting mode change to {:?} (pending confirmation)",
+                mode
+            );
             state.orchestrator_state.pending_mode_change = Some(mode);
             Task::none()
         }
@@ -12832,7 +13144,10 @@ fn handle_orchestrator_ws_event(
             // Evaluate the dialog using the decision engine
             let result = state.orchestrator_state.engine.evaluate(&pending_dialog);
             match result {
-                DecisionResult::AutoHandle { response, reasoning } => {
+                DecisionResult::AutoHandle {
+                    response,
+                    reasoning,
+                } => {
                     log::info!("Auto-handling dialog {}: {}", pending_dialog.id, reasoning);
                     // Update stats
                     state.orchestrator_state.stats.dialogs_today += 1;
@@ -12913,7 +13228,10 @@ fn handle_orchestrator_ws_event(
         OrchestratorWsEvent::DialogAnswered { dialog_id } => {
             log::info!("Dialog answered: {}", dialog_id);
             // Remove from triage queue if present
-            state.orchestrator_state.engine.remove_from_triage(&dialog_id);
+            state
+                .orchestrator_state
+                .engine
+                .remove_from_triage(&dialog_id);
             // Remove from pending dialogs
             state
                 .cli_agents_state
@@ -12952,20 +13270,14 @@ fn handle_keyboard_shortcut(
         KeyboardShortcut::SetModeUserActive => {
             if on_orchestrator_tab {
                 log::info!("Keyboard shortcut: Set mode to UserActive (Ctrl+1)");
-                return handle_orchestrator_message(
-                    state,
-                    SetMode(OrchestratorMode::UserActive),
-                );
+                return handle_orchestrator_message(state, SetMode(OrchestratorMode::UserActive));
             }
             Task::none()
         }
         KeyboardShortcut::SetModeUserDelegate => {
             if on_orchestrator_tab {
                 log::info!("Keyboard shortcut: Set mode to UserDelegate (Ctrl+2)");
-                return handle_orchestrator_message(
-                    state,
-                    SetMode(OrchestratorMode::UserDelegate),
-                );
+                return handle_orchestrator_message(state, SetMode(OrchestratorMode::UserDelegate));
             }
             Task::none()
         }
@@ -13170,10 +13482,7 @@ fn process_triage_timeouts(state: &mut ContinuumStudio) -> Task<Message> {
 }
 
 /// Handle parked agents panel messages
-fn handle_parked_agent_message(
-    state: &mut ContinuumStudio,
-    msg: ParkedMessage,
-) -> Task<Message> {
+fn handle_parked_agent_message(state: &mut ContinuumStudio, msg: ParkedMessage) -> Task<Message> {
     let task = state.parked_agents_state.update(msg);
 
     match task {
@@ -14138,6 +14447,10 @@ fn handle_activity_feed_message(
 }
 
 /// View: Activity Feed panel - NL timeline of all system activity
+fn view_scp_activity_stream_panel(state: &ContinuumStudio) -> Element<'_, Message> {
+    view_activity_stream(&state.activity_stream_canvas).map(Message::ActivityStream)
+}
+
 fn view_activity_feed_panel(state: &ContinuumStudio) -> Element<'_, Message> {
     let colors = &state.colors;
 

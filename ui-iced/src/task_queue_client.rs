@@ -2,11 +2,11 @@
 //!
 //! Handles WebSocket connection for real-time updates and HTTP for mutations.
 
+use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
-use futures_util::{SinkExt, StreamExt};
 use url::Url;
 
 /// Deserialize a Vec<T> that might be null in JSON to an empty Vec
@@ -101,7 +101,10 @@ impl TaskStatus {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, TaskStatus::Pending | TaskStatus::Claimed | TaskStatus::InProgress)
+        matches!(
+            self,
+            TaskStatus::Pending | TaskStatus::Claimed | TaskStatus::InProgress
+        )
     }
 }
 
@@ -315,7 +318,10 @@ pub enum TaskQueueEvent {
     TaskStarted(Task),
     TaskCompleted(Task),
     TaskCancelled(Task),
-    TaskClaimed { task: Task, agent_id: String },
+    TaskClaimed {
+        task: Task,
+        agent_id: String,
+    },
     TaskReleased(Task),
     TaskRemoved(String),
     Error(String),
@@ -348,8 +354,14 @@ impl TaskQueueHttpClient {
     }
 
     /// Create a new task
-    pub async fn add_task(&self, content: &str, priority: Priority, project: Option<&str>) -> Result<Task, String> {
-        self.add_task_with_creator(content, priority, project, Creator::User, None, None).await
+    pub async fn add_task(
+        &self,
+        content: &str,
+        priority: Priority,
+        project: Option<&str>,
+    ) -> Result<Task, String> {
+        self.add_task_with_creator(content, priority, project, Creator::User, None, None)
+            .await
     }
 
     /// Create a new task with full creator information
@@ -367,7 +379,7 @@ impl TaskQueueHttpClient {
             "priority": priority.label(),
             "created_by": created_by.label(),
         });
-        
+
         if let Some(p) = project {
             body["project"] = serde_json::json!(p);
         }
@@ -378,7 +390,8 @@ impl TaskQueueHttpClient {
             body["session_id"] = serde_json::json!(sid);
         }
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&self.base_url)
             .json(&body)
             .send()
@@ -389,7 +402,11 @@ impl TaskQueueHttpClient {
             resp.json::<Task>().await.map_err(|e| e.to_string())
         } else {
             let error: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            Err(error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error").to_string())
+            Err(error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error")
+                .to_string())
         }
     }
 
@@ -399,7 +416,8 @@ impl TaskQueueHttpClient {
             "priority": priority.label(),
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .patch(format!("{}/{}", self.base_url, task_id))
             .json(&body)
             .send()
@@ -410,7 +428,11 @@ impl TaskQueueHttpClient {
             resp.json::<Task>().await.map_err(|e| e.to_string())
         } else {
             let error: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            Err(error.get("message").and_then(|m| m.as_str()).unwrap_or("Update failed").to_string())
+            Err(error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Update failed")
+                .to_string())
         }
     }
 
@@ -420,7 +442,8 @@ impl TaskQueueHttpClient {
             "agent_id": agent_id,
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/{}/start", self.base_url, task_id))
             .json(&body)
             .send()
@@ -431,7 +454,11 @@ impl TaskQueueHttpClient {
             resp.json::<Task>().await.map_err(|e| e.to_string())
         } else {
             let error: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            Err(error.get("message").and_then(|m| m.as_str()).unwrap_or("Start failed").to_string())
+            Err(error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Start failed")
+                .to_string())
         }
     }
 
@@ -443,7 +470,8 @@ impl TaskQueueHttpClient {
             serde_json::json!({})
         };
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/{}/complete", self.base_url, task_id))
             .json(&body)
             .send()
@@ -454,7 +482,11 @@ impl TaskQueueHttpClient {
             resp.json::<Task>().await.map_err(|e| e.to_string())
         } else {
             let error: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            Err(error.get("message").and_then(|m| m.as_str()).unwrap_or("Complete failed").to_string())
+            Err(error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Complete failed")
+                .to_string())
         }
     }
 
@@ -466,7 +498,8 @@ impl TaskQueueHttpClient {
             serde_json::json!({})
         };
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/{}/cancel", self.base_url, task_id))
             .json(&body)
             .send()
@@ -477,13 +510,18 @@ impl TaskQueueHttpClient {
             resp.json::<Task>().await.map_err(|e| e.to_string())
         } else {
             let error: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            Err(error.get("message").and_then(|m| m.as_str()).unwrap_or("Cancel failed").to_string())
+            Err(error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Cancel failed")
+                .to_string())
         }
     }
 
     /// Delete a task
     pub async fn delete_task(&self, task_id: &str) -> Result<(), String> {
-        let resp = self.client
+        let resp = self
+            .client
             .delete(format!("{}/{}", self.base_url, task_id))
             .send()
             .await
@@ -493,13 +531,18 @@ impl TaskQueueHttpClient {
             Ok(())
         } else {
             let error: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            Err(error.get("message").and_then(|m| m.as_str()).unwrap_or("Delete failed").to_string())
+            Err(error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Delete failed")
+                .to_string())
         }
     }
 
     /// Get subtasks for a task
     pub async fn get_subtasks(&self, task_id: &str) -> Result<Vec<Task>, String> {
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{}/{}/subtasks", self.base_url, task_id))
             .send()
             .await
@@ -513,13 +556,19 @@ impl TaskQueueHttpClient {
     }
 
     /// Add a subtask to a parent task
-    pub async fn add_subtask(&self, parent_id: &str, content: &str, priority: Priority) -> Result<Task, String> {
+    pub async fn add_subtask(
+        &self,
+        parent_id: &str,
+        content: &str,
+        priority: Priority,
+    ) -> Result<Task, String> {
         let body = serde_json::json!({
             "content": content,
             "priority": priority.label(),
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/{}/subtasks", self.base_url, parent_id))
             .json(&body)
             .send()
@@ -530,7 +579,11 @@ impl TaskQueueHttpClient {
             resp.json::<Task>().await.map_err(|e| e.to_string())
         } else {
             let error: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            Err(error.get("message").and_then(|m| m.as_str()).unwrap_or("Add subtask failed").to_string())
+            Err(error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Add subtask failed")
+                .to_string())
         }
     }
 
@@ -538,7 +591,8 @@ impl TaskQueueHttpClient {
     pub async fn add_blocker(&self, task_id: &str, blocker_id: &str) -> Result<(), String> {
         let body = serde_json::json!({ "blocker_id": blocker_id });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/{}/block", self.base_url, task_id))
             .json(&body)
             .send()
@@ -549,14 +603,22 @@ impl TaskQueueHttpClient {
             Ok(())
         } else {
             let error: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            Err(error.get("message").and_then(|m| m.as_str()).unwrap_or("Add blocker failed").to_string())
+            Err(error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Add blocker failed")
+                .to_string())
         }
     }
 
     /// Remove a blocker from a task
     pub async fn remove_blocker(&self, task_id: &str, blocker_id: &str) -> Result<(), String> {
-        let resp = self.client
-            .delete(format!("{}/{}/block/{}", self.base_url, task_id, blocker_id))
+        let resp = self
+            .client
+            .delete(format!(
+                "{}/{}/block/{}",
+                self.base_url, task_id, blocker_id
+            ))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -570,7 +632,8 @@ impl TaskQueueHttpClient {
 
     /// Get blockers (prerequisites) for a task
     pub async fn get_blockers(&self, task_id: &str) -> Result<Vec<Task>, String> {
-        let resp = self.client
+        let resp = self
+            .client
             .get(format!("{}/{}/blockers", self.base_url, task_id))
             .send()
             .await
@@ -587,7 +650,8 @@ impl TaskQueueHttpClient {
     pub async fn update_notes(&self, task_id: &str, notes: &str) -> Result<Task, String> {
         let body = serde_json::json!({ "notes": notes });
 
-        let resp = self.client
+        let resp = self
+            .client
             .patch(format!("{}/{}", self.base_url, task_id))
             .json(&body)
             .send()
@@ -598,7 +662,11 @@ impl TaskQueueHttpClient {
             resp.json::<Task>().await.map_err(|e| e.to_string())
         } else {
             let error: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-            Err(error.get("message").and_then(|m| m.as_str()).unwrap_or("Update failed").to_string())
+            Err(error
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Update failed")
+                .to_string())
         }
     }
 }
@@ -618,7 +686,7 @@ pub async fn spawn_websocket_connection(
     agent_id: Option<String>,
 ) -> Result<mpsc::UnboundedReceiver<TaskQueueEvent>, String> {
     let (tx, rx) = mpsc::unbounded_channel();
-    
+
     let url = if let Some(ref id) = agent_id {
         format!("{}?agent_id={}", DEFAULT_WS_URL, id)
     } else {
@@ -658,7 +726,7 @@ async fn connect_and_handle(
         .map_err(|e| format!("WebSocket connection failed: {}", e))?;
 
     let _ = tx.send(TaskQueueEvent::Connected);
-    
+
     let (mut write, mut read) = ws_stream.split();
 
     while let Some(msg_result) = read.next().await {
@@ -666,63 +734,88 @@ async fn connect_and_handle(
             Ok(WsMessage::Text(text)) => {
                 // Use eprintln for guaranteed visibility (bypasses log system)
                 eprintln!("[task_queue_ws] Received text ({} bytes)", text.len());
-                log::debug!("WS raw text ({} bytes): {}", text.len(), &text[..text.len().min(300)]);
+                log::debug!(
+                    "WS raw text ({} bytes): {}",
+                    text.len(),
+                    &text[..text.len().min(300)]
+                );
                 match serde_json::from_str::<WsServerMessage>(&text) {
-                    Ok(server_msg) => { match server_msg {
-                        WsServerMessage::Connected { .. } => {
-                            eprintln!("[task_queue_ws] Connected message received");
-                        }
-                        WsServerMessage::Init { tasks, stats, current_task, .. } => {
-                            eprintln!("[task_queue_ws] Init: {} tasks, stats={:?}", tasks.len(), stats);
-                            log::info!("WS Init received: {} tasks, stats={:?}, current={:?}",
-                                tasks.len(),
-                                stats,
-                                current_task.as_ref().map(|t| &t.content));
-                            let _ = tx.send(TaskQueueEvent::InitialState {
+                    Ok(server_msg) => {
+                        match server_msg {
+                            WsServerMessage::Connected { .. } => {
+                                eprintln!("[task_queue_ws] Connected message received");
+                            }
+                            WsServerMessage::Init {
                                 tasks,
                                 stats,
                                 current_task,
-                            });
+                                ..
+                            } => {
+                                eprintln!(
+                                    "[task_queue_ws] Init: {} tasks, stats={:?}",
+                                    tasks.len(),
+                                    stats
+                                );
+                                log::info!(
+                                    "WS Init received: {} tasks, stats={:?}, current={:?}",
+                                    tasks.len(),
+                                    stats,
+                                    current_task.as_ref().map(|t| &t.content)
+                                );
+                                let _ = tx.send(TaskQueueEvent::InitialState {
+                                    tasks,
+                                    stats,
+                                    current_task,
+                                });
+                            }
+                            WsServerMessage::TaskAdded { task } => {
+                                let _ = tx.send(TaskQueueEvent::TaskAdded(task));
+                            }
+                            WsServerMessage::TaskUpdated { task, .. } => {
+                                let _ = tx.send(TaskQueueEvent::TaskUpdated(task));
+                            }
+                            WsServerMessage::TaskStarted { task } => {
+                                let _ = tx.send(TaskQueueEvent::TaskStarted(task));
+                            }
+                            WsServerMessage::TaskCompleted { task } => {
+                                let _ = tx.send(TaskQueueEvent::TaskCompleted(task));
+                            }
+                            WsServerMessage::TaskCancelled { task } => {
+                                let _ = tx.send(TaskQueueEvent::TaskCancelled(task));
+                            }
+                            WsServerMessage::TaskClaimed { task, agent_id } => {
+                                let _ = tx.send(TaskQueueEvent::TaskClaimed { task, agent_id });
+                            }
+                            WsServerMessage::TaskReleased { task } => {
+                                let _ = tx.send(TaskQueueEvent::TaskReleased(task));
+                            }
+                            WsServerMessage::TaskRemoved { task_id } => {
+                                let _ = tx.send(TaskQueueEvent::TaskRemoved(task_id));
+                            }
+                            WsServerMessage::Heartbeat { .. } => {
+                                // Respond with ping to keep alive
+                                let ping = serde_json::to_string(&WsClientMessage::Ping).unwrap();
+                                let _ = write.send(WsMessage::Text(ping)).await;
+                            }
+                            WsServerMessage::Pong { .. } => {
+                                // Ignore pong
+                            }
+                            WsServerMessage::Error { message } => {
+                                let _ = tx.send(TaskQueueEvent::Error(message));
+                            }
                         }
-                        WsServerMessage::TaskAdded { task } => {
-                            let _ = tx.send(TaskQueueEvent::TaskAdded(task));
-                        }
-                        WsServerMessage::TaskUpdated { task, .. } => {
-                            let _ = tx.send(TaskQueueEvent::TaskUpdated(task));
-                        }
-                        WsServerMessage::TaskStarted { task } => {
-                            let _ = tx.send(TaskQueueEvent::TaskStarted(task));
-                        }
-                        WsServerMessage::TaskCompleted { task } => {
-                            let _ = tx.send(TaskQueueEvent::TaskCompleted(task));
-                        }
-                        WsServerMessage::TaskCancelled { task } => {
-                            let _ = tx.send(TaskQueueEvent::TaskCancelled(task));
-                        }
-                        WsServerMessage::TaskClaimed { task, agent_id } => {
-                            let _ = tx.send(TaskQueueEvent::TaskClaimed { task, agent_id });
-                        }
-                        WsServerMessage::TaskReleased { task } => {
-                            let _ = tx.send(TaskQueueEvent::TaskReleased(task));
-                        }
-                        WsServerMessage::TaskRemoved { task_id } => {
-                            let _ = tx.send(TaskQueueEvent::TaskRemoved(task_id));
-                        }
-                        WsServerMessage::Heartbeat { .. } => {
-                            // Respond with ping to keep alive
-                            let ping = serde_json::to_string(&WsClientMessage::Ping).unwrap();
-                            let _ = write.send(WsMessage::Text(ping)).await;
-                        }
-                        WsServerMessage::Pong { .. } => {
-                            // Ignore pong
-                        }
-                        WsServerMessage::Error { message } => {
-                            let _ = tx.send(TaskQueueEvent::Error(message));
-                        }
-                    } }
+                    }
                     Err(e) => {
-                        eprintln!("[task_queue_ws] PARSE ERROR: {} -- raw: {}", e, &text[..text.len().min(500)]);
-                        log::warn!("Failed to parse WS message: {} -- raw: {}", e, &text[..text.len().min(200)]);
+                        eprintln!(
+                            "[task_queue_ws] PARSE ERROR: {} -- raw: {}",
+                            e,
+                            &text[..text.len().min(500)]
+                        );
+                        log::warn!(
+                            "Failed to parse WS message: {} -- raw: {}",
+                            e,
+                            &text[..text.len().min(200)]
+                        );
                     }
                 }
             }
@@ -790,7 +883,7 @@ mod tests {
     fn test_priority_serialization() {
         let json = serde_json::to_string(&Priority::Critical).unwrap();
         assert_eq!(json, "\"critical\"");
-        
+
         let p: Priority = serde_json::from_str("\"high\"").unwrap();
         assert_eq!(p, Priority::High);
     }
@@ -814,7 +907,7 @@ mod tests {
     fn test_task_status_serialization() {
         let json = serde_json::to_string(&TaskStatus::InProgress).unwrap();
         assert_eq!(json, "\"in_progress\"");
-        
+
         let s: TaskStatus = serde_json::from_str("\"completed\"").unwrap();
         assert_eq!(s, TaskStatus::Completed);
     }
@@ -852,13 +945,13 @@ mod tests {
             completed_at: None,
             result: None,
         };
-        
+
         let json = serde_json::to_string(&task);
         assert!(json.is_ok());
-        
+
         let restored: Result<Task, _> = serde_json::from_str(&json.unwrap());
         assert!(restored.is_ok());
-        
+
         let restored = restored.unwrap();
         assert_eq!(restored.id, "task-123");
         assert_eq!(restored.priority, Priority::High);

@@ -82,12 +82,19 @@ impl CursorProcessType {
             Self::Renderer => "Renderer",
             Self::LanguageServer(name) => {
                 // Return a static str approximation
-                if name.contains("json") { "JSON LS" }
-                else if name.contains("html") { "HTML LS" }
-                else if name.contains("markdown") { "Markdown LS" }
-                else if name.contains("typescript") { "TypeScript LS" }
-                else if name.contains("css") { "CSS LS" }
-                else { "Language Server" }
+                if name.contains("json") {
+                    "JSON LS"
+                } else if name.contains("html") {
+                    "HTML LS"
+                } else if name.contains("markdown") {
+                    "Markdown LS"
+                } else if name.contains("typescript") {
+                    "TypeScript LS"
+                } else if name.contains("css") {
+                    "CSS LS"
+                } else {
+                    "Language Server"
+                }
             }
             Self::GitWorker => "Git Worker",
             Self::Utility => "Utility",
@@ -99,8 +106,11 @@ impl CursorProcessType {
     pub fn is_notable(&self) -> bool {
         matches!(
             self,
-            Self::Main | Self::ExtensionHost | Self::SharedProcess
-                | Self::LanguageServer(_) | Self::GitWorker
+            Self::Main
+                | Self::ExtensionHost
+                | Self::SharedProcess
+                | Self::LanguageServer(_)
+                | Self::GitWorker
         )
     }
 }
@@ -266,8 +276,8 @@ impl SessionTracker {
             let extensions_dir = extract_arg(&root_proc.cmdline, "--extensions-dir");
 
             // Aggregate stats
-            let total_rss: u64 = root_proc.rss_bytes
-                + classified_children.iter().map(|c| c.rss_bytes).sum::<u64>();
+            let total_rss: u64 =
+                root_proc.rss_bytes + classified_children.iter().map(|c| c.rss_bytes).sum::<u64>();
             let ext_host_count = classified_children
                 .iter()
                 .filter(|c| c.process_type == CursorProcessType::ExtensionHost)
@@ -361,9 +371,9 @@ impl SessionTracker {
 
     /// Check if a version is currently running
     pub fn is_version_running(&self, version: &str) -> bool {
-        self.sessions.values().any(|s| {
-            s.version.as_ref().map(|v| v == version).unwrap_or(false)
-        })
+        self.sessions
+            .values()
+            .any(|s| s.version.as_ref().map(|v| v == version).unwrap_or(false))
     }
 
     /// Get sessions for a specific workspace
@@ -455,11 +465,14 @@ fn read_all_processes() -> HashMap<u32, RawProcess> {
             .unwrap_or(0)
             * 4096; // pages to bytes
 
-        procs.insert(pid, RawProcess {
-            ppid,
-            cmdline,
-            rss_bytes,
-        });
+        procs.insert(
+            pid,
+            RawProcess {
+                ppid,
+                cmdline,
+                rss_bytes,
+            },
+        );
     }
 
     procs
@@ -476,9 +489,10 @@ fn find_cursor_roots(procs: &HashMap<u32, RawProcess>) -> Vec<u32> {
         // - "cursor" in the binary name (not just matching as substring of other words)
         // - --user-data-dir flag
         // - Does NOT have --type= (which indicates a child/utility process)
-        let is_cursor_main = (cmd.contains("/cursor ") || cmd.contains("/cursor-") || cmd.ends_with("/cursor"))
-            && cmd.contains("--user-data-dir=")
-            && !cmd.contains("--type=");
+        let is_cursor_main =
+            (cmd.contains("/cursor ") || cmd.contains("/cursor-") || cmd.ends_with("/cursor"))
+                && cmd.contains("--user-data-dir=")
+                && !cmd.contains("--type=");
 
         if is_cursor_main {
             roots.push(pid);
@@ -767,7 +781,10 @@ fn get_start_time(pid: u32) -> Option<String> {
     let mins = (age_secs % 3600) / 60;
 
     if hours > 0 {
-        Some(format!("{}h {}m ago (epoch: {})", hours, mins, started_epoch))
+        Some(format!(
+            "{}h {}m ago (epoch: {})",
+            hours, mins, started_epoch
+        ))
     } else {
         Some(format!("{}m ago (epoch: {})", mins, started_epoch))
     }
@@ -920,7 +937,8 @@ mod tests {
         assert_eq!(extract_version(cmd), Some("2.4.21".to_string()));
 
         // Nix store
-        let cmd = "/nix/store/abc-cursor-2.0.77/bin/cursor --user-data-dir=/home/user/.cursor-2.0.77";
+        let cmd =
+            "/nix/store/abc-cursor-2.0.77/bin/cursor --user-data-dir=/home/user/.cursor-2.0.77";
         assert_eq!(extract_version(cmd), Some("2.0.77".to_string()));
     }
 
@@ -960,7 +978,9 @@ mod tests {
             CursorProcessType::ExtensionHost
         );
         assert_eq!(
-            classify_process("/proc/self/exe --type=utility --utility-sub-type=network.mojom.NetworkService"),
+            classify_process(
+                "/proc/self/exe --type=utility --utility-sub-type=network.mojom.NetworkService"
+            ),
             CursorProcessType::NetworkService
         );
         assert!(matches!(

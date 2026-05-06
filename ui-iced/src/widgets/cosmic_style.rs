@@ -45,9 +45,7 @@ impl CosmicButton {
 impl button::Catalog for CosmicButton {
     type Class<'a> = ();
 
-    fn default<'a>() -> Self::Class<'a> {
-        
-    }
+    fn default<'a>() -> Self::Class<'a> {}
 
     fn style(&self, _class: &Self::Class<'_>, status: button::Status) -> button::Style {
         let (bg, text_color) = if self.is_destructive {
@@ -63,9 +61,10 @@ impl button::Catalog for CosmicButton {
         } else if self.is_primary {
             match status {
                 button::Status::Active => (self.palette.accent(), self.palette.on_accent()),
-                button::Status::Hovered => {
-                    (lighten(self.palette.accent(), 0.1), self.palette.on_accent())
-                }
+                button::Status::Hovered => (
+                    lighten(self.palette.accent(), 0.1),
+                    self.palette.on_accent(),
+                ),
                 button::Status::Pressed => {
                     (darken(self.palette.accent(), 0.1), self.palette.on_accent())
                 }
@@ -173,9 +172,7 @@ impl CosmicContainer {
 impl container::Catalog for CosmicContainer {
     type Class<'a> = ();
 
-    fn default<'a>() -> Self::Class<'a> {
-        
-    }
+    fn default<'a>() -> Self::Class<'a> {}
 
     fn style(&self, _class: &Self::Class<'_>) -> container::Style {
         match self.variant {

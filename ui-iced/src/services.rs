@@ -101,26 +101,23 @@ impl ServiceManager {
 
     /// Get command for interactive Core session (for development)
     pub fn core_start_command_interactive(&self) -> String {
-        format!(
-            "cd {} && iex -S mix",
-            self.config.core_path.display()
-        )
+        format!("cd {} && iex -S mix", self.config.core_path.display())
     }
 
     /// Check if Core is running by verifying socket connectivity
-    /// 
+    ///
     /// Just checking if the socket file exists is insufficient - a stale socket
     /// from a crashed process will incorrectly report as "running".
     /// Instead, we try a quick connection to verify the Core is responsive.
     pub fn is_core_running(&self) -> bool {
         use std::os::unix::net::UnixStream;
         use std::time::Duration;
-        
+
         // First, check if socket file exists
         if !self.config.core_socket.exists() {
             return false;
         }
-        
+
         // Try to connect with a short timeout to verify Core is actually listening
         match UnixStream::connect(&self.config.core_socket) {
             Ok(stream) => {
@@ -133,10 +130,7 @@ impl ServiceManager {
             Err(_) => {
                 // Connection failed - socket is stale, clean it up
                 let _ = std::fs::remove_file(&self.config.core_socket);
-                log::warn!(
-                    "Removed stale Core socket at {:?}",
-                    self.config.core_socket
-                );
+                log::warn!("Removed stale Core socket at {:?}", self.config.core_socket);
                 false
             }
         }
@@ -144,11 +138,13 @@ impl ServiceManager {
 
     /// Get command to start synapsix-dialog-daemon
     pub fn dialog_start_command(&self) -> String {
-        let daemon = self.config.dialog_daemon_path
+        let daemon = self
+            .config
+            .dialog_daemon_path
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "synapsix-dialog-daemon".to_string());
-        
+
         format!("{} --web-port {}", daemon, self.config.dialog_web_port)
     }
 
@@ -210,7 +206,8 @@ impl ServiceManager {
         vec![
             ServiceInfo {
                 name: "Elixir Core".to_string(),
-                description: "Main backend for version management and workspace tracking".to_string(),
+                description: "Main backend for version management and workspace tracking"
+                    .to_string(),
                 status: if self.is_core_running() {
                     ServiceStatus::Running
                 } else {
@@ -294,7 +291,9 @@ impl ServiceManager {
             .unwrap_or(false);
 
         if !mix_available {
-            return Err("Elixir 'mix' command not found. Please ensure Elixir is installed.".to_string());
+            return Err(
+                "Elixir 'mix' command not found. Please ensure Elixir is installed.".to_string(),
+            );
         }
 
         // Verify the Core project exists
@@ -318,18 +317,18 @@ impl ServiceManager {
                 // Wait for the socket to appear AND verify connectivity
                 for i in 0..80 {
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    
+
                     if self.is_core_running() {
                         log::info!("Core started successfully after {}ms", (i + 1) * 100);
                         return Ok(());
                     }
-                    
+
                     // Log progress every second
                     if (i + 1) % 10 == 0 {
                         log::debug!("Waiting for Core startup... {}s", (i + 1) / 10);
                     }
                 }
-                
+
                 // Check if there are error logs
                 let log_path = "/tmp/studio-core.log";
                 let log_contents = std::fs::read_to_string(log_path).unwrap_or_default();
@@ -337,11 +336,19 @@ impl ServiceManager {
                     return Err(format!(
                         "Core failed to start within 8 seconds. Check logs at {}:\n{}",
                         log_path,
-                        log_contents.lines().rev().take(10).collect::<Vec<_>>().join("\n")
+                        log_contents
+                            .lines()
+                            .rev()
+                            .take(10)
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     ));
                 }
-                
-                Err("Core started but not responding within 8 seconds. Check /tmp/studio-core.log".to_string())
+
+                Err(
+                    "Core started but not responding within 8 seconds. Check /tmp/studio-core.log"
+                        .to_string(),
+                )
             }
             Err(e) => Err(format!("Failed to start Core: {}", e)),
         }
@@ -354,10 +361,7 @@ impl ServiceManager {
         }
 
         let cmd = format!("{} &", self.dialog_start_command());
-        let result = AsyncCommand::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .spawn();
+        let result = AsyncCommand::new("sh").arg("-c").arg(&cmd).spawn();
 
         match result {
             Ok(_) => {

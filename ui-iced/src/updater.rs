@@ -266,7 +266,10 @@ impl InstallationType {
 
     /// Whether direct binary replacement is supported
     pub fn supports_direct_update(&self) -> bool {
-        matches!(self, InstallationType::ContinuumBin | InstallationType::CargoDev)
+        matches!(
+            self,
+            InstallationType::ContinuumBin | InstallationType::CargoDev
+        )
     }
 }
 
@@ -451,8 +454,7 @@ impl ReleaseProvider for ForgejoProvider {
             settings.repo_path
         );
 
-        let releases =
-            fetch_json_http::<Vec<ForgejoRelease>>(&url, &self.user_agent, None).await?;
+        let releases = fetch_json_http::<Vec<ForgejoRelease>>(&url, &self.user_agent, None).await?;
         Ok(find_best_forgejo_release(&releases, settings, base_url))
     }
 
@@ -727,12 +729,14 @@ fn find_best_github_release(
     for release in releases {
         if channel_matches_release(settings.channel, release.prerelease, &release.tag_name) {
             let version = release.tag_name.trim_start_matches('v').to_string();
-            let download_url = release.assets.as_ref()
+            let download_url = release
+                .assets
+                .as_ref()
                 .and_then(|assets| {
-                    assets.iter().find(|a| {
-                        a.name.contains("linux") && a.name.contains("x86_64")
-                    })
-                    .map(|a| a.browser_download_url.clone())
+                    assets
+                        .iter()
+                        .find(|a| a.name.contains("linux") && a.name.contains("x86_64"))
+                        .map(|a| a.browser_download_url.clone())
                 })
                 .or_else(|| Some(release.html_url.clone()));
 
@@ -759,16 +763,20 @@ fn find_best_forgejo_release(
     for release in releases {
         if channel_matches_release(settings.channel, release.prerelease, &release.tag_name) {
             let version = release.tag_name.trim_start_matches('v').to_string();
-            let download_url = release.assets.as_ref()
+            let download_url = release
+                .assets
+                .as_ref()
                 .and_then(|assets| {
-                    assets.iter().find(|a| {
-                        a.name.contains("linux") && a.name.contains("x86_64")
-                    })
-                    .map(|a| a.browser_download_url.clone())
+                    assets
+                        .iter()
+                        .find(|a| a.name.contains("linux") && a.name.contains("x86_64"))
+                        .map(|a| a.browser_download_url.clone())
                 })
                 .or_else(|| release.html_url.clone());
 
-            let date = release.published_at.clone()
+            let date = release
+                .published_at
+                .clone()
                 .unwrap_or_else(|| release.created_at.clone());
 
             return Some(UpdateInfo {
@@ -869,29 +877,32 @@ impl SelfUpdater {
         log::info!("Installation type: {:?}", install_type);
 
         match install_type {
-            InstallationType::NixStore => {
-                Self::update_via_nix().await
-            }
+            InstallationType::NixStore => Self::update_via_nix().await,
             InstallationType::ContinuumBin | InstallationType::CargoDev => {
                 match info.source {
                     ForgeType::Local => {
                         // Copy from local builds
-                        let source = info.download_url.as_deref()
+                        let source = info
+                            .download_url
+                            .as_deref()
                             .ok_or("No source path in local build info")?;
                         Self::update_direct(Path::new(source)).await
                     }
                     ForgeType::GitHub | ForgeType::Forgejo => {
                         // Download from remote
-                        let url = info.download_url.as_deref()
+                        let url = info
+                            .download_url
+                            .as_deref()
                             .ok_or("No download URL in release info")?;
                         Self::update_from_url(url).await
                     }
                 }
             }
-            InstallationType::Unknown(_) => {
-                Err("Cannot determine update method for unknown installation type. \
-                     Try running from ~/.continuum/bin/ or via nix build.".to_string())
-            }
+            InstallationType::Unknown(_) => Err(
+                "Cannot determine update method for unknown installation type. \
+                     Try running from ~/.continuum/bin/ or via nix build."
+                    .to_string(),
+            ),
         }
     }
 
@@ -902,7 +913,8 @@ impl SelfUpdater {
 
         if !updater.flake_exists() {
             return Err("Nix flake not found. Cannot update via nix build. \
-                       Consider switching to 'local' forge type for direct binary updates.".to_string());
+                       Consider switching to 'local' forge type for direct binary updates."
+                .to_string());
         }
 
         updater.execute_update().await
@@ -939,7 +951,10 @@ impl SelfUpdater {
         }
 
         log::info!("Binary updated at {:?}", dest);
-        Ok(format!("Updated binary at {}. Restart to apply.", dest.display()))
+        Ok(format!(
+            "Updated binary at {}. Restart to apply.",
+            dest.display()
+        ))
     }
 
     /// Update by downloading from a URL
@@ -995,7 +1010,10 @@ impl SelfUpdater {
         }
 
         log::info!("Downloaded and installed update at {:?}", dest);
-        Ok(format!("Updated binary at {}. Restart to apply.", dest.display()))
+        Ok(format!(
+            "Updated binary at {}. Restart to apply.",
+            dest.display()
+        ))
     }
 }
 
@@ -1171,24 +1189,62 @@ mod tests {
     #[test]
     fn test_channel_matching_logic() {
         // Stable should only match non-prerelease, no dashes
-        assert!(channel_matches_release(UpdateChannel::Stable, false, "v0.1.0"));
-        assert!(!channel_matches_release(UpdateChannel::Stable, true, "v0.1.0-beta.1"));
-        assert!(!channel_matches_release(UpdateChannel::Stable, false, "v0.1.0-rc1"));
+        assert!(channel_matches_release(
+            UpdateChannel::Stable,
+            false,
+            "v0.1.0"
+        ));
+        assert!(!channel_matches_release(
+            UpdateChannel::Stable,
+            true,
+            "v0.1.0-beta.1"
+        ));
+        assert!(!channel_matches_release(
+            UpdateChannel::Stable,
+            false,
+            "v0.1.0-rc1"
+        ));
 
         // Beta should match everything except nightly
-        assert!(channel_matches_release(UpdateChannel::Beta, false, "v0.1.0"));
-        assert!(channel_matches_release(UpdateChannel::Beta, true, "v0.1.0-beta.1"));
-        assert!(!channel_matches_release(UpdateChannel::Beta, true, "v0.1.0-nightly.20260205"));
+        assert!(channel_matches_release(
+            UpdateChannel::Beta,
+            false,
+            "v0.1.0"
+        ));
+        assert!(channel_matches_release(
+            UpdateChannel::Beta,
+            true,
+            "v0.1.0-beta.1"
+        ));
+        assert!(!channel_matches_release(
+            UpdateChannel::Beta,
+            true,
+            "v0.1.0-nightly.20260205"
+        ));
 
         // Nightly matches all
-        assert!(channel_matches_release(UpdateChannel::Nightly, false, "v0.1.0"));
-        assert!(channel_matches_release(UpdateChannel::Nightly, true, "v0.1.0-nightly.20260205"));
+        assert!(channel_matches_release(
+            UpdateChannel::Nightly,
+            false,
+            "v0.1.0"
+        ));
+        assert!(channel_matches_release(
+            UpdateChannel::Nightly,
+            true,
+            "v0.1.0-nightly.20260205"
+        ));
     }
 
     #[test]
     fn test_installation_type_description() {
-        assert_eq!(InstallationType::NixStore.description(), "Nix store (use nix build to update)");
-        assert_eq!(InstallationType::ContinuumBin.description(), "Continuum managed (direct binary update)");
+        assert_eq!(
+            InstallationType::NixStore.description(),
+            "Nix store (use nix build to update)"
+        );
+        assert_eq!(
+            InstallationType::ContinuumBin.description(),
+            "Continuum managed (direct binary update)"
+        );
         assert!(InstallationType::ContinuumBin.supports_direct_update());
         assert!(!InstallationType::NixStore.supports_direct_update());
     }
