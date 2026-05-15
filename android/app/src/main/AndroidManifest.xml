@@ -9,6 +9,9 @@
     <!-- Notification permission (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     
+    <!-- Voice input for XR mode -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    
     <!-- Keep screen on during dialogs -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     

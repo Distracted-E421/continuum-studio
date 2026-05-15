@@ -358,6 +358,14 @@ fun DialogScreen(
                                                         selectedOptionIndex = selectedIndex,
                                                         commentText = dialogState.comment,
                                                         isSubmitting = false,
+                                                        config = DialogControlConfig(
+                                                            xrMode = true,
+                                                            buttonColumns = if (options.size <= 4) 1 else 2,
+                                                            buttonSize = ButtonSize.XR_LARGE,
+                                                            showShortcutNumbers = true,
+                                                            autoShowKeyboardForText = true,
+                                                            hapticStrength = HapticStrength.STRONG
+                                                        ),
                                                         onOptionSelect = { index ->
                                                             options.getOrNull(index)?.let { option ->
                                                                 onSelectOption(option.value)
