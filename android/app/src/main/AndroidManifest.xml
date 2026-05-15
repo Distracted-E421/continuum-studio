@@ -18,6 +18,7 @@
     <!-- Foreground service for background notifications -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     
     <!-- Camera and gallery permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -59,6 +60,16 @@
             android:name=".service.DialogNotificationService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+            
+        <!-- Foreground service for persistent XR glasses display -->
+        <service
+            android:name=".service.GlassesDisplayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintains XR glasses display when app is backgrounded" />
+        </service>
             
         <!-- Orchestrator homescreen widget -->
         <receiver

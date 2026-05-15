@@ -14,6 +14,8 @@ import com.example.continuumstudio.ui.glasses.*
 import kotlinx.coroutines.flow.*
 import org.osmdroid.util.GeoPoint
 import kotlinx.coroutines.launch
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import com.example.continuumstudio.service.GlassesDisplayService
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -40,7 +42,16 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
         val XR_CONFIG = stringPreferencesKey("xr_bay_config")
         val ACTIVE_PRESET = stringPreferencesKey("xr_active_preset")
         val GLASSES_THEME = stringPreferencesKey("glasses_theme")
+        val PERSISTENT_MODE = booleanPreferencesKey("glasses_persistent_mode")
     }
+    
+    // Persistent mode - keeps glasses display active when app is backgrounded
+    private val _persistentModeEnabled = MutableStateFlow(false)
+    val persistentModeEnabled: StateFlow<Boolean> = _persistentModeEnabled.asStateFlow()
+    
+    // Display mode detection
+    private val _currentDisplayMode = MutableStateFlow(GlassesDisplayService.DisplayMode.UNKNOWN)
+    val currentDisplayMode: StateFlow<GlassesDisplayService.DisplayMode> = _currentDisplayMode.asStateFlow()
     
     // XR Configuration
     private val _xrConfig = MutableStateFlow(XRBayConfig())
@@ -120,6 +131,9 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
                         Log.e(TAG, "Failed to parse glasses theme: ${e.message}")
                     }
                 }
+                
+                // Load persistent mode setting
+                _persistentModeEnabled.value = prefs[PrefsKeys.PERSISTENT_MODE] ?: false
             }
         }
     }
@@ -131,11 +145,67 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
                     prefs[PrefsKeys.XR_CONFIG] = json.encodeToString(_xrConfig.value)
                     _activePreset.value?.let { prefs[PrefsKeys.ACTIVE_PRESET] = it }
                     prefs[PrefsKeys.GLASSES_THEME] = json.encodeToString(_glassesTheme.value)
+                    prefs[PrefsKeys.PERSISTENT_MODE] = _persistentModeEnabled.value
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save XR config: ${e.message}")
             }
         }
+    }
+    
+    // ============================================================================
+    // Persistent Mode Management
+    // ============================================================================
+    
+    /**
+     * Enable or disable persistent glasses mode.
+     * 
+     * When enabled, the glasses display remains active even when the app
+     * is backgrounded, using a foreground service.
+     * 
+     * ## Display Mode Mapping (Samsung S23 Ultra):
+     * - PHONE_ONLY: No external display connected
+     * - MIRROR: External display duplicating phone (no FLAG_PRESENTATION)
+     * - EXTENDED: Presentation display available (independent content)
+     * - SAMSUNG_DEX: Samsung DeX desktop mode active
+     */
+    fun setPersistentMode(enabled: Boolean) {
+        _persistentModeEnabled.value = enabled
+        
+        if (enabled) {
+            // Start the foreground service
+            GlassesDisplayService.start(getApplication())
+            Log.i(TAG, "Persistent mode enabled - starting GlassesDisplayService")
+        } else {
+            // Stop the foreground service
+            GlassesDisplayService.stop(getApplication())
+            Log.i(TAG, "Persistent mode disabled - stopping GlassesDisplayService")
+        }
+        
+        saveConfig()
+    }
+    
+    /**
+     * Get the current display mode.
+     * 
+     * @return Human-readable description of the current mode
+     */
+    fun getDisplayModeDescription(): String {
+        return when (_currentDisplayMode.value) {
+            GlassesDisplayService.DisplayMode.UNKNOWN -> "Checking display..."
+            GlassesDisplayService.DisplayMode.PHONE_ONLY -> "No external display"
+            GlassesDisplayService.DisplayMode.MIRROR -> "Mirror mode (duplicate)"
+            GlassesDisplayService.DisplayMode.EXTENDED -> "Extended mode (independent)"
+            GlassesDisplayService.DisplayMode.SAMSUNG_DEX -> "Samsung DeX mode"
+        }
+    }
+    
+    /**
+     * Check if the current mode supports independent glasses content.
+     */
+    fun canShowIndependentContent(): Boolean {
+        return _currentDisplayMode.value == GlassesDisplayService.DisplayMode.EXTENDED ||
+               _currentDisplayMode.value == GlassesDisplayService.DisplayMode.SAMSUNG_DEX
     }
     
     // ============================================================================

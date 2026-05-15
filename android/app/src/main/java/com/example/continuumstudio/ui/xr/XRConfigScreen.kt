@@ -396,6 +396,108 @@ private fun ThemeConfigTab(
                 }
             }
         }
+        
+        // Persistent Mode
+        item {
+            val persistentModeEnabled by xrViewModel.persistentModeEnabled.collectAsState()
+            val displayMode by xrViewModel.currentDisplayMode.collectAsState()
+            
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Display Mode", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    // Persistent mode toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Persistent Mode")
+                            Text(
+                                "Keep glasses display active in background",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = persistentModeEnabled,
+                            onCheckedChange = { xrViewModel.setPersistentMode(it) }
+                        )
+                    }
+                    
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    
+                    // Current display mode indicator
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Current Mode")
+                            Text(
+                                xrViewModel.getDisplayModeDescription(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Surface(
+                            color = when (displayMode) {
+                                com.example.continuumstudio.service.GlassesDisplayService.DisplayMode.EXTENDED,
+                                com.example.continuumstudio.service.GlassesDisplayService.DisplayMode.SAMSUNG_DEX ->
+                                    MaterialTheme.colorScheme.primaryContainer
+                                com.example.continuumstudio.service.GlassesDisplayService.DisplayMode.MIRROR ->
+                                    MaterialTheme.colorScheme.tertiaryContainer
+                                else -> MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                text = when (displayMode) {
+                                    com.example.continuumstudio.service.GlassesDisplayService.DisplayMode.EXTENDED -> "Extended"
+                                    com.example.continuumstudio.service.GlassesDisplayService.DisplayMode.SAMSUNG_DEX -> "DeX"
+                                    com.example.continuumstudio.service.GlassesDisplayService.DisplayMode.MIRROR -> "Mirror"
+                                    com.example.continuumstudio.service.GlassesDisplayService.DisplayMode.PHONE_ONLY -> "No Display"
+                                    else -> "Unknown"
+                                },
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                    
+                    // Help text
+                    if (displayMode == com.example.continuumstudio.service.GlassesDisplayService.DisplayMode.MIRROR) {
+                        Spacer(Modifier.height(8.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Info,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    "Glasses are mirroring phone display. For independent content, " +
+                                    "check Samsung Settings > Connected Devices > Display settings.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
