@@ -13,6 +13,7 @@ import com.example.continuumstudio.service.NowPlayingState
 import com.example.continuumstudio.navigation.NavigationState
 import com.example.continuumstudio.youtube.YouTubeState
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.osmdroid.util.GeoPoint
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -293,6 +294,18 @@ class GlassesDisplayManager(
      */
     fun scrollContent(scrollAmount: Int) {
         glassesPresentation?.scrollContent(scrollAmount)
+    }
+    
+    /**
+     * Update OSM map state on glasses.
+     * Call this when navigation location or route changes.
+     */
+    fun updateOsmMap(
+        location: GeoPoint?,
+        destination: GeoPoint? = null,
+        routeGeometry: List<GeoPoint> = emptyList()
+    ) {
+        glassesPresentation?.updateOsmMap(location, destination, routeGeometry)
     }
     
     /**

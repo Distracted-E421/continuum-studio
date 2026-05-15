@@ -2,15 +2,19 @@ package com.example.continuumstudio.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.continuumstudio.data.*
+import com.example.continuumstudio.data.DialogDetails
 import com.example.continuumstudio.network.DialogEvent
 import com.example.continuumstudio.network.DialogWebSocketClient
 import com.example.continuumstudio.network.NetworkMonitor
@@ -28,17 +32,43 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
+import java.util.Locale
+import java.util.UUID
 import android.net.Uri
 import android.provider.OpenableColumns
 
 // DataStore extension
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
+// TTS state
+data class TtsState(
+    val isReady: Boolean = false,
+    val isSpeaking: Boolean = false,
+)
+
 class DialogViewModel(application: Application) : AndroidViewModel(application) {
     
     private val dataStore = application.dataStore
     private val wsClient = DialogWebSocketClient(viewModelScope)
     private val networkMonitor = NetworkMonitor(application)
+    
+    // TTS engine
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var lastSpokenDialogId: String? = null
+    
+    private val _ttsState = MutableStateFlow(TtsState())
+    val ttsState: StateFlow<TtsState> = _ttsState.asStateFlow()
+    
+    // TTS Settings - loaded from DataStore
+    private val _ttsEnabled = MutableStateFlow(false)
+    val ttsEnabled: StateFlow<Boolean> = _ttsEnabled.asStateFlow()
+    
+    private val _ttsAutoRead = MutableStateFlow(true)
+    val ttsAutoRead: StateFlow<Boolean> = _ttsAutoRead.asStateFlow()
+    
+    private val _ttsSpeed = MutableStateFlow(1.0f)
+    val ttsSpeed: StateFlow<Float> = _ttsSpeed.asStateFlow()
 
     // Exposed state
     val connectionState = wsClient.connectionState
@@ -92,6 +122,9 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         val ENDPOINTS_JSON = stringPreferencesKey("endpoints_json")
         val ACTIVE_ENDPOINT_INDEX = stringPreferencesKey("active_endpoint_index")
         val ENDPOINT_FALLBACK_ENABLED = booleanPreferencesKey("endpoint_fallback_enabled")
+        val TTS_ENABLED = booleanPreferencesKey("tts_enabled")
+        val TTS_AUTO_READ = booleanPreferencesKey("tts_auto_read")
+        val TTS_SPEED = floatPreferencesKey("tts_speed")
     }
 
     // Default endpoints - ordered by preference for failover
@@ -169,7 +202,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     init {
-        // Load saved endpoints
+        // Load saved endpoints and TTS settings
         viewModelScope.launch {
             dataStore.data.first().let { prefs ->
                 prefs[PrefsKeys.ENDPOINTS_JSON]?.let { json ->
@@ -188,8 +221,15 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                 prefs[PrefsKeys.ENDPOINT_FALLBACK_ENABLED]?.let {
                     _endpointFallbackEnabled.value = it
                 }
+                // Load TTS settings
+                _ttsEnabled.value = prefs[PrefsKeys.TTS_ENABLED] ?: false
+                _ttsAutoRead.value = prefs[PrefsKeys.TTS_AUTO_READ] ?: true
+                _ttsSpeed.value = prefs[PrefsKeys.TTS_SPEED] ?: 1.0f
             }
         }
+        
+        // Initialize TTS engine
+        initTts()
         
         // Auto-connect on startup to active endpoint
         // Delay gives time for:
@@ -221,6 +261,182 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                 wasOffline = !online
             }
         }
+        
+        // Auto-speak new dialogs when TTS is enabled
+        viewModelScope.launch {
+            dialogState.collect { state ->
+                val dialog = state.activeDialog
+                if (dialog != null && 
+                    _ttsEnabled.value && 
+                    _ttsAutoRead.value &&
+                    dialog.id != lastSpokenDialogId) {
+                    lastSpokenDialogId = dialog.id
+                    speakDialog(dialog)
+                }
+            }
+        }
+    }
+    
+    /**
+     * Initialize the TTS engine
+     */
+    private fun initTts() {
+        tts = TextToSpeech(getApplication()) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.let { engine ->
+                    val result = engine.setLanguage(Locale.US)
+                    if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        android.util.Log.w("DialogViewModel", "TTS language not supported")
+                    } else {
+                        ttsReady = true
+                        _ttsState.value = _ttsState.value.copy(isReady = true)
+                        
+                        // Set speech rate
+                        engine.setSpeechRate(_ttsSpeed.value)
+                        
+                        // Set utterance progress listener
+                        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                            override fun onStart(utteranceId: String?) {
+                                _ttsState.value = _ttsState.value.copy(isSpeaking = true)
+                            }
+                            override fun onDone(utteranceId: String?) {
+                                _ttsState.value = _ttsState.value.copy(isSpeaking = false)
+                            }
+                            @Deprecated("Deprecated in Java")
+                            override fun onError(utteranceId: String?) {
+                                _ttsState.value = _ttsState.value.copy(isSpeaking = false)
+                            }
+                            override fun onError(utteranceId: String?, errorCode: Int) {
+                                _ttsState.value = _ttsState.value.copy(isSpeaking = false)
+                            }
+                        })
+                    }
+                }
+            } else {
+                android.util.Log.e("DialogViewModel", "TTS initialization failed: $status")
+            }
+        }
+    }
+    
+    /**
+     * Clean text for TTS (remove markdown, code blocks, etc.)
+     */
+    private fun cleanTextForTts(text: String): String {
+        return text
+            .replace(Regex("```[\\s\\S]*?```"), " code block ")
+            .replace(Regex("`[^`]+`"), " code ")
+            .replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
+            .replace(Regex("\\*([^*]+)\\*"), "$1")
+            .replace(Regex("__([^_]+)__"), "$1")
+            .replace(Regex("_([^_]+)_"), "$1")
+            .replace(Regex("#+\\s*"), "")
+            .replace(Regex("\\[([^]]+)]\\([^)]+\\)"), "$1")
+            .replace(Regex("https?://\\S+"), " link ")
+            .replace(Regex("/[\\w/.-]+"), " path ")
+            .replace(Regex("[a-f0-9]{8,}"), " identifier ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+    
+    /**
+     * Speak text using TTS
+     */
+    fun speak(text: String) {
+        if (!ttsReady || !_ttsEnabled.value) return
+        
+        val cleanText = cleanTextForTts(text)
+        if (cleanText.isBlank()) return
+        
+        tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString())
+    }
+    
+    /**
+     * Speak a dialog's content
+     */
+    fun speakDialog(dialog: DialogDetails) {
+        if (!ttsReady || !_ttsEnabled.value) return
+        
+        val parts = mutableListOf<String>()
+        
+        // Add title if present and not blank
+        if (dialog.title.isNotBlank()) {
+            parts.add(cleanTextForTts(dialog.title))
+        }
+        
+        // Add prompt
+        parts.add(cleanTextForTts(dialog.prompt))
+        
+        // Add options for choice dialogs
+        if (dialog.dialogType.type == "choice") {
+            dialog.dialogType.options?.let { options ->
+                parts.add("Options are:")
+                options.forEachIndexed { index, option ->
+                    parts.add("${index + 1}. ${cleanTextForTts(option.label)}")
+                }
+            }
+        }
+        
+        val fullText = parts.joinToString(". ")
+        if (fullText.isNotBlank()) {
+            tts?.speak(fullText, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString())
+        }
+    }
+    
+    /**
+     * Stop TTS playback
+     */
+    fun stopSpeaking() {
+        tts?.stop()
+        _ttsState.value = _ttsState.value.copy(isSpeaking = false)
+    }
+    
+    /**
+     * Set TTS enabled state
+     */
+    fun setTtsEnabled(enabled: Boolean) {
+        _ttsEnabled.value = enabled
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.TTS_ENABLED] = enabled
+            }
+        }
+        if (!enabled) {
+            stopSpeaking()
+        }
+    }
+    
+    /**
+     * Set TTS auto-read state
+     */
+    fun setTtsAutoRead(enabled: Boolean) {
+        _ttsAutoRead.value = enabled
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.TTS_AUTO_READ] = enabled
+            }
+        }
+    }
+    
+    /**
+     * Set TTS speed (0.5 - 2.0)
+     */
+    fun setTtsSpeed(speed: Float) {
+        val clampedSpeed = speed.coerceIn(0.5f, 2.0f)
+        _ttsSpeed.value = clampedSpeed
+        tts?.setSpeechRate(clampedSpeed)
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.TTS_SPEED] = clampedSpeed
+            }
+        }
+    }
+    
+    /**
+     * Manually trigger speaking the current dialog
+     */
+    fun speakCurrentDialog() {
+        val dialog = dialogState.value.activeDialog ?: return
+        speakDialog(dialog)
     }
     
     /**
@@ -889,6 +1105,9 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
         wsClient.disconnect()
     }
 }

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.LocalParking
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -64,6 +65,8 @@ import com.example.continuumstudio.viewmodel.ParkedAgentsViewModel
 import com.example.continuumstudio.viewmodel.WidgetBayViewModel
 import com.example.continuumstudio.viewmodel.XRViewModel
 import com.example.continuumstudio.viewmodel.YouTubeViewModel
+import com.example.continuumstudio.viewmodel.NavigationViewModel
+import com.example.continuumstudio.ui.navigation.NavigationScreen
 import com.example.continuumstudio.util.rememberDisplayInfo
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -87,6 +90,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object Settings : Screen("settings", "Settings", Icons.Default.Settings)
     object XRConfig : Screen("xr_config", "XR Config", Icons.Outlined.Tune)
     object Updates : Screen("updates", "Updates", Icons.Default.SystemUpdate)
+    object Navigation : Screen("navigation", "Nav", Icons.Default.Map)
 }
 
 class MainActivity : ComponentActivity() {
@@ -137,6 +141,7 @@ class MainActivity : ComponentActivity() {
                 val youtubeViewModel: YouTubeViewModel = viewModel()
                 val updateViewModel: UpdateViewModel = viewModel()
                 val controlSurfaceViewModel: ControlSurfaceViewModel = viewModel()
+                val navigationViewModel: NavigationViewModel = viewModel()
                 
                 // Display mode detection for DeX/glasses support
                 val displayInfo by rememberDisplayInfo()
@@ -254,6 +259,24 @@ class MainActivity : ComponentActivity() {
                             widgetLabel = widgetLabel
                         )
                     }
+                }
+                
+                // Bridge navigation state to glasses (OSM map + turn-by-turn)
+                val navState by navigationViewModel.navigationState.collectAsState()
+                val navLocation by navigationViewModel.currentLocation.collectAsState()
+                val navDestination by navigationViewModel.destination.collectAsState()
+                val navRouteGeometry by navigationViewModel.routeGeometry.collectAsState()
+                
+                LaunchedEffect(navState) {
+                    xrViewModel.updateNavigationForGlasses(navState)
+                }
+                
+                LaunchedEffect(navLocation, navDestination, navRouteGeometry) {
+                    xrViewModel.updateOsmMapForGlasses(
+                        location = navLocation,
+                        destination = navDestination,
+                        routeGeometry = navRouteGeometry
+                    )
                 }
                 
                 // Settings states
@@ -673,6 +696,18 @@ class MainActivity : ComponentActivity() {
                             XRConfigScreen(
                                 youtubeViewModel = youtubeViewModel,
                                 xrViewModel = xrViewModel,
+                                onNavigateBack = { navController.popBackStack() },
+                                onNavigateToNavigation = { navController.navigate(Screen.Navigation.route) }
+                            )
+                        }
+                        
+                        composable(
+                            Screen.Navigation.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            NavigationScreen(
+                                navigationViewModel = navigationViewModel,
                                 onNavigateBack = { navController.popBackStack() }
                             )
                         }

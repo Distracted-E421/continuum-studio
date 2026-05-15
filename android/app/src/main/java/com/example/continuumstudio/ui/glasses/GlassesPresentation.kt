@@ -30,6 +30,7 @@ import com.example.continuumstudio.data.*
 import com.example.continuumstudio.service.NowPlayingState
 import com.example.continuumstudio.navigation.NavigationState
 import com.example.continuumstudio.youtube.YouTubeState
+import org.osmdroid.util.GeoPoint
 
 /**
  * Android Presentation for rendering UI on glasses/external display.
@@ -68,6 +69,11 @@ class GlassesPresentation(
     private var _useZonedLayout = mutableStateOf(true)
     private var _contentScrollOffset = mutableStateOf(0f)
     
+    // OSM Map state
+    private var _osmLocation = mutableStateOf<GeoPoint?>(null)
+    private var _osmDestination = mutableStateOf<GeoPoint?>(null)
+    private var _osmRouteGeometry = mutableStateOf<List<GeoPoint>>(emptyList())
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -92,7 +98,10 @@ class GlassesPresentation(
                     selectedOptionIndex = _selectedOptionIndex.value,
                     typingText = _typingText.value,
                     useZonedLayout = _useZonedLayout.value,
-                    contentScrollOffset = _contentScrollOffset.value
+                    contentScrollOffset = _contentScrollOffset.value,
+                    osmLocation = _osmLocation.value,
+                    osmDestination = _osmDestination.value,
+                    osmRouteGeometry = _osmRouteGeometry.value
                 )
             }
         }
@@ -144,6 +153,20 @@ class GlassesPresentation(
         // Add to scroll offset, coercing to non-negative values
         // The ZonedGlassesLayout will handle coercing to max bounds via scrollState
         _contentScrollOffset.value = (_contentScrollOffset.value + amount).coerceAtLeast(0f)
+    }
+    
+    /**
+     * Update OSM map state for glasses display.
+     * Call this when navigation location/route changes.
+     */
+    fun updateOsmMap(
+        location: GeoPoint?,
+        destination: GeoPoint? = null,
+        routeGeometry: List<GeoPoint> = emptyList()
+    ) {
+        _osmLocation.value = location
+        _osmDestination.value = destination
+        _osmRouteGeometry.value = routeGeometry
     }
 }
 
@@ -197,7 +220,10 @@ private fun GlassesRoot(
     selectedOptionIndex: Int? = null,
     typingText: String? = null,
     useZonedLayout: Boolean = true,
-    contentScrollOffset: Float = 0f
+    contentScrollOffset: Float = 0f,
+    osmLocation: GeoPoint? = null,
+    osmDestination: GeoPoint? = null,
+    osmRouteGeometry: List<GeoPoint> = emptyList()
 ) {
     val primaryColor = GlassesColors.primaryFor(theme.colorPalette)
     val dimColor = GlassesColors.dimFor(theme.colorPalette)
@@ -254,18 +280,41 @@ private fun GlassesRoot(
             GlassesConnectionIndicator(connectionStatus, primaryColor, Modifier.align(Alignment.TopEnd).padding(8.dp))
         }
         
-        // Navigation overlay
+        // Navigation overlay (text HUD + OSM map)
         if (navigationState.isNavigating) {
             if (layoutMode == GlassesLayoutMode.MINIMAL_STATUS || layoutMode == GlassesLayoutMode.PNP_OVERLAY) {
                 GlassesNavigationMini(
                     state = navigationState,
                     modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
                 )
+                // Mini OSM map in corner when minimal mode
+                osmLocation?.let { location ->
+                    OsmMapMiniOverlay(
+                        currentLocation = location,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                    )
+                }
             } else {
-                GlassesNavigationOverlay(
-                    state = navigationState,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(16.dp)
-                )
+                // Full navigation: use OSM overlay which includes HUD + map
+                osmLocation?.let { location ->
+                    OsmMapOverlay(
+                        currentLocation = location,
+                        destination = osmDestination,
+                        routePoints = osmRouteGeometry,
+                        nextDirection = navigationState.currentInstruction,
+                        distanceToNext = navigationState.distanceToNextTurn,
+                        eta = navigationState.arrivalTime,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } ?: run {
+                    // Fallback to text-only overlay if no location
+                    GlassesNavigationOverlay(
+                        state = navigationState,
+                        modifier = Modifier.align(Alignment.TopCenter).padding(16.dp)
+                    )
+                }
             }
         }
         

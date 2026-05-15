@@ -5,17 +5,19 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.*
@@ -34,12 +36,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.continuumstudio.data.DecisionEngineConfig
 import com.example.continuumstudio.viewmodel.SettingsViewModel
 import com.example.continuumstudio.viewmodel.OtaUpdateViewModel
+import com.example.continuumstudio.viewmodel.DialogViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel = viewModel(),
     otaViewModel: OtaUpdateViewModel = viewModel(),
+    dialogViewModel: DialogViewModel = viewModel(),
     onNavigateToUpdates: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -49,6 +53,12 @@ fun SettingsScreen(
     // OTA Update state
     val otaUpdateState by otaViewModel.updateState.collectAsState()
     val availableOtaUpdate by otaViewModel.availableUpdate.collectAsState()
+    
+    // Dialog TTS state
+    val dialogTtsEnabled by dialogViewModel.ttsEnabled.collectAsState()
+    val dialogTtsAutoRead by dialogViewModel.ttsAutoRead.collectAsState()
+    val dialogTtsSpeed by dialogViewModel.ttsSpeed.collectAsState()
+    val dialogTtsState by dialogViewModel.ttsState.collectAsState()
     
     var showSamsungAudioSetup by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -230,13 +240,96 @@ fun SettingsScreen(
                 )
             }
             
-            // About Section
-
-            // Text-to-Speech Section
+            // Dialog TTS Section (reads dialog content aloud)
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SettingsSection(title = "Dialog Reading", icon = Icons.AutoMirrored.Filled.VolumeUp)
+            }
+            
+            item {
+                SettingsSwitch(
+                    label = "Read Dialogs Aloud",
+                    description = "Use text-to-speech to read dialog content",
+                    checked = dialogTtsEnabled,
+                    onCheckedChange = { dialogViewModel.setTtsEnabled(it) }
+                )
+            }
+            
+            item {
+                SettingsSwitch(
+                    label = "Auto-Read New Dialogs",
+                    description = "Automatically read when new dialogs appear",
+                    checked = dialogTtsAutoRead,
+                    onCheckedChange = { dialogViewModel.setTtsAutoRead(it) },
+                    enabled = dialogTtsEnabled
+                )
+            }
+            
+            item {
+                SettingsSlider(
+                    label = "Dialog Speech Speed",
+                    value = dialogTtsSpeed,
+                    onValueChange = { dialogViewModel.setTtsSpeed(it) },
+                    valueRange = 0.5f..2.0f,
+                    steps = 6,
+                    valueLabel = String.format("%.1fx", dialogTtsSpeed),
+                    enabled = dialogTtsEnabled
+                )
+            }
+            
+            item {
+                // Status indicator and manual speak button
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (dialogTtsState.isReady) 
+                            MaterialTheme.colorScheme.secondaryContainer 
+                        else MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            if (dialogTtsState.isReady) Icons.Default.Check else Icons.Default.Warning,
+                            contentDescription = null
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                if (dialogTtsState.isReady) "TTS Engine Ready" else "TTS Not Available",
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                            )
+                            if (dialogTtsState.isSpeaking) {
+                                Text(
+                                    "Speaking...",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                        if (dialogTtsEnabled && dialogTtsState.isReady) {
+                            OutlinedButton(
+                                onClick = { 
+                                    if (dialogTtsState.isSpeaking) {
+                                        dialogViewModel.stopSpeaking()
+                                    } else {
+                                        dialogViewModel.speakCurrentDialog()
+                                    }
+                                }
+                            ) {
+                                Text(if (dialogTtsState.isSpeaking) "Stop" else "Speak")
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Activity Feed TTS Section
 
             item {
                 Spacer(modifier = Modifier.height(16.dp))
-                SettingsSection(title = "Text-to-Speech", icon = Icons.AutoMirrored.Filled.VolumeUp)
+                SettingsSection(title = "Activity Feed TTS", icon = Icons.AutoMirrored.Filled.VolumeUp)
             }
             
             item {

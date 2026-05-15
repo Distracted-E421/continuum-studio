@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.continuumstudio"
         minSdk = 34
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 9
+        versionName = "1.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -76,6 +76,12 @@ dependencies {
     // Google Maps
     implementation(libs.maps.compose)
     implementation(libs.play.services.maps)
+    
+    // OSMDroid (OpenStreetMap - open source alternative)
+    implementation(libs.osmdroid.android)
+    
+    // Location services
+    implementation(libs.play.services.location)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -12,6 +12,7 @@ import com.example.continuumstudio.navigation.NavigationState
 import com.example.continuumstudio.youtube.YouTubeState
 import com.example.continuumstudio.ui.glasses.*
 import kotlinx.coroutines.flow.*
+import org.osmdroid.util.GeoPoint
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -239,6 +240,18 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun updateNavigationForGlasses(state: NavigationState) {
         glassesManager.updateNavigation(state)
+    }
+    
+    /**
+     * Update glasses display with OSM map data.
+     * Call this alongside updateNavigationForGlasses when route data is available.
+     */
+    fun updateOsmMapForGlasses(
+        location: GeoPoint?,
+        destination: GeoPoint? = null,
+        routeGeometry: List<GeoPoint> = emptyList()
+    ) {
+        glassesManager.updateOsmMap(location, destination, routeGeometry)
     }
     
     fun updateYoutubeForGlasses(state: YouTubeState) {

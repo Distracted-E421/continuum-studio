@@ -32,7 +32,8 @@ import com.example.continuumstudio.youtube.YouTubeState
 fun XRConfigScreen(
     youtubeViewModel: YouTubeViewModel,
     xrViewModel: XRViewModel,
-    onNavigateBack: () -> Unit = {}
+    onNavigateBack: () -> Unit = {},
+    onNavigateToNavigation: () -> Unit = {}
 ) {
     val xrConfig by xrViewModel.xrConfig.collectAsState()
     val activePreset by xrViewModel.activePreset.collectAsState()
@@ -42,7 +43,7 @@ fun XRConfigScreen(
     val youtubeState by youtubeViewModel.youtubeState.collectAsState()
     
     var selectedTab by remember { mutableStateOf(0) }
-    val tabs = listOf("Widgets", "Theme", "Presets", "Context", "Media")
+    val tabs = listOf("Widgets", "Theme", "Presets", "Context", "Media", "Nav")
     
     Scaffold(
         topBar = {
@@ -112,6 +113,7 @@ fun XRConfigScreen(
                 2 -> PresetsTab(activePreset, xrViewModel)
                 3 -> ContextRulesTab(xrConfig.contextRules)
                 4 -> MediaTab(youtubeState, youtubeViewModel)
+                5 -> NavigationTab(onNavigateToNavigation)
             }
         }
     }
@@ -672,5 +674,141 @@ private fun MediaTab(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun NavigationTab(onNavigateToNavigation: () -> Unit) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Text(
+                "Turn-by-Turn Navigation",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                "Open-source maps powered by OpenStreetMap + OSRM",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onNavigateToNavigation() },
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Open Navigation",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Enter destination, get directions on your glasses",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        contentDescription = "Go",
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+        
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Features",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    
+                    FeatureRow("Real-time turn-by-turn directions", true)
+                    FeatureRow("Wireframe map overlay on glasses", true)
+                    FeatureRow("Dark tiles optimized for XR", true)
+                    FeatureRow("Voice guidance", false)
+                    FeatureRow("Offline maps", false)
+                }
+            }
+        }
+        
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "Open Source Stack",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Maps: OSMDroid + OpenStreetMap\n" +
+                        "Routing: OSRM (Open Source Routing Machine)\n" +
+                        "No API keys required. Free forever.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeatureRow(text: String, implemented: Boolean) {
+    Row(
+        modifier = Modifier.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            if (implemented) Icons.Default.Check else Icons.Outlined.Schedule,
+            contentDescription = null,
+            tint = if (implemented) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp)
+        )
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (implemented) 
+                MaterialTheme.colorScheme.onSurface 
+            else 
+                MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
