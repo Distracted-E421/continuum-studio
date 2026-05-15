@@ -36,9 +36,6 @@ Thumbs.db
 # Archive directory - old/superseded code
 archive/
 
-# Android app code (focus on core/ui-iced)
-android/
-
 # IDE caches
 .elixir_ls/
 .idea/

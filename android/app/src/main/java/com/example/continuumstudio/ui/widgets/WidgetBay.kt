@@ -199,7 +199,7 @@ fun WidgetBayScreen(
         }
     ) { padding ->
         LazyVerticalGrid(
-            columns = GridCells.Fixed(bayConfig.columns),
+            columns = GridCells.Adaptive(minSize = 280.dp),
             modifier = modifier
                 .fillMaxSize()
                 .padding(padding)

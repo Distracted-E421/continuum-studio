@@ -26,7 +26,15 @@ data class SettingsUiState(
     val triageTimeoutSecs: Long = 30,
     val undoWindowSecs: Long = 10,
     val isLoading: Boolean = false,
-    val isDirty: Boolean = false
+    val isDirty: Boolean = false,
+    val ttsEnabled: Boolean = false,
+    val ttsActivityEnabled: Boolean = true,
+    val ttsToolCallEvents: Boolean = true,
+    val ttsCommandEvents: Boolean = true,
+    val ttsDialogEvents: Boolean = true,
+    val ttsProgressEvents: Boolean = true,
+    val ttsSpeed: Float = 1.0f,
+    val ttsUseServer: Boolean = true
 )
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
@@ -51,6 +59,16 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         // Decision engine settings
         val KEY_TRIAGE_TIMEOUT_SECS = longPreferencesKey("triage_timeout_secs")
         val KEY_UNDO_WINDOW_SECS = longPreferencesKey("undo_window_secs")
+        
+        // TTS settings
+        val KEY_TTS_ENABLED = booleanPreferencesKey("tts_enabled")
+        val KEY_TTS_ACTIVITY_ENABLED = booleanPreferencesKey("tts_activity_enabled")
+        val KEY_TTS_TOOL_CALL_EVENTS = booleanPreferencesKey("tts_tool_call_events")
+        val KEY_TTS_COMMAND_EVENTS = booleanPreferencesKey("tts_command_events")
+        val KEY_TTS_DIALOG_EVENTS = booleanPreferencesKey("tts_dialog_events")
+        val KEY_TTS_PROGRESS_EVENTS = booleanPreferencesKey("tts_progress_events")
+        val KEY_TTS_SPEED = floatPreferencesKey("tts_speed")
+        val KEY_TTS_USE_SERVER = booleanPreferencesKey("tts_use_server")
         
         // Defaults - Use zen1's Tailscale IP for Android connectivity (primary)
         const val DEFAULT_DIALOG_SERVER_URL = "http://100.102.101.72:8082"
@@ -87,7 +105,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                         triageTimeoutSecs = prefs[KEY_TRIAGE_TIMEOUT_SECS] ?: DEFAULT_TRIAGE_TIMEOUT_SECS,
                         undoWindowSecs = prefs[KEY_UNDO_WINDOW_SECS] ?: DEFAULT_UNDO_WINDOW_SECS,
                         isLoading = false,
-                        isDirty = false
+                        isDirty = false,
+                        ttsEnabled = prefs[KEY_TTS_ENABLED] ?: false,
+                        ttsActivityEnabled = prefs[KEY_TTS_ACTIVITY_ENABLED] ?: true,
+                        ttsToolCallEvents = prefs[KEY_TTS_TOOL_CALL_EVENTS] ?: true,
+                        ttsCommandEvents = prefs[KEY_TTS_COMMAND_EVENTS] ?: true,
+                        ttsDialogEvents = prefs[KEY_TTS_DIALOG_EVENTS] ?: true,
+                        ttsProgressEvents = prefs[KEY_TTS_PROGRESS_EVENTS] ?: true,
+                        ttsSpeed = prefs[KEY_TTS_SPEED] ?: 1.0f,
+                        ttsUseServer = prefs[KEY_TTS_USE_SERVER] ?: true
                     )
                 }
             }
@@ -113,6 +139,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     prefs[KEY_AUTO_SYNC] = state.autoSync
                     prefs[KEY_TRIAGE_TIMEOUT_SECS] = state.triageTimeoutSecs
                     prefs[KEY_UNDO_WINDOW_SECS] = state.undoWindowSecs
+                    prefs[KEY_TTS_ENABLED] = state.ttsEnabled
+                    prefs[KEY_TTS_ACTIVITY_ENABLED] = state.ttsActivityEnabled
+                    prefs[KEY_TTS_TOOL_CALL_EVENTS] = state.ttsToolCallEvents
+                    prefs[KEY_TTS_COMMAND_EVENTS] = state.ttsCommandEvents
+                    prefs[KEY_TTS_DIALOG_EVENTS] = state.ttsDialogEvents
+                    prefs[KEY_TTS_PROGRESS_EVENTS] = state.ttsProgressEvents
+                    prefs[KEY_TTS_SPEED] = state.ttsSpeed
+                    prefs[KEY_TTS_USE_SERVER] = state.ttsUseServer
                 }
                 
                 _uiState.update { it.copy(isLoading = false, isDirty = false) }
@@ -182,6 +216,38 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     
     fun showToast(message: String) {
         _toastMessage.value = message
+    }
+    
+    fun updateTtsEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(ttsEnabled = enabled, isDirty = true) }
+    }
+    
+    fun updateTtsActivityEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(ttsActivityEnabled = enabled, isDirty = true) }
+    }
+    
+    fun updateTtsToolCallEvents(enabled: Boolean) {
+        _uiState.update { it.copy(ttsToolCallEvents = enabled, isDirty = true) }
+    }
+    
+    fun updateTtsCommandEvents(enabled: Boolean) {
+        _uiState.update { it.copy(ttsCommandEvents = enabled, isDirty = true) }
+    }
+    
+    fun updateTtsDialogEvents(enabled: Boolean) {
+        _uiState.update { it.copy(ttsDialogEvents = enabled, isDirty = true) }
+    }
+    
+    fun updateTtsProgressEvents(enabled: Boolean) {
+        _uiState.update { it.copy(ttsProgressEvents = enabled, isDirty = true) }
+    }
+    
+    fun updateTtsSpeed(speed: Float) {
+        _uiState.update { it.copy(ttsSpeed = speed, isDirty = true) }
+    }
+    
+    fun updateTtsUseServer(useServer: Boolean) {
+        _uiState.update { it.copy(ttsUseServer = useServer, isDirty = true) }
     }
     
     fun dismissToast() {

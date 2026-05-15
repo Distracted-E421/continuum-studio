@@ -17,13 +17,16 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.LocalParking
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -42,9 +45,15 @@ import com.example.continuumstudio.ui.coordination.CoordinationDashboard
 import com.example.continuumstudio.ui.dialog.DialogScreen
 import com.example.continuumstudio.ui.parkedagents.ParkedAgentsScreen
 import com.example.continuumstudio.ui.settings.SettingsScreen
+import com.example.continuumstudio.ui.settings.UpdateScreen
 import com.example.continuumstudio.ui.theme.ContinuumStudioTheme
+import com.example.continuumstudio.viewmodel.UpdateViewModel
 import com.example.continuumstudio.ui.widgets.WidgetBayScreen
 import com.example.continuumstudio.ui.widgets.WidgetBayState
+import com.example.continuumstudio.ui.xr.XRConfigScreen
+import com.example.continuumstudio.ui.xrcontrol.ControlSurfaceScreen
+import com.example.continuumstudio.viewmodel.ControlSurfaceViewModel
+import com.example.continuumstudio.service.NowPlayingService
 import com.example.continuumstudio.viewmodel.ActivityFeedViewModel
 import com.example.continuumstudio.viewmodel.CLIAgentsViewModel
 import com.example.continuumstudio.viewmodel.CoordinationViewModel
@@ -53,6 +62,18 @@ import com.example.continuumstudio.viewmodel.NetworkMonitorViewModel
 import com.example.continuumstudio.viewmodel.OfflineViewModel
 import com.example.continuumstudio.viewmodel.ParkedAgentsViewModel
 import com.example.continuumstudio.viewmodel.WidgetBayViewModel
+import com.example.continuumstudio.viewmodel.XRViewModel
+import com.example.continuumstudio.viewmodel.YouTubeViewModel
+import com.example.continuumstudio.util.rememberDisplayInfo
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import com.example.continuumstudio.ui.components.DisplayModeIndicator
+import com.example.continuumstudio.ui.components.AdaptiveLayout
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 
 // Navigation routes
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
@@ -62,7 +83,10 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object Activity : Screen("activity", "Feed", Icons.Default.Timeline)
     object Parked : Screen("parked", "Parked", Icons.Default.LocalParking)
     object Coordination : Screen("coordination", "Coord", Icons.Default.Groups)
+    object ControlSurface : Screen("control_surface", "Deck", Icons.Default.Dashboard)
     object Settings : Screen("settings", "Settings", Icons.Default.Settings)
+    object XRConfig : Screen("xr_config", "XR Config", Icons.Outlined.Tune)
+    object Updates : Screen("updates", "Updates", Icons.Default.SystemUpdate)
 }
 
 class MainActivity : ComponentActivity() {
@@ -109,6 +133,13 @@ class MainActivity : ComponentActivity() {
                 val parkedAgentsViewModel: ParkedAgentsViewModel = viewModel()
                 val networkMonitorViewModel: NetworkMonitorViewModel = viewModel()
                 val offlineViewModel: OfflineViewModel = viewModel()
+                val xrViewModel: XRViewModel = viewModel()
+                val youtubeViewModel: YouTubeViewModel = viewModel()
+                val updateViewModel: UpdateViewModel = viewModel()
+                val controlSurfaceViewModel: ControlSurfaceViewModel = viewModel()
+                
+                // Display mode detection for DeX/glasses support
+                val displayInfo by rememberDisplayInfo()
                 
                 // Start all background services at Activity level
                 LaunchedEffect(Unit) {
@@ -116,6 +147,16 @@ class MainActivity : ComponentActivity() {
                     cliAgentsViewModel.startPolling()
                     parkedAgentsViewModel.startPolling()
                     networkMonitorViewModel.startMonitoring()
+                }
+                
+                // XR Glasses lifecycle management
+                val lifecycleOwner = LocalLifecycleOwner.current
+                DisposableEffect(lifecycleOwner) {
+                    val observer = xrViewModel.glassesManager.createLifecycleObserver { xrViewModel.glassesTheme.value }
+                    lifecycleOwner.lifecycle.addObserver(observer)
+                    onDispose {
+                        lifecycleOwner.lifecycle.removeObserver(observer)
+                    }
                 }
                 
                 val connectionState by dialogViewModel.connectionState.collectAsState()
@@ -149,6 +190,71 @@ class MainActivity : ComponentActivity() {
                 
                 // Orchestrator mode state (from dialog or settings)
                 val orchestratorMode by dialogViewModel.orchestratorMode.collectAsState()
+                
+                // XR/Glasses state
+                val isGlassesConnected by xrViewModel.isGlassesConnected.collectAsState()
+                val glassesDisplayState by xrViewModel.glassesDisplayState.collectAsState()
+                val xrLayoutMode by xrViewModel.layoutMode.collectAsState()
+                
+                // Bridge states to glasses display
+                LaunchedEffect(dialogState.activeDialog) {
+                    xrViewModel.updateDialogForGlasses(dialogState.activeDialog)
+                }
+                
+                LaunchedEffect(activityUiState.events) {
+                    xrViewModel.updateActivityForGlasses(activityUiState.events)
+                }
+                
+                LaunchedEffect(connectionState.isConnected, cliUiState.agents.size, latency) {
+                    xrViewModel.updateConnectionForGlasses(
+                        isConnected = connectionState.isConnected,
+                        serverUrl = connectionState.serverUrl,
+                        latencyMs = latency,
+                        agentCount = cliUiState.agents.size
+                    )
+                }
+                
+                // Bridge now playing state to glasses display
+                val nowPlayingState by NowPlayingService.nowPlayingState.collectAsState()
+                
+                // YouTube state
+                val youtubeState by youtubeViewModel.youtubeState.collectAsState()
+                LaunchedEffect(nowPlayingState) {
+                    xrViewModel.updateNowPlayingForGlasses(nowPlayingState)
+                }
+                
+                // Bridge YouTube state to glasses
+                LaunchedEffect(youtubeState) {
+                    xrViewModel.updateYoutubeForGlasses(youtubeState)
+                }
+                
+                // Bridge control surface state to glasses
+                val controlSurfaceState by controlSurfaceViewModel.state.collectAsState()
+                LaunchedEffect(
+                    controlSurfaceState.activeProfile?.name,
+                    controlSurfaceState.activeProfile?.widgets?.size,
+                    controlSurfaceState.isEditMode
+                ) {
+                    xrViewModel.updateControlSurfaceForGlasses(
+                        activeProfileName = controlSurfaceState.activeProfile?.name,
+                        activeProfileIcon = controlSurfaceState.activeProfile?.icon,
+                        widgetCount = controlSurfaceState.activeProfile?.widgets?.size ?: 0,
+                        lastAction = null,
+                        isEditMode = controlSurfaceState.isEditMode
+                    )
+                }
+                
+                // Show action feedback on glasses when widget is tapped
+                LaunchedEffect(controlSurfaceState.lastAction, controlSurfaceState.actionHistory.size) {
+                    controlSurfaceState.actionHistory.lastOrNull()?.let { executed ->
+                        val widgetLabel = controlSurfaceState.activeProfile?.widgets
+                            ?.find { it.id == executed.widgetId }?.config?.label
+                        xrViewModel.showControlSurfaceAction(
+                            actionDescription = executed.result ?: "Action executed",
+                            widgetLabel = widgetLabel
+                        )
+                    }
+                }
                 
                 // Settings states
                 val savedServerUrl by dialogViewModel.savedServerUrl.collectAsState()
@@ -243,12 +349,50 @@ class MainActivity : ComponentActivity() {
                 val bottomNavScreens = listOf(
                     Screen.Dashboard,
                     Screen.Dialog,
+                    Screen.ControlSurface,
                     Screen.CLIAgents,
                     Screen.Activity,
                     Screen.Settings
                 )
                 
                 Scaffold(
+                    topBar = {
+                        // Show display mode indicator when in DeX or external display mode
+                        if (displayInfo.hasExternalDisplay || isGlassesConnected) {
+                            androidx.compose.material3.Surface(
+                                color = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
+                                modifier = androidx.compose.ui.Modifier.fillMaxWidth()
+                            ) {
+                                androidx.compose.foundation.layout.Row(
+                                    modifier = androidx.compose.ui.Modifier.padding(8.dp),
+                                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                    ) {
+                                        DisplayModeIndicator(displayInfo = displayInfo)
+                                        IconButton(
+                                            onClick = { navController.navigate(Screen.XRConfig.route) }
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Tune,
+                                                contentDescription = "XR Settings"
+                                            )
+                                        }
+                                    }
+                                    androidx.compose.material3.Text(
+                                        text = if (isGlassesConnected)
+                                        "Glasses: " + (glassesDisplayState.connectedDisplayName ?: "Connected")
+                                    else
+                                        "External Display",
+                                        style = androidx.compose.material3.MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+                        }
+                    },
                     bottomBar = {
                         NavigationBar {
                             bottomNavScreens.forEach { screen ->
@@ -287,12 +431,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 ) { innerPadding ->
+                    AdaptiveLayout(
+                        displayInfo = displayInfo,
+                        primaryContent = {
                     NavHost(
                         navController = navController,
                         startDestination = Screen.Dashboard.route,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
+                        modifier = Modifier.fillMaxSize()
                     ) {
                         composable(
                             Screen.Dashboard.route,
@@ -437,6 +582,17 @@ class MainActivity : ComponentActivity() {
                                 queueItems = queueItems,
                                 onSwitchToQueuedDialog = dialogViewModel::switchToQueuedDialog,
                                 onToggleQueueDrawer = dialogViewModel::toggleQueueDrawer,
+                                // XR Mode (phone as input device when glasses connected)
+                                isXRMode = isGlassesConnected,
+                                onXROptionIndexChange = { index ->
+                                    xrViewModel.updateSelectedOption(index)
+                                },
+                                onTypingStateChange = { isTyping ->
+                                    xrViewModel.updateTypingText(if (isTyping) dialogState.comment else null)
+                                },
+                                onScrollGlasses = { scrollAmount ->
+                                    xrViewModel.scrollGlassesContent(scrollAmount)
+                                }
                             )
                         }
                         
@@ -479,9 +635,53 @@ class MainActivity : ComponentActivity() {
                             enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
                             exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
                         ) {
-                            SettingsScreen()
+                            SettingsScreen(
+                                onNavigateToUpdates = {
+                                    navController.navigate(Screen.Updates.route) {
+                                        launchSingleTop = true
+                                    }
+                                }
+                            )
+                        }
+                        
+                        composable(
+                            Screen.Updates.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            UpdateScreen(
+                                viewModel = updateViewModel,
+                                onNavigateBack = { navController.popBackStack() }
+                            )
+                        }
+                        
+                        composable(
+                            Screen.ControlSurface.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            ControlSurfaceScreen(
+                                viewModel = controlSurfaceViewModel
+                            )
+                        }
+                        
+                        composable(
+                            Screen.XRConfig.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            XRConfigScreen(
+                                youtubeViewModel = youtubeViewModel,
+                                xrViewModel = xrViewModel,
+                                onNavigateBack = { navController.popBackStack() }
+                            )
                         }
                     }
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                    )
                 }
             }
         }

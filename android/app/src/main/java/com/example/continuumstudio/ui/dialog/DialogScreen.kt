@@ -115,6 +115,11 @@ fun DialogScreen(
     queueItems: List<com.example.continuumstudio.data.QueueItem> = emptyList(),
     onSwitchToQueuedDialog: (Int) -> Unit = {},
     onToggleQueueDrawer: () -> Unit = {},
+    // XR Mode (Phone as input device)
+    isXRMode: Boolean = false,
+    onXROptionIndexChange: (Int) -> Unit = {},
+    onTypingStateChange: (Boolean) -> Unit = {},
+    onScrollGlasses: (Int) -> Unit = {},
 ) {
     // Initialize serverUrlInput from savedServerUrl (persisted in DataStore)
     var serverUrlInput by remember { mutableStateOf(savedServerUrl) }
@@ -343,21 +348,46 @@ fun DialogScreen(
                                         // Main content (right side)
                                         Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                                             if (dialogState.activeDialog != null) {
-                                                ActiveDialogCard(
-                                                    dialog = dialogState.activeDialog,
-                                                    selectedValue = dialogState.selectedValue,
-                                                    selectedOptions = dialogState.selectedOptions,
-                                                    sliderValue = dialogState.sliderValue,
-                                                    comment = dialogState.comment,
-                                                    holdMode = dialogState.holdMode,
-                                                    onSelectOption = onSelectOption,
-                                                    onToggleOption = onToggleOption,
-                                                    onTextChange = onTextChange,
-                                                    onCommentChange = onCommentChange,
-                                                    onSliderChange = onSliderChange,
-                                                    onConfirm = onConfirm,
-                                                    onSubmit = onSubmit,
-                                                )
+                                                if (isXRMode) {
+                                                    // XR Mode: Show simplified control panel for phone input
+                                                    val options = dialogState.activeDialog.dialogType.options ?: emptyList()
+                                                    val selectedIndex = options.indexOfFirst { it.value == dialogState.selectedValue }
+                                                    
+                                                    DialogControlPanel(
+                                                        dialog = dialogState.activeDialog,
+                                                        selectedOptionIndex = selectedIndex,
+                                                        commentText = dialogState.comment,
+                                                        isSubmitting = false,
+                                                        onOptionSelect = { index ->
+                                                            options.getOrNull(index)?.let { option ->
+                                                                onSelectOption(option.value)
+                                                            }
+                                                            onXROptionIndexChange(index)
+                                                        },
+                                                        onCommentChange = onCommentChange,
+                                                        onSubmit = onSubmit,
+                                                        onRefresh = onRefresh,
+                                                        onTypingStateChange = onTypingStateChange,
+                                                        onScrollGlasses = onScrollGlasses
+                                                    )
+                                                } else {
+                                                    // Standard mode: Full dialog card
+                                                    ActiveDialogCard(
+                                                        dialog = dialogState.activeDialog,
+                                                        selectedValue = dialogState.selectedValue,
+                                                        selectedOptions = dialogState.selectedOptions,
+                                                        sliderValue = dialogState.sliderValue,
+                                                        comment = dialogState.comment,
+                                                        holdMode = dialogState.holdMode,
+                                                        onSelectOption = onSelectOption,
+                                                        onToggleOption = onToggleOption,
+                                                        onTextChange = onTextChange,
+                                                        onCommentChange = onCommentChange,
+                                                        onSliderChange = onSliderChange,
+                                                        onConfirm = onConfirm,
+                                                        onSubmit = onSubmit,
+                                                    )
+                                                }
                                             } else {
                                                 // No active dialog - show dashboard with queue info
                                                 DashboardCard(

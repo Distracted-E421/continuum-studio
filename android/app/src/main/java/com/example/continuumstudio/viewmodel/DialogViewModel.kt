@@ -21,8 +21,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import java.io.File
+import android.net.Uri
+import android.provider.OpenableColumns
 
 // DataStore extension
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -57,6 +64,13 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     
     // Snackbar/Toast message state
     private val _snackbarMessage = MutableStateFlow<String?>(null)
+    
+    // Image attachment state
+    private val _attachedImageUrl = MutableStateFlow<String?>(null)
+    val attachedImageUrl: StateFlow<String?> = _attachedImageUrl.asStateFlow()
+    
+    private val _isUploadingImage = MutableStateFlow(false)
+    val isUploadingImage: StateFlow<Boolean> = _isUploadingImage.asStateFlow()
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
     
     fun showToast(message: String) {
@@ -633,6 +647,84 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun updateComment(comment: String) {
         wsClient.updateComment(comment)
+    }
+
+    /**
+     * Upload an image from camera/gallery
+     * Returns the server path to include in the dialog response
+     */
+    fun uploadImage(uri: Uri) {
+        viewModelScope.launch {
+            _isUploadingImage.value = true
+            try {
+                val serverUrl = connectionState.value.serverUrl
+                val httpUrl = serverUrl.replace("ws://", "http://").replace("wss://", "https://")
+                
+                // Get file details from content resolver
+                val contentResolver = getApplication<Application>().contentResolver
+                val mimeType = contentResolver.getType(uri) ?: "image/jpeg"
+                
+                // Get filename
+                val filename = contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    cursor.moveToFirst()
+                    if (nameIndex >= 0) cursor.getString(nameIndex) else "image.jpg"
+                } ?: "image.jpg"
+                
+                // Read file bytes
+                val inputStream = contentResolver.openInputStream(uri)
+                    ?: throw Exception("Could not open file")
+                val bytes = inputStream.readBytes()
+                inputStream.close()
+                
+                // Create multipart request
+                val requestBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart(
+                        "file",
+                        filename,
+                        bytes.toRequestBody(mimeType.toMediaType())
+                    )
+                    .build()
+                
+                val request = okhttp3.Request.Builder()
+                    .url("$httpUrl/api/images/upload")
+                    .post(requestBody)
+                    .build()
+                
+                val response = withContext(Dispatchers.IO) {
+                    wsClient.getHttpClient().newCall(request).execute()
+                }
+                
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: ""
+                    // Parse response to get path
+                    val json = Json.parseToJsonElement(body)
+                    val data = json.jsonObject["data"]?.jsonObject
+                    val imagePath = data?.get("path")?.jsonPrimitive?.content
+                    
+                    if (imagePath != null) {
+                        _attachedImageUrl.value = "$httpUrl$imagePath"
+                        showToast("Image attached")
+                    } else {
+                        showToast("Upload failed: no path returned")
+                    }
+                } else {
+                    showToast("Upload failed: ${response.code}")
+                }
+            } catch (e: Exception) {
+                showToast("Upload error: ${e.message}")
+            } finally {
+                _isUploadingImage.value = false
+            }
+        }
+    }
+    
+    /**
+     * Clear attached image
+     */
+    fun clearAttachedImage() {
+        _attachedImageUrl.value = null
     }
 
     /**

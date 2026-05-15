@@ -34,6 +34,11 @@ class DialogWebSocketClient(
         isLenient = true
     }
 
+    /**
+     * Get the OkHttp client for HTTP requests
+     */
+    fun getHttpClient(): OkHttpClient = client
+
     // Reconnection state
     private var reconnectAttempts = 0
     private var reconnectJob: Job? = null
