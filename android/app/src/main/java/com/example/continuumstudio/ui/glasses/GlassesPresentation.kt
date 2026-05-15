@@ -115,7 +115,13 @@ class GlassesPresentation(
         super.dismiss()
     }
     
-    fun updateDialog(state: GlassesDialogState?) { _dialogState.value = state }
+    fun updateDialog(state: GlassesDialogState?) {
+        // Reset scroll offset when dialog changes (new dialog or cleared)
+        if (_dialogState.value?.id != state?.id) {
+            _contentScrollOffset.value = 0f
+        }
+        _dialogState.value = state
+    }
     fun updateActivity(events: List<GlassesActivityItem>) { _activityEvents.value = events }
     fun updateConnectionStatus(status: GlassesConnectionStatus) { _connectionStatus.value = status }
     fun updateTheme(theme: GlassesTheme) { _theme.value = theme }
@@ -135,7 +141,9 @@ class GlassesPresentation(
     fun updateTypingText(text: String?) { _typingText.value = text }
     fun setUseZonedLayout(enabled: Boolean) { _useZonedLayout.value = enabled }
     fun scrollContent(amount: Int) { 
-        _contentScrollOffset.value += amount
+        // Add to scroll offset, coercing to non-negative values
+        // The ZonedGlassesLayout will handle coercing to max bounds via scrollState
+        _contentScrollOffset.value = (_contentScrollOffset.value + amount).coerceAtLeast(0f)
     }
 }
 

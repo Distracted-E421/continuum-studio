@@ -5,12 +5,15 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -201,56 +204,124 @@ private fun LeftZoneContent(
     modifier: Modifier = Modifier
 ) {
     val textScale = theme.fontScale
+    
+    // Create scroll state that we can control programmatically
+    val scrollState = rememberScrollState()
+    
+    // Sync the scroll position with the external scrollOffset
+    LaunchedEffect(scrollOffset) {
+        scrollState.scrollTo(scrollOffset.roundToInt().coerceAtLeast(0))
+    }
 
-    Column(
+    // Outer box with clipToBounds to hide overflow
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .offset { IntOffset(0, -scrollOffset.roundToInt()) }
-            .padding(12.dp),
-        verticalArrangement = Arrangement.Center
+            .clipToBounds()
     ) {
-        // Title
-        Text(
-            text = dialog.title,
-            color = primaryColor,
-            fontSize = (22 * textScale).sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.Top
+        ) {
+            // Title (keep maxLines for title as it should be compact)
+            Text(
+                text = dialog.title,
+                color = primaryColor,
+                fontSize = (22 * textScale).sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
 
-        Spacer(Modifier.height(16.dp))
-
-        // Prompt content
-        Text(
-            text = stripMarkdown(dialog.prompt),
-            color = dimColor,
-            fontSize = (14 * textScale).sp,
-            lineHeight = (20 * textScale).sp,
-            maxLines = 8,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        // Typing indicator
-        if (typingText != null) {
             Spacer(Modifier.height(16.dp))
+
+            // Prompt content - NO maxLines to allow full scrolling
+            Text(
+                text = stripMarkdown(dialog.prompt),
+                color = dimColor,
+                fontSize = (14 * textScale).sp,
+                lineHeight = (20 * textScale).sp
+                // No maxLines - content can be any length
+            )
+
+            // Typing indicator
+            if (typingText != null) {
+                Spacer(Modifier.height(16.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, primaryColor.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        .padding(12.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        BlinkingCursor(primaryColor)
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = typingText.ifEmpty { "..." },
+                            color = primaryColor,
+                            fontSize = (14 * textScale).sp,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+            
+            // Add some bottom padding so last content isn't cut off
+            Spacer(Modifier.height(24.dp))
+        }
+        
+        // Scroll indicators
+        if (scrollState.value > 0) {
+            // Show "more above" indicator
             Box(
                 modifier = Modifier
+                    .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .border(1.dp, primaryColor.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-                    .padding(12.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    BlinkingCursor(primaryColor)
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = typingText.ifEmpty { "..." },
-                        color = primaryColor,
-                        fontSize = (14 * textScale).sp,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
+                    .height(24.dp)
+                    .background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            colors = listOf(
+                                GlassesColors.Transparent.copy(alpha = 0.3f),
+                                GlassesColors.Transparent
+                            )
+                        )
                     )
-                }
+            ) {
+                Text(
+                    text = "▲",
+                    color = dimColor.copy(alpha = 0.5f),
+                    fontSize = 10.sp,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
+            }
+        }
+        
+        if (scrollState.value < scrollState.maxValue) {
+            // Show "more below" indicator
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(24.dp)
+                    .background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            colors = listOf(
+                                GlassesColors.Transparent,
+                                GlassesColors.Transparent.copy(alpha = 0.3f)
+                            )
+                        )
+                    )
+            ) {
+                Text(
+                    text = "▼",
+                    color = dimColor.copy(alpha = 0.5f),
+                    fontSize = 10.sp,
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
             }
         }
     }
