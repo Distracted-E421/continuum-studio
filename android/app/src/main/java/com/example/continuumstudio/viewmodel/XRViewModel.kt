@@ -1,6 +1,11 @@
 package com.example.continuumstudio.viewmodel
 
 import android.app.Application
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.util.Log
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -33,6 +38,27 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
     
     private val dataStore = application.dataStore
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+    
+    // Service binding for persistent mode theme updates
+    private var glassesService: GlassesDisplayService? = null
+    private var isServiceBound = false
+    
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as? GlassesDisplayService.LocalBinder
+            glassesService = binder?.getService()
+            isServiceBound = true
+            // Push current theme to service immediately on connect
+            glassesService?.updateTheme(_glassesTheme.value)
+            Log.d(TAG, "GlassesDisplayService bound, pushed current theme")
+        }
+        
+        override fun onServiceDisconnected(name: ComponentName?) {
+            glassesService = null
+            isServiceBound = false
+            Log.d(TAG, "GlassesDisplayService unbound")
+        }
+    }
     
     // Glasses display manager
     val glassesManager = GlassesDisplayManager(application)
@@ -90,10 +116,12 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
     init {
         loadConfig()
         
-        // Update manager when theme changes
+        // Update manager AND service when theme changes
         viewModelScope.launch {
             _glassesTheme.collect { theme ->
                 glassesManager.updateTheme(theme)
+                // Also push to service if bound (for persistent mode)
+                glassesService?.updateTheme(theme)
             }
         }
         
@@ -108,6 +136,8 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
     // ============================================================================
     // Configuration Management
     // ============================================================================
+    
+    private var hasRestoredServiceBinding = false
     
     private fun loadConfig() {
         viewModelScope.launch {
@@ -134,6 +164,12 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
                 
                 // Load persistent mode setting
                 _persistentModeEnabled.value = prefs[PrefsKeys.PERSISTENT_MODE] ?: false
+                
+                // Restore service binding once after first load
+                if (!hasRestoredServiceBinding) {
+                    hasRestoredServiceBinding = true
+                    restoreServiceBindingIfNeeded()
+                }
             }
         }
     }
@@ -171,14 +207,29 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun setPersistentMode(enabled: Boolean) {
         _persistentModeEnabled.value = enabled
+        val context = getApplication<Application>()
         
         if (enabled) {
             // Start the foreground service
-            GlassesDisplayService.start(getApplication())
+            GlassesDisplayService.start(context)
             Log.i(TAG, "Persistent mode enabled - starting GlassesDisplayService")
+            
+            // Bind to service to push theme updates
+            val intent = Intent(context, GlassesDisplayService::class.java)
+            context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         } else {
+            // Unbind from service
+            if (isServiceBound) {
+                try {
+                    context.unbindService(serviceConnection)
+                } catch (e: IllegalArgumentException) {
+                    Log.w(TAG, "Service already unbound")
+                }
+                isServiceBound = false
+                glassesService = null
+            }
             // Stop the foreground service
-            GlassesDisplayService.stop(getApplication())
+            GlassesDisplayService.stop(context)
             Log.i(TAG, "Persistent mode disabled - stopping GlassesDisplayService")
         }
         
@@ -493,9 +544,33 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
         saveConfig()
         glassesManager.updateTheme(_glassesTheme.value)
     }
-
-
-
+    
+    /**
+     * Bind to service if persistent mode is enabled.
+     * Call this after loadConfig completes to restore service binding.
+     */
+    private fun restoreServiceBindingIfNeeded() {
+        if (_persistentModeEnabled.value && !isServiceBound) {
+            val context = getApplication<Application>()
+            val intent = Intent(context, GlassesDisplayService::class.java)
+            context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+            Log.d(TAG, "Restored service binding for persistent mode")
+        }
+    }
+    
+    override fun onCleared() {
+        super.onCleared()
+        // Clean up service binding
+        if (isServiceBound) {
+            try {
+                getApplication<Application>().unbindService(serviceConnection)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Service already unbound in onCleared")
+            }
+            isServiceBound = false
+            glassesService = null
+        }
+    }
 }
 
 // Extension to convert timestamp string to Long
