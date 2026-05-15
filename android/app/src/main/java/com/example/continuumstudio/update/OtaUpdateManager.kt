@@ -44,10 +44,12 @@ class OtaUpdateManager(
     val availableUpdate: StateFlow<UpdateInfo?> = _availableUpdate
     
     companion object {
-        const val GITEA_API_BASE = "https://gitea.datapunk.dev/api/v1"
+        // Gitea on internal network (accessible via Tailscale)
+        const val GITEA_API_BASE = "http://100.64.142.88:3000/api/v1"
         const val GITEA_OWNER = "datapunk"
         const val GITEA_REPO = "continuum-studio"
         
+        // GitHub as fallback (requires public repo or token)
         const val GITHUB_API_BASE = "https://api.github.com"
         const val GITHUB_OWNER = "Distracted-E421"
         const val GITHUB_REPO = "continuum-studio"

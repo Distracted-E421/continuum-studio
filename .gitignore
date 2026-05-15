@@ -42,3 +42,7 @@ deps/
 *.beam
 result
 android/tablet/build/
+
+# Backup files
+*.backup
+*.bak
