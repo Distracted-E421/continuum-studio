@@ -1,0 +1,27 @@
+[package]
+name = "synapsix-theme"
+version = "0.1.0"
+edition = "2021"
+description = "COSMIC-inspired theme system for Synapsix applications"
+authors = ["e421"]
+license = "MIT"
+repository = "https://github.com/e421/synapsix"
+
+[features]
+default = []
+# Enable iced Color integration
+iced = ["dep:iced_core"]
+# Enable egui Color32 integration  
+egui = ["dep:egui"]
+# Enable serde serialization
+serde = ["dep:serde"]
+
+[dependencies]
+# Optional: iced color types (core only, no widgets)
+iced_core = { version = "0.14", optional = true }
+
+# Optional: egui color types
+egui = { version = "0.33", optional = true, default-features = false }
+
+# Optional: serialization
+serde = { version = "1.0", features = ["derive"], optional = true }

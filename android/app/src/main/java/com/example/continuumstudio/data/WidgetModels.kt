@@ -30,21 +30,26 @@ data class WidgetConfig(
  * Available widget types
  */
 @Serializable
-enum class WidgetType(val title: String, val description: String, val defaultSpan: Int) {
-    DIALOG_QUEUE("Dialog Queue", "Pending AI dialogs", 1),
-    HARNESS_STATUS("Harnesses", "Active Synapsix harnesses", 1),
-    SERVICE_DISCOVERY("Services", "DNS-SD discovered services", 2),
-    NODE_HEALTH("Node Health", "BEAM cluster status", 1),
-    QUICK_ACTIONS("Quick Actions", "Shortcut buttons", 1),
-    CONNECTION_STATUS("Connection", "Server connection status", 1),
-    AGENT_STREAM("Agent Stream", "Live AI conversation", 2);
+enum class WidgetType(val title: String, val description: String, val defaultSpan: Int, val emoji: String) {
+    SERVER_STATUS("Server Status", "Connection status with ping times", 1, "🟢"),
+    RUNNING_AGENTS("Running Agents", "Active CLI agents", 1, "🤖"),
+    DIALOG_BADGE("Active Dialog", "Current dialog with quick response", 2, "💬"),
+    ACTIVITY_PREVIEW("Activity Stream", "Recent activity events", 2, "📰"),
+    MODE_SELECTOR("Orchestrator Mode", "Mode selector & status", 1, "🎯"),
+    NETWORK_STATS("Network Stats", "Real-time network status", 1, "📡"),
+    NETWORK_HISTORY("Network History", "Historical latency graph", 2, "📈"),
+    QUEUE_STATUS("Queue Status", "Offline queue & parked agents", 1, "⏳"),
+    QUICK_ACTIONS("Quick Actions", "Shortcut buttons", 1, "⚡");
     
     companion object {
         fun defaults(): List<WidgetConfig> = listOf(
-            WidgetConfig(type = CONNECTION_STATUS, span = 1, order = 0),
-            WidgetConfig(type = DIALOG_QUEUE, span = 1, order = 1),
-            WidgetConfig(type = HARNESS_STATUS, span = 2, order = 2),
-            WidgetConfig(type = SERVICE_DISCOVERY, span = 2, order = 3),
+            WidgetConfig(type = SERVER_STATUS, span = 1, order = 0),
+            WidgetConfig(type = RUNNING_AGENTS, span = 1, order = 1),
+            WidgetConfig(type = MODE_SELECTOR, span = 1, order = 2),
+            WidgetConfig(type = NETWORK_STATS, span = 1, order = 3),
+            WidgetConfig(type = DIALOG_BADGE, span = 2, order = 4),
+            WidgetConfig(type = ACTIVITY_PREVIEW, span = 2, order = 5),
+            WidgetConfig(type = NETWORK_HISTORY, span = 2, order = 6),
         )
     }
 }

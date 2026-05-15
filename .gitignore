@@ -4,6 +4,10 @@ android/build/
 android/.gradle/
 .gradle/
 
+# Runtime artifacts
+nohup.out
+**/nohup.out
+
 # IDE files
 *.iml
 .idea/
@@ -24,13 +28,21 @@ Thumbs.db
 # Logs
 *.log
 
-ui/target
-# Rust build artifacts
-target/
-ui/target/
+# BEAM crash dumps
+erl_crash.dump
+**/erl_crash.dump
+
+# Rust build artifacts (ALL target directories)
+**/target/
 
 # Elixir build artifacts
 _build/
 deps/
 .elixir_ls/
 *.beam
+result
+android/tablet/build/
+
+# Backup files
+*.backup
+*.bak

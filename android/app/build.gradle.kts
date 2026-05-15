@@ -14,10 +14,13 @@ android {
         applicationId = "com.example.continuumstudio"
         minSdk = 34
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 12
+        versionName = "1.8.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        // Maps API Key - Set via environment or local.properties
+        manifestPlaceholders["MAPS_API_KEY"] = project.findProperty("MAPS_API_KEY")?.toString() ?: ""
     }
 
     buildTypes {
@@ -47,6 +50,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.extended)
     
     // Networking (WebSocket)
     implementation(libs.okhttp)
@@ -61,6 +65,24 @@ dependencies {
     // DataStore for preferences
     implementation(libs.androidx.datastore.prefs)
     
+    // Widget (Glance)
+    implementation(libs.androidx.glance)
+    implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.glance.material3)
+    
+    // WorkManager for background tasks
+    implementation(libs.androidx.work.runtime.ktx)
+    
+    // Google Maps
+    implementation(libs.maps.compose)
+    implementation(libs.play.services.maps)
+    
+    // OSMDroid (OpenStreetMap - open source alternative)
+    implementation(libs.osmdroid.android)
+    
+    // Location services
+    implementation(libs.play.services.location)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

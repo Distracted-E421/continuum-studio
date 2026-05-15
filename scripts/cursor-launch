@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Cursor Launch Wrapper - Shell compatibility layer
+# Calls the Nushell script for the actual work
+
+# Resolve the actual script location (follows symlinks)
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+NU_SCRIPT="$SCRIPT_DIR/cursor-launch.nu"
+
+if command -v nu &> /dev/null; then
+    exec nu "$NU_SCRIPT" "$@"
+else
+    echo "Error: Nushell (nu) is required but not found in PATH"
+    echo "Install with: nix shell nixpkgs#nushell"
+    exit 1
+fi

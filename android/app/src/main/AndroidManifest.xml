@@ -9,12 +9,32 @@
     <!-- Notification permission (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     
+    <!-- Voice input for XR mode -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    
     <!-- Keep screen on during dialogs -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
+    <!-- Media and notification access -->
+    <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" />
     
     <!-- Foreground service for background notifications -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    
+    <!-- Camera and gallery permissions -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    
+    <!-- OTA update installation -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    
+    <!-- Location permissions for navigation -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:allowBackup="true"
@@ -43,6 +63,59 @@
             android:name=".service.DialogNotificationService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+            
+        <!-- Foreground service for persistent XR glasses display -->
+        <service
+            android:name=".service.GlassesDisplayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintains XR glasses display when app is backgrounded" />
+        </service>
+            
+        <!-- Orchestrator homescreen widget -->
+        <receiver
+            android:name=".widget.OrchestratorWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/orchestrator_widget_info" />
+        </receiver>
+        <!-- Now Playing service for media control -->
+        <service
+            android:name=".service.NowPlayingService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Google Maps API Key - Replace with your key -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
+        
+        <!-- FileProvider for APK installation -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
+        
+        <!-- OTA Update install receiver -->
+        <receiver
+            android:name=".update.UpdateInstallReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

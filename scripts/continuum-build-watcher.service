@@ -1,0 +1,36 @@
+# Continuum Studio Build Watcher - systemd user service
+#
+# Monitors the continuum-studio git repo and auto-builds on new commits.
+# Install: cp continuum-build-watcher.service ~/.config/systemd/user/
+# Enable:  systemctl --user enable --now continuum-build-watcher
+#
+# Logs: journalctl --user -u continuum-build-watcher -f
+
+[Unit]
+Description=Continuum Studio Build Watcher
+Documentation=https://github.com/Distracted-E421/continuum-studio
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/etc/profiles/per-user/e421/bin/nu %h/continuum-studio/scripts/build-watcher.nu --repo %h/continuum-studio --channel nightly
+Restart=on-failure
+RestartSec=30
+
+# Environment for cargo/nix builds
+Environment=PATH=/etc/profiles/per-user/e421/bin:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:%h/.cargo/bin
+Environment=HOME=%h
+Environment=CARGO_HOME=%h/.cargo
+Environment=RUSTUP_HOME=%h/.rustup
+
+# Resource limits
+Nice=10
+IOSchedulingClass=idle
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=continuum-build-watcher
+
+[Install]
+WantedBy=default.target

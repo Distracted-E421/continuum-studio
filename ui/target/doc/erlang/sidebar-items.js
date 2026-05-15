@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ErrorKind","OtpErlangTerm"],"fn":["binary_to_term","term_to_binary"],"struct":["Error","Float","Function","Pid","Port","Reference"],"type":["Result"]};

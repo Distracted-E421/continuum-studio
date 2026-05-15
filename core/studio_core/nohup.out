@@ -1,0 +1,22 @@
+
+11:50:04.304 [info] Starting Continuum Studio Core v0.1.0
+
+11:50:04.322 [info] State manager initialized
+
+11:50:04.322 [info] Event bus initialized
+
+11:50:04.322 [info] Harness registry initialized
+
+11:50:04.334 [debug] Loaded versions from: /home/e421/continuum-studio/core/studio_core/_build/prod/lib/studio_core/priv/cursor-versions.json
+
+11:50:04.337 [info] VersionRegistry started: 106 versions, platform: linux-x64
+
+11:50:04.338 [info] AuthManager started
+
+11:50:04.350 [info] WorkspaceTracker started: 0 workspaces
+
+11:50:04.353 [info] Socket acceptor listening on /tmp/continuum-studio.sock
+
+11:50:04.356 [debug] No state snapshot found (first run or clean start)
+
+11:50:04.356 [debug] Clean start (no snapshot to restore)

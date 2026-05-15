@@ -1,30 +1,133 @@
 package com.example.continuumstudio.ui.widgets
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.continuumstudio.data.*
+import com.example.continuumstudio.data.db.*
+import com.example.continuumstudio.viewmodel.*
+
+/**
+ * Widget-specific data types for clean abstraction
+ */
+data class WidgetAgentInfo(
+    val id: String,
+    val workspace: String?,
+    val status: String
+)
+
+data class WidgetDialogInfo(
+    val id: String,
+    val title: String,
+    val prompt: String,
+    val options: List<WidgetDialogOption>
+)
+
+data class WidgetDialogOption(
+    val value: String,
+    val label: String
+)
+
+data class WidgetActivityItem(
+    val type: String,
+    val description: String
+)
+
+/**
+ * Combined state holder for all widget data
+ */
+data class WidgetBayState(
+    val dialogConnected: Boolean = false,
+    val cliConnected: Boolean = false,
+    val agents: List<WidgetAgentInfo> = emptyList(),
+    val activeDialog: WidgetDialogInfo? = null,
+    val pendingDialogCount: Int = 0,
+    val activityEvents: List<WidgetActivityItem> = emptyList(),
+    val currentMode: OrchestratorPresenceMode = OrchestratorPresenceMode.USER_ACTIVE,
+    val networkState: CurrentNetworkState = CurrentNetworkState(),
+    val networkMeasurements: List<NetworkMeasurement> = emptyList(),
+    val networkStats: NetworkStats? = null,
+    val selectedTimeRange: TimeRange = TimeRange.FIFTEEN_MINUTES,
+    val queuedOperations: Int = 0,
+    val parkedAgents: Int = 0
+) {
+    companion object {
+        fun fromViewModels(
+            dialogConnected: Boolean,
+            cliConnected: Boolean,
+            cliAgents: List<AgentSummary>,
+            activeDialog: DialogDetails?,
+            queueCount: Int,
+            activityEvents: List<ActivityEvent>,
+            mode: OrchestratorPresenceMode,
+            networkState: CurrentNetworkState,
+            networkMeasurements: List<NetworkMeasurement>,
+            networkStats: NetworkStats?,
+            selectedTimeRange: TimeRange,
+            pendingOps: Int,
+            parkedCount: Int
+        ): WidgetBayState {
+            return WidgetBayState(
+                dialogConnected = dialogConnected,
+                cliConnected = cliConnected,
+                agents = cliAgents.map { agent ->
+                    WidgetAgentInfo(
+                        id = agent.id,
+                        workspace = agent.workspace,
+                        status = agent.status
+                    )
+                },
+                activeDialog = activeDialog?.let { dialog ->
+                    WidgetDialogInfo(
+                        id = dialog.id,
+                        title = dialog.title,
+                        prompt = dialog.prompt,
+                        options = dialog.dialogType.options?.map { opt ->
+                            WidgetDialogOption(opt.value, opt.label)
+                        } ?: emptyList()
+                    )
+                },
+                pendingDialogCount = queueCount,
+                activityEvents = activityEvents.take(5).map { event ->
+                    WidgetActivityItem(
+                        type = when (event) {
+                            is ActivityEvent.Command -> "command"
+                            is ActivityEvent.DialogSent -> "dialog_sent"
+                            is ActivityEvent.DialogResponse -> "dialog_response"
+                            is ActivityEvent.ToolCall -> "tool_call"
+                            is ActivityEvent.FileEdit -> "file_edit"
+                        },
+                        description = when (event) {
+                            is ActivityEvent.Command -> event.command.take(50)
+                            is ActivityEvent.DialogSent -> event.title
+                            is ActivityEvent.DialogResponse -> "Response: ${event.selection}"
+                            is ActivityEvent.ToolCall -> "${event.toolName} (${event.status})"
+                            is ActivityEvent.FileEdit -> "${event.action}: ${event.filePath.substringAfterLast("/")}"
+                        }
+                    )
+                },
+                currentMode = mode,
+                networkState = networkState,
+                networkMeasurements = networkMeasurements,
+                networkStats = networkStats,
+                selectedTimeRange = selectedTimeRange,
+                queuedOperations = pendingOps,
+                parkedAgents = parkedCount
+            )
+        }
+    }
+}
 
 /**
  * Main Widget Bay composable - a customizable grid of widgets
@@ -33,16 +136,19 @@ import com.example.continuumstudio.data.*
 @Composable
 fun WidgetBayScreen(
     bayConfig: BayConfig,
-    connectionState: ConnectionState,
-    dialogState: DialogUiState,
-    harnesses: List<HarnessInfo>,
-    services: List<ServiceInfo>,
-    isLoadingHarnesses: Boolean,
-    isLoadingServices: Boolean,
+    state: WidgetBayState,
     onAddWidget: (WidgetType) -> Unit,
     onRemoveWidget: (String) -> Unit,
     onRefresh: () -> Unit,
+    onNavigateToAgents: () -> Unit,
     onNavigateToDialog: () -> Unit,
+    onNavigateToActivity: () -> Unit,
+    onNavigateToParked: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onModeChange: (OrchestratorPresenceMode) -> Unit,
+    onTimeRangeChange: (TimeRange) -> Unit,
+    onNetworkRefresh: () -> Unit,
+    onQuickRespond: (String, String) -> Unit,
     onQuickAction: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -56,14 +162,22 @@ fun WidgetBayScreen(
                     Column {
                         Text("Dashboard")
                         Text(
-                            text = if (connectionState.isConnected) "Connected to ${connectionState.serverUrl}" else "Not connected",
+                            text = when {
+                                state.dialogConnected && state.cliConnected -> "All systems connected"
+                                state.dialogConnected -> "Dialog connected"
+                                state.cliConnected -> "CLI connected"
+                                else -> "Not connected"
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (connectionState.isConnected) Color(0xFF4CAF50) else Color.Gray
+                            color = when {
+                                state.dialogConnected && state.cliConnected -> Color(0xFF4CAF50)
+                                state.dialogConnected || state.cliConnected -> Color(0xFFFF9800)
+                                else -> Color.Gray
+                            }
                         )
                     }
                 },
                 actions = {
-                    // Edit mode toggle
                     IconButton(onClick = { editMode = !editMode }) {
                         Icon(
                             if (editMode) Icons.Default.Check else Icons.Default.Edit,
@@ -71,25 +185,11 @@ fun WidgetBayScreen(
                             tint = if (editMode) MaterialTheme.colorScheme.primary else LocalContentColor.current
                         )
                     }
-                    // Add widget
                     IconButton(onClick = { showAddWidgetDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = "Add Widget")
                     }
-                    // Refresh
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                    // Dialog screen
-                    IconButton(onClick = onNavigateToDialog) {
-                        BadgedBox(
-                            badge = {
-                                if (dialogState.queueCount > 0) {
-                                    Badge { Text(dialogState.queueCount.toString()) }
-                                }
-                            }
-                        ) {
-                            Icon(Icons.Default.List, contentDescription = "Dialogs")
-                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -99,7 +199,7 @@ fun WidgetBayScreen(
         }
     ) { padding ->
         LazyVerticalGrid(
-            columns = GridCells.Fixed(bayConfig.columns),
+            columns = GridCells.Adaptive(minSize = 280.dp),
             modifier = modifier
                 .fillMaxSize()
                 .padding(padding)
@@ -116,22 +216,24 @@ fun WidgetBayScreen(
             ) { widget ->
                 WidgetCard(
                     widget = widget,
-                    connectionState = connectionState,
-                    dialogState = dialogState,
-                    harnesses = harnesses,
-                    services = services,
-                    isLoadingHarnesses = isLoadingHarnesses,
-                    isLoadingServices = isLoadingServices,
+                    state = state,
                     editMode = editMode,
                     onRemove = { onRemoveWidget(widget.id) },
-                    onQuickAction = onQuickAction,
+                    onNavigateToAgents = onNavigateToAgents,
                     onNavigateToDialog = onNavigateToDialog,
+                    onNavigateToActivity = onNavigateToActivity,
+                    onNavigateToParked = onNavigateToParked,
+                    onNavigateToSettings = onNavigateToSettings,
+                    onModeChange = onModeChange,
+                    onTimeRangeChange = onTimeRangeChange,
+                    onNetworkRefresh = onNetworkRefresh,
+                    onQuickRespond = onQuickRespond,
+                    onQuickAction = onQuickAction
                 )
             }
         }
     }
     
-    // Add widget dialog
     if (showAddWidgetDialog) {
         AddWidgetDialog(
             existingTypes = bayConfig.widgets.map { it.type }.toSet(),
@@ -150,22 +252,25 @@ fun WidgetBayScreen(
 @Composable
 fun WidgetCard(
     widget: WidgetConfig,
-    connectionState: ConnectionState,
-    dialogState: DialogUiState,
-    harnesses: List<HarnessInfo>,
-    services: List<ServiceInfo>,
-    isLoadingHarnesses: Boolean,
-    isLoadingServices: Boolean,
+    state: WidgetBayState,
     editMode: Boolean,
     onRemove: () -> Unit,
-    onQuickAction: (String) -> Unit,
+    onNavigateToAgents: () -> Unit,
     onNavigateToDialog: () -> Unit,
+    onNavigateToActivity: () -> Unit,
+    onNavigateToParked: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onModeChange: (OrchestratorPresenceMode) -> Unit,
+    onTimeRangeChange: (TimeRange) -> Unit,
+    onNetworkRefresh: () -> Unit,
+    onQuickRespond: (String, String) -> Unit,
+    onQuickAction: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 120.dp),
+            .heightIn(min = if (widget.span > 1) 140.dp else 120.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
@@ -173,18 +278,15 @@ fun WidgetCard(
         Column(
             modifier = Modifier.padding(12.dp)
         ) {
-            // Widget header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        widget.type.icon(),
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.primary
+                    Text(
+                        widget.type.emoji,
+                        style = MaterialTheme.typography.titleSmall
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
@@ -211,15 +313,55 @@ fun WidgetCard(
             
             Spacer(Modifier.height(8.dp))
             
-            // Widget content based on type
             when (widget.type) {
-                WidgetType.CONNECTION_STATUS -> ConnectionStatusWidget(connectionState)
-                WidgetType.DIALOG_QUEUE -> DialogQueueWidget(dialogState, onNavigateToDialog)
-                WidgetType.HARNESS_STATUS -> HarnessStatusWidget(harnesses, isLoadingHarnesses)
-                WidgetType.SERVICE_DISCOVERY -> ServiceDiscoveryWidget(services, isLoadingServices)
-                WidgetType.NODE_HEALTH -> NodeHealthWidget(connectionState)
-                WidgetType.QUICK_ACTIONS -> QuickActionsWidget(onQuickAction)
-                WidgetType.AGENT_STREAM -> AgentStreamWidget()
+                WidgetType.SERVER_STATUS -> ServerStatusWidget(
+                    dialogConnected = state.dialogConnected,
+                    cliConnected = state.cliConnected,
+                    latencyMs = state.networkState.lastLatencyMs,
+                    onRefresh = onNetworkRefresh
+                )
+                WidgetType.RUNNING_AGENTS -> RunningAgentsWidget(
+                    agents = state.agents,
+                    onNavigateToAgents = onNavigateToAgents
+                )
+                WidgetType.DIALOG_BADGE -> DialogBadgeWidget(
+                    activeDialog = state.activeDialog,
+                    pendingCount = state.pendingDialogCount,
+                    onNavigateToDialog = onNavigateToDialog,
+                    onQuickRespond = onQuickRespond
+                )
+                WidgetType.ACTIVITY_PREVIEW -> ActivityPreviewWidget(
+                    events = state.activityEvents,
+                    onNavigateToFeed = onNavigateToActivity
+                )
+                WidgetType.MODE_SELECTOR -> ModeSelectorWidget(
+                    currentMode = state.currentMode,
+                    onModeChange = onModeChange
+                )
+                WidgetType.NETWORK_STATS -> NetworkStatsWidget(
+                    currentState = state.networkState,
+                    onRefresh = onNetworkRefresh
+                )
+                WidgetType.NETWORK_HISTORY -> NetworkHistoryWidget(
+                    measurements = state.networkMeasurements,
+                    stats = state.networkStats,
+                    selectedRange = state.selectedTimeRange,
+                    onRangeChange = onTimeRangeChange
+                )
+                WidgetType.QUEUE_STATUS -> QueueStatusWidget(
+                    queuedOperations = state.queuedOperations,
+                    parkedAgents = state.parkedAgents,
+                    onNavigateToQueue = onNavigateToParked
+                )
+                WidgetType.QUICK_ACTIONS -> QuickActionsWidget(
+                    onAction = { action ->
+                        when (action) {
+                            "settings" -> onNavigateToSettings()
+                            "spawn_agent" -> onNavigateToAgents()
+                            else -> onQuickAction(action)
+                        }
+                    }
+                )
             }
         }
     }
@@ -249,10 +391,9 @@ fun AddWidgetDialog(
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            type.icon(),
-                            contentDescription = null,
-                            tint = if (alreadyAdded) Color.Gray else MaterialTheme.colorScheme.primary
+                        Text(
+                            type.emoji,
+                            style = MaterialTheme.typography.titleMedium
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
@@ -285,15 +426,4 @@ fun AddWidgetDialog(
             }
         }
     )
-}
-
-// Extension to get icon for widget type
-fun WidgetType.icon(): ImageVector = when (this) {
-    WidgetType.DIALOG_QUEUE -> Icons.Default.List
-    WidgetType.HARNESS_STATUS -> Icons.Default.Settings
-    WidgetType.SERVICE_DISCOVERY -> Icons.Default.Send
-    WidgetType.NODE_HEALTH -> Icons.Default.Check
-    WidgetType.QUICK_ACTIONS -> Icons.Default.Send
-    WidgetType.CONNECTION_STATUS -> Icons.Default.Check
-    WidgetType.AGENT_STREAM -> Icons.Default.List
 }

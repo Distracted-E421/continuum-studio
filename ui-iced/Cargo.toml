@@ -1,0 +1,84 @@
+[package]
+name = "continuum-studio-iced"
+version = "0.1.0"
+edition = "2021"
+authors = ["e421"]
+description = "Continuum Studio UI - iced/COSMIC migration"
+license = "AGPL-3.0"
+rust-version = "1.80"
+
+[dependencies]
+# Shared COSMIC theme system (local copy for Nix build)
+synapsix-theme = { path = "../crates/synapsix-theme", features = ["iced"] }
+
+# iced GUI framework (0.14.0 - latest with time travel debugging, hot reload)
+iced = { version = "0.14", features = [
+    "tokio",
+    "image",
+    "svg",
+    "canvas",
+    "advanced",
+    "wgpu",
+] }
+
+# Async runtime
+tokio = { version = "1.0", features = [
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "net",
+    "io-util",
+    "time",
+    "signal",
+] }
+futures = "0.3"
+futures-util = "0.3"
+
+# iced subscription utilities
+iced_futures = "0.14"
+
+# WebSocket client for real-time updates
+tokio-tungstenite = "0.24"
+
+# D-Bus integration for dialog daemon
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# ETF encoding for Elixir/Erlang communication
+erlang_rs = "2.0"
+
+# File system
+dirs = "5.0"
+
+# Regex for pattern matching
+regex = "1.10"
+
+# HTTP client for update checking
+ureq = { version = "2.9", features = ["json"] }
+# Async HTTP client for task queue API
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# URL parsing
+url = "2.5"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# System theme detection (XDG Desktop Portal on Linux)
+dark-light = "2.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Clipboard support (Wayland/X11/macOS/Windows)
+arboard = "3.4"
+
+[dev-dependencies]
+pretty_assertions = "1.0"

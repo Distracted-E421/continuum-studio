@@ -7,15 +7,13 @@ defmodule StudioCore.Socket.Acceptor do
 
   ## Protocol
 
-  Messages are framed with a 4-byte big-endian length prefix:
+  Messages are newline-delimited JSON:
 
-      +--------+----------------+
-      | length | ETF payload    |
-      | 4 bytes| variable       |
-      +--------+----------------+
+      {"command": "versions_list", "params": {}}\n
+      {"event": "versions_list", "data": [...]}\n
 
-  The payload is Erlang External Term Format (ETF), which
-  is the native serialization format for BEAM languages.
+  This format is compatible with the Rust iced UI which uses
+  read_line() for receiving messages.
   """
   use GenServer
   require Logger
@@ -57,7 +55,7 @@ defmodule StudioCore.Socket.Acceptor do
 
     case :gen_tcp.listen(0, [
       :binary,
-      packet: 4,
+      packet: :raw,  # Raw mode - we'll handle line parsing
       active: false,
       reuseaddr: true,
       ifaddr: {:local, String.to_charlist(socket_path)}
@@ -134,6 +132,26 @@ defmodule StudioCore.Socket.Acceptor do
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
     new_clients = Map.delete(state.clients, pid)
     Logger.info("Client disconnected (total: #{map_size(new_clients)})")
+    {:noreply, %{state | clients: new_clients}}
+  end
+
+  @impl true
+  def handle_info({:tcp_closed, socket}, state) do
+    # Find and remove the client associated with this socket
+    new_clients = state.clients
+      |> Enum.reject(fn {_pid, client_socket} -> client_socket == socket end)
+      |> Enum.into(%{})
+    Logger.debug("TCP socket closed, cleaned up clients (total: #{map_size(new_clients)})")
+    {:noreply, %{state | clients: new_clients}}
+  end
+
+  @impl true
+  def handle_info({:tcp_error, socket, reason}, state) do
+    Logger.warning("TCP socket error: #{inspect(reason)}")
+    # Handle similar to tcp_closed
+    new_clients = state.clients
+      |> Enum.reject(fn {_pid, client_socket} -> client_socket == socket end)
+      |> Enum.into(%{})
     {:noreply, %{state | clients: new_clients}}
   end
 

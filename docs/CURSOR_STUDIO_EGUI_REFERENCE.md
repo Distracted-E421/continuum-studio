@@ -1,8 +1,10 @@
 # cursor-studio-egui Migration Reference
 
-**Date**: January 31, 2026
-**Source**: `/home/e421/nixos-cursor/cursor-studio-egui/`
-**Destination**: `/home/e421/continuum-studio/ui/`
+> **Archived reference** — Describes modules considered when porting from legacy **egui** `cursor-studio-egui`. The **current** desktop app is **`ui-iced/`** (iced 0.14). Legacy egui sources, if present, live under `ui/`.
+
+**Date**: January 31, 2026  
+**Source**: `/home/e421/nixos-cursor/cursor-studio-egui/`  
+**Destination (historical)**: `/home/e421/continuum-studio/ui/`
 
 ## Transferred Modules
 

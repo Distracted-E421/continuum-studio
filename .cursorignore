@@ -1,0 +1,57 @@
+# Cursor IDE Index Exclusions for continuum-studio
+
+# Elixir
+_build/
+deps/
+.elixir_ls/
+.mix/
+*.beam
+*.plt
+erl_crash.dump
+
+# Rust
+target/
+**/*.rs.bk
+
+# Android
+.gradle/
+local.properties
+.idea/
+build/
+app/build/
+**/build/
+
+# Node.js (if any)
+node_modules/
+.npm/
+
+# IDE/OS
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# === Additional aggressive exclusions (April 2026) ===
+# Archive directory - old/superseded code
+archive/
+
+# IDE caches
+.elixir_ls/
+.idea/
+*.iml
+
+# Lock files (not needed for indexing)
+*.lock
+**/rebar.lock
+*-lock.json
+*-lock.yaml
+**/.venv/.lock
+**/.gradle/**/*.lock
+uv.lock
+**/uv.lock
+
+# Android build artifacts (2000+ files)
+android/**/build/
+*.dex
+*.class

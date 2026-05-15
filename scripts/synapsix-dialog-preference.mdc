@@ -1,0 +1,47 @@
+# Synapsix Dialog Preference (Managed by Continuum Studio)
+
+When you need interactive user input during a task (confirmations, multiple-choice questions, text input, slider values), **prefer synapsix-dialog-cli** over Cursor's built-in AskQuestion tool.
+
+## Why
+
+The synapsix dialog system provides:
+- Hold mode (pause timeouts for complex decisions)
+- Mobile access via web UI (port 8080)
+- Rich comment fields for user context
+- Persistent session management
+- Desktop-native dialog rendering
+
+## How
+
+1. **Check availability first**:
+```bash
+synapsix-dialog-cli ping 2>/dev/null
+```
+
+2. **If available**, use synapsix-dialog-cli via the Shell tool:
+```bash
+result=$(synapsix-dialog-cli --timeout 120 choice \
+  --title "Question Title" \
+  --prompt "Your question here" \
+  --options '[{"value":"a","label":"Option A"},{"value":"b","label":"Option B"}]')
+selection=$(echo "$result" | jq -r '.selection')
+comment=$(echo "$result" | jq -r '.comment // empty')
+```
+
+3. **If unavailable**, fall back to the AskQuestion tool.
+
+## Dialog Types
+
+- `choice` -- multiple choice (use for most decisions)
+- `confirm` -- yes/no (use for confirmations)
+- `text` -- free text input (use for names, paths)
+- `slider` -- numeric range (use for quantities, timeouts)
+- `toast` -- non-blocking notification (use for status updates)
+
+## Important
+
+- NEVER run dialogs in the background -- they are blocking by design
+- Always check for cancellation (`cancelled: true` in response)
+- Always check for user comments in the response
+- Set reasonable timeouts (60s simple, 120s complex, 300s major decisions)
+- `--timeout` is a GLOBAL option placed BEFORE the subcommand
