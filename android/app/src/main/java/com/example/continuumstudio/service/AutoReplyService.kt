@@ -70,6 +70,9 @@ class AutoReplyService : Service() {
     // Offline queue for storing replies when server is unreachable
     private var offlineQueue: OfflineReplyQueue? = null
     
+    // History manager for conversation context
+    private var historyManager: DialogHistoryManager? = null
+    
     // TTS for confirmation messages
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -77,6 +80,7 @@ class AutoReplyService : Service() {
     override fun onCreate() {
         super.onCreate()
         offlineQueue = OfflineReplyQueue(this)
+        historyManager = DialogHistoryManager(this)
         
         // Initialize TTS for confirmation
         tts = TextToSpeech(this) { status ->
@@ -102,6 +106,7 @@ class AutoReplyService : Service() {
         super.onDestroy()
         offlineQueue?.shutdown()
         offlineQueue = null
+        historyManager = null
         tts?.stop()
         tts?.shutdown()
         tts = null
@@ -163,6 +168,8 @@ class AutoReplyService : Service() {
                     ) ?: false
                     
                     if (queued) {
+                        // Add reply to history even when offline
+                        historyManager?.addUserReply(dialogId, replyText, optionLabel ?: selection.toString())
                         speakStatus("Queued for later")
                         showQueuedNotification(title, replyText, dialogId, offlineQueue?.pendingCount?.value ?: 1)
                     } else {
@@ -176,6 +183,8 @@ class AutoReplyService : Service() {
                 val success = sendDialogResponse(serverUrl, dialogId, selection)
 
                 if (success) {
+                    // Add reply to conversation history
+                    historyManager?.addUserReply(dialogId, replyText, optionLabel ?: selection.toString())
                     speakStatus("Sent")
                     showSuccessNotification(title, replyText, dialogId)
                 } else {
@@ -188,6 +197,8 @@ class AutoReplyService : Service() {
                     ) ?: false
                     
                     if (queued) {
+                        // Add reply to history even when queued
+                        historyManager?.addUserReply(dialogId, replyText, optionLabel ?: selection.toString())
                         speakStatus("Server unreachable. Queued.")
                         showQueuedNotification(title, replyText, dialogId, offlineQueue?.pendingCount?.value ?: 1)
                     } else {

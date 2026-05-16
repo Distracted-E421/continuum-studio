@@ -12,11 +12,16 @@
 |-----------|--------|-------|
 | `automotive_app_desc.xml` | ✅ | Declares notification capability |
 | `AndroidManifest.xml` | ✅ | Meta-data + AutoReplyService |
-| `DialogNotificationService.kt` | ✅ | MessagingStyle + options JSON |
-| `AutoReplyService.kt` | ✅ | Voice parsing + HTTP API |
+| `DialogNotificationService.kt` | ✅ | MessagingStyle + options JSON + history |
+| `AutoReplyService.kt` | ✅ | Voice parsing + HTTP API + history |
 | `DialogTTSHelper.kt` | ✅ | TTS for dialog reading |
+| `OfflineReplyQueue.kt` | ✅ | Offline queue + network-aware sync |
+| `DialogHistoryManager.kt` | ✅ | Conversation history persistence |
 | Voice Parsing | ✅ | Fuzzy matching, ordinals, Levenshtein |
 | TTS Feedback | ✅ | Audio focus, markdown cleanup |
+| TTS Confirmation | ✅ | Speak parsed reply before sending |
+| Offline Queue | ✅ | Persistent DataStore, auto-sync |
+| Conversation History | ✅ | Recent dialogs for context |
 
 ### Phase B: Cars App Library (Future)
 

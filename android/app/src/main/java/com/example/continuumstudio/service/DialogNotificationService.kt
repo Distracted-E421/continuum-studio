@@ -187,6 +187,7 @@ class DialogNotificationService : Service() {
     
     private lateinit var notificationManager: NotificationManager
     private var ttsHelper: DialogTTSHelper? = null
+    private var historyManager: DialogHistoryManager? = null
     
     override fun onCreate() {
         super.onCreate()
@@ -195,12 +196,16 @@ class DialogNotificationService : Service() {
         
         // Initialize TTS helper for Android Auto voice reading
         ttsHelper = DialogTTSHelper(this)
+        
+        // Initialize history manager for conversation context
+        historyManager = DialogHistoryManager(this)
     }
     
     override fun onDestroy() {
         super.onDestroy()
         ttsHelper?.shutdown()
         ttsHelper = null
+        historyManager = null
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -360,6 +365,9 @@ class DialogNotificationService : Service() {
             CHANNEL_ID
         }
         
+        // Add dialog to history for conversation context
+        historyManager?.addAgentDialog(dialogId, title, prompt, dialogType)
+        
         // Build notification with MessagingStyle for Android Auto
         val notification = buildMessagingStyleNotification(
             dialogId, title, prompt, dialogType, priority, channelId, openIntent, dismissIntent, optionsJson
@@ -392,11 +400,35 @@ class DialogNotificationService : Service() {
             .setKey("synapsix_agent")
             .build()
         
+        // Create Person for the user (for reply messages in history)
+        val userPerson = Person.Builder()
+            .setName("You")
+            .setKey("user")
+            .build()
+        
         // Create MessagingStyle with conversation-style layout
         val messagingStyle = NotificationCompat.MessagingStyle(agentPerson)
             .setConversationTitle(title.ifBlank { "Synapsix Dialog" })
         
-        // Add the dialog prompt as the main message
+        // Add recent history for conversation context
+        val history = historyManager?.getRecentHistory(5) ?: emptyList()
+        for (historyMsg in history.dropLast(1)) {  // Exclude the current message (just added)
+            val person = if (historyMsg.isFromAgent) agentPerson else userPerson
+            val displayText = if (historyMsg.isFromAgent) {
+                // For agent messages, show title + truncated prompt
+                val prefix = historyMsg.title?.let { "[$it] " } ?: ""
+                val truncatedText = historyMsg.text.take(100).let { 
+                    if (historyMsg.text.length > 100) "$it..." else it 
+                }
+                "$prefix$truncatedText"
+            } else {
+                // For user replies, show as-is
+                historyMsg.text
+            }
+            messagingStyle.addMessage(displayText, historyMsg.timestamp, person)
+        }
+        
+        // Add the current dialog prompt as the main message
         messagingStyle.addMessage(
             prompt,
             System.currentTimeMillis(),
