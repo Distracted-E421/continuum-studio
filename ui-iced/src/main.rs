@@ -12142,116 +12142,87 @@ fn parse_workspace_file(path: &std::path::Path) -> Option<CodeWorkspaceFile> {
 // Sub-agent Monitoring Integration
 // ===========================================================================
 
-/// Async function to fetch sub-agent stats from D-Bus
+/// Terminal monitor D-Bus constants
+const TERMINAL_MONITOR_SERVICE: &str = "sh.synapsix.TerminalMonitor";
+const TERMINAL_MONITOR_PATH: &str = "/sh/synapsix/TerminalMonitor";
+const TERMINAL_MONITOR_INTERFACE: &str = "sh.synapsix.TerminalMonitor1";
+
+/// Async function to fetch sub-agent stats from D-Bus using zbus
 async fn fetch_subagent_stats() -> Result<MonitorStats, String> {
-    use std::process::Command;
+    let conn = zbus::Connection::session()
+        .await
+        .map_err(|e| format!("D-Bus connection failed: {}", e))?;
 
-    let output = Command::new("busctl")
-        .args([
-            "--user",
-            "call",
-            "sh.synapsix.TerminalMonitor",
-            "/sh/synapsix/TerminalMonitor",
-            "sh.synapsix.TerminalMonitor1",
-            "GetStats",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to execute busctl: {}", e))?;
+    let proxy = zbus::Proxy::new(
+        &conn,
+        TERMINAL_MONITOR_SERVICE,
+        TERMINAL_MONITOR_PATH,
+        TERMINAL_MONITOR_INTERFACE,
+    )
+    .await
+    .map_err(|e| format!("D-Bus proxy creation failed: {}", e))?;
 
-    if !output.status.success() {
-        return Err(format!(
-            "D-Bus call failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+    let result: String = proxy
+        .call_method("GetStats", &())
+        .await
+        .map_err(|e| format!("D-Bus call failed: {}", e))?
+        .body()
+        .deserialize()
+        .map_err(|e| format!("D-Bus body parse failed: {}", e))?;
 
-    // Parse the response (busctl returns "s \"json_string\"")
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json_start = stdout.find('"').ok_or("Invalid response format")?;
-    let json_end = stdout.rfind('"').ok_or("Invalid response format")?;
-    if json_start >= json_end {
-        return Err("Empty JSON response".to_string());
-    }
-
-    let json_str = &stdout[json_start + 1..json_end];
-    // Unescape the JSON string (busctl escapes quotes)
-    let unescaped = json_str.replace("\\\"", "\"").replace("\\\\", "\\");
-
-    serde_json::from_str(&unescaped).map_err(|e| format!("JSON parse error: {}", e))
+    serde_json::from_str(&result).map_err(|e| format!("JSON parse error: {}", e))
 }
 
-/// Async function to fetch recent commands from D-Bus
+/// Async function to fetch sub-agent commands from D-Bus using zbus
 async fn fetch_subagent_commands(limit: u32) -> Result<Vec<CommandRecord>, String> {
-    use std::process::Command;
+    let conn = zbus::Connection::session()
+        .await
+        .map_err(|e| format!("D-Bus connection failed: {}", e))?;
 
-    let output = Command::new("busctl")
-        .args([
-            "--user",
-            "call",
-            "sh.synapsix.TerminalMonitor",
-            "/sh/synapsix/TerminalMonitor",
-            "sh.synapsix.TerminalMonitor1",
-            "GetSubagentCommands",
-            "u",
-            &limit.to_string(),
-        ])
-        .output()
-        .map_err(|e| format!("Failed to execute busctl: {}", e))?;
+    let proxy = zbus::Proxy::new(
+        &conn,
+        TERMINAL_MONITOR_SERVICE,
+        TERMINAL_MONITOR_PATH,
+        TERMINAL_MONITOR_INTERFACE,
+    )
+    .await
+    .map_err(|e| format!("D-Bus proxy creation failed: {}", e))?;
 
-    if !output.status.success() {
-        return Err(format!(
-            "D-Bus call failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+    let result: String = proxy
+        .call_method("GetSubagentCommands", &(limit,))
+        .await
+        .map_err(|e| format!("D-Bus call failed: {}", e))?
+        .body()
+        .deserialize()
+        .map_err(|e| format!("D-Bus body parse failed: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json_start = stdout.find('"').ok_or("Invalid response format")?;
-    let json_end = stdout.rfind('"').ok_or("Invalid response format")?;
-    if json_start >= json_end {
-        return Ok(Vec::new()); // Empty array
-    }
-
-    let json_str = &stdout[json_start + 1..json_end];
-    let unescaped = json_str.replace("\\\"", "\"").replace("\\\\", "\\");
-
-    serde_json::from_str(&unescaped).map_err(|e| format!("JSON parse error: {}", e))
+    serde_json::from_str(&result).map_err(|e| format!("JSON parse error: {}", e))
 }
 
-/// Async function to fetch running commands from D-Bus  
+/// Async function to fetch running commands from D-Bus using zbus
 async fn fetch_running_commands() -> Result<Vec<CommandRecord>, String> {
-    use std::process::Command;
+    let conn = zbus::Connection::session()
+        .await
+        .map_err(|e| format!("D-Bus connection failed: {}", e))?;
 
-    let output = Command::new("busctl")
-        .args([
-            "--user",
-            "call",
-            "sh.synapsix.TerminalMonitor",
-            "/sh/synapsix/TerminalMonitor",
-            "sh.synapsix.TerminalMonitor1",
-            "GetRunningCommands",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to execute busctl: {}", e))?;
+    let proxy = zbus::Proxy::new(
+        &conn,
+        TERMINAL_MONITOR_SERVICE,
+        TERMINAL_MONITOR_PATH,
+        TERMINAL_MONITOR_INTERFACE,
+    )
+    .await
+    .map_err(|e| format!("D-Bus proxy creation failed: {}", e))?;
 
-    if !output.status.success() {
-        return Err(format!(
-            "D-Bus call failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+    let result: String = proxy
+        .call_method("GetRunningCommands", &())
+        .await
+        .map_err(|e| format!("D-Bus call failed: {}", e))?
+        .body()
+        .deserialize()
+        .map_err(|e| format!("D-Bus body parse failed: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json_start = stdout.find('"').ok_or("Invalid response format")?;
-    let json_end = stdout.rfind('"').ok_or("Invalid response format")?;
-    if json_start >= json_end {
-        return Ok(Vec::new());
-    }
-
-    let json_str = &stdout[json_start + 1..json_end];
-    let unescaped = json_str.replace("\\\"", "\"").replace("\\\\", "\\");
-
-    serde_json::from_str(&unescaped).map_err(|e| format!("JSON parse error: {}", e))
+    serde_json::from_str(&result).map_err(|e| format!("JSON parse error: {}", e))
 }
 
 /// Handle sub-agent panel messages

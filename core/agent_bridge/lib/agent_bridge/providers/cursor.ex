@@ -47,7 +47,8 @@ defmodule AgentBridge.Providers.Cursor do
     state = %__MODULE__{
       harness_id: harness_id,
       workspace: config[:workspace] || "default",
-      timeout: config[:timeout] || 120_000,  # 2 minutes default
+      # 2 minutes default
+      timeout: config[:timeout] || 120_000
     }
 
     {:ok, state}
@@ -83,11 +84,13 @@ defmodule AgentBridge.Providers.Cursor do
             chunk = %Message{
               role: :assistant,
               content: Enum.join(chars),
-              provider: :cursor,
+              provider: :cursor
             }
+
             callback.(chunk)
           end)
         end
+
         :ok
 
       {:error, reason} ->
@@ -100,9 +103,14 @@ defmodule AgentBridge.Providers.Cursor do
     # Cursor supports multiple models through its interface
     models = [
       %{id: "cursor-default", name: "Cursor Default", description: "Auto-routed by Cursor"},
-      %{id: "claude-sonnet", name: "Claude Sonnet (via Cursor)", description: "Cursor's Claude access"},
-      %{id: "gpt-4o", name: "GPT-4o (via Cursor)", description: "Cursor's GPT-4o access"},
+      %{
+        id: "claude-sonnet",
+        name: "Claude Sonnet (via Cursor)",
+        description: "Cursor's Claude access"
+      },
+      %{id: "gpt-4o", name: "GPT-4o (via Cursor)", description: "Cursor's GPT-4o access"}
     ]
+
     {:ok, models}
   end
 
@@ -171,25 +179,29 @@ defmodule AgentBridge.Providers.Cursor do
       # Focus Cursor window
       GenServer.call(harness_pid, :focus)
 
-      # Clear any existing input
-      GenServer.call(harness_pid, {:send_keys, ["ctrl+a", "BackSpace"]})
+      # Clear any existing input (Ctrl+A to select all, then Backspace)
+      # Note: Synapsix harness expects [:modifier, "key"] format
+      GenServer.call(harness_pid, {:send_keys, [:ctrl, "a"]})
+      Process.sleep(50)
+      GenServer.call(harness_pid, {:send_keys, [:backspace]})
 
       # Type the message
       GenServer.call(harness_pid, {:type_text, message.content})
 
       # Submit (Enter)
-      GenServer.call(harness_pid, {:send_keys, ["Return"]})
+      GenServer.call(harness_pid, {:send_keys, [:enter]})
 
       # Wait for response
       case wait_for_response(harness_pid, state.timeout) do
         {:ok, response_text} ->
-          {:ok, %Message{
-            role: :assistant,
-            content: response_text,
-            provider: :cursor,
-            model: "cursor-default",
-            created_at: DateTime.utc_now(),
-          }}
+          {:ok,
+           %Message{
+             role: :assistant,
+             content: response_text,
+             provider: :cursor,
+             model: "cursor-default",
+             created_at: DateTime.utc_now()
+           }}
 
         {:error, reason} ->
           {:error, reason}

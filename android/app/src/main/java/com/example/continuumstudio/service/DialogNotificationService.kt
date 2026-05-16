@@ -9,9 +9,16 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
+import androidx.core.app.RemoteInput
 import com.example.continuumstudio.MainActivity
 import com.example.continuumstudio.R
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Foreground service to maintain WebSocket connection and show notifications
@@ -52,6 +59,18 @@ class DialogNotificationService : Service() {
         const val EXTRA_AUTO_RESPONSE = "auto_response"
         const val EXTRA_AUTO_REASONING = "auto_reasoning"
         
+        // Android Auto reply handling
+        const val KEY_TEXT_REPLY = "key_text_reply"
+        const val ACTION_REPLY = "com.example.continuumstudio.ACTION_REPLY"
+        const val ACTION_MARK_READ = "com.example.continuumstudio.ACTION_MARK_READ"
+        const val EXTRA_OPTIONS_JSON = "options_json"
+        
+        // TTS configuration
+        const val ACTION_CONFIGURE_TTS = "com.example.continuumstudio.CONFIGURE_TTS"
+        const val EXTRA_TTS_ENABLED = "tts_enabled"
+        const val EXTRA_TTS_SPEECH_RATE = "tts_speech_rate"
+        const val EXTRA_TTS_READ_OPTIONS = "tts_read_options"
+        
         fun startService(context: Context) {
             val intent = Intent(context, DialogNotificationService::class.java).apply {
                 action = ACTION_START
@@ -76,7 +95,8 @@ class DialogNotificationService : Service() {
             title: String,
             prompt: String,
             dialogType: String = "choice",
-            priority: String = "normal"
+            priority: String = "normal",
+            optionsJson: String? = null
         ) {
             val intent = Intent(context, DialogNotificationService::class.java).apply {
                 action = ACTION_NEW_DIALOG
@@ -85,6 +105,7 @@ class DialogNotificationService : Service() {
                 putExtra(EXTRA_DIALOG_PROMPT, prompt)
                 putExtra(EXTRA_DIALOG_TYPE, dialogType)
                 putExtra(EXTRA_DIALOG_PRIORITY, priority)
+                optionsJson?.let { putExtra(EXTRA_OPTIONS_JSON, it) }
             }
             context.startService(intent)
         }
@@ -139,14 +160,47 @@ class DialogNotificationService : Service() {
             }
             context.startService(intent)
         }
+        
+        /**
+         * Configure TTS settings for dialog reading.
+         *
+         * @param context Application context
+         * @param enabled Whether TTS is enabled (default true)
+         * @param speechRate Speech rate multiplier (0.5 = slow, 1.0 = normal, 2.0 = fast)
+         * @param readOptions Whether to read options aloud for choice dialogs
+         */
+        fun configureTTS(
+            context: Context,
+            enabled: Boolean = true,
+            speechRate: Float = 1.0f,
+            readOptions: Boolean = true
+        ) {
+            val intent = Intent(context, DialogNotificationService::class.java).apply {
+                action = ACTION_CONFIGURE_TTS
+                putExtra(EXTRA_TTS_ENABLED, enabled)
+                putExtra(EXTRA_TTS_SPEECH_RATE, speechRate)
+                putExtra(EXTRA_TTS_READ_OPTIONS, readOptions)
+            }
+            context.startService(intent)
+        }
     }
     
     private lateinit var notificationManager: NotificationManager
+    private var ttsHelper: DialogTTSHelper? = null
     
     override fun onCreate() {
         super.onCreate()
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
+        
+        // Initialize TTS helper for Android Auto voice reading
+        ttsHelper = DialogTTSHelper(this)
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        ttsHelper?.shutdown()
+        ttsHelper = null
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -164,10 +218,12 @@ class DialogNotificationService : Service() {
                 val prompt = intent.getStringExtra(EXTRA_DIALOG_PROMPT) ?: ""
                 val dialogType = intent.getStringExtra(EXTRA_DIALOG_TYPE) ?: "choice"
                 val priority = intent.getStringExtra(EXTRA_DIALOG_PRIORITY) ?: "normal"
-                showDialogNotification(dialogId, title, prompt, dialogType, priority)
+                val optionsJson = intent.getStringExtra(EXTRA_OPTIONS_JSON)
+                showDialogNotification(dialogId, title, prompt, dialogType, priority, optionsJson)
             }
             ACTION_DISMISS_DIALOG -> {
                 notificationManager.cancel(DIALOG_NOTIFICATION_ID)
+                ttsHelper?.stop()  // Stop TTS when dialog is dismissed
             }
             ACTION_CONNECTION_LOST -> {
                 showConnectionLostNotification()
@@ -187,8 +243,23 @@ class DialogNotificationService : Service() {
                 val reasoning = intent.getStringExtra(EXTRA_AUTO_REASONING) ?: ""
                 showAutoHandledNotification(dialogId, title, response, reasoning)
             }
+            ACTION_CONFIGURE_TTS -> {
+                val enabled = intent.getBooleanExtra(EXTRA_TTS_ENABLED, true)
+                val speechRate = intent.getFloatExtra(EXTRA_TTS_SPEECH_RATE, 1.0f)
+                val readOptions = intent.getBooleanExtra(EXTRA_TTS_READ_OPTIONS, true)
+                configureTTSHelper(enabled, speechRate, readOptions)
+            }
         }
         return START_STICKY
+    }
+    
+    private fun configureTTSHelper(enabled: Boolean, speechRate: Float, readOptions: Boolean) {
+        ttsHelper?.apply {
+            ttsEnabled = enabled
+            this.speechRate = speechRate
+            readOptionsAloud = readOptions
+            Log.d("DialogNotificationSvc", "TTS configured: enabled=$enabled, rate=$speechRate, options=$readOptions")
+        }
     }
     
     override fun onBind(intent: Intent?): IBinder? = null
@@ -262,7 +333,7 @@ class DialogNotificationService : Service() {
             .build()
     }
     
-    private fun showDialogNotification(dialogId: String, title: String, prompt: String, dialogType: String, priority: String) {
+    private fun showDialogNotification(dialogId: String, title: String, prompt: String, dialogType: String, priority: String, optionsJson: String? = null) {
         val openIntent = PendingIntent.getActivity(
             this,
             dialogId.hashCode(),
@@ -282,22 +353,6 @@ class DialogNotificationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
-        // Choose icon based on dialog type
-        val typeIcon = when (dialogType.lowercase()) {
-            "choice" -> "📝"
-            "text" -> "✏️"
-            "confirm" -> "❓"
-            "slider" -> "🎚️"
-            else -> "🤖"
-        }
-        
-        // Add priority indicator
-        val priorityPrefix = when (priority.lowercase()) {
-            "critical" -> "🚨 "
-            "high" -> "🔴 "
-            else -> ""
-        }
-        
         // Use high priority channel for critical/high dialogs
         val channelId = if (priority.lowercase() in listOf("critical", "high")) {
             CHANNEL_HIGH_PRIORITY_ID
@@ -305,30 +360,155 @@ class DialogNotificationService : Service() {
             CHANNEL_ID
         }
         
-        val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("$priorityPrefix$typeIcon $title")
-            .setContentText(prompt.take(100))
-            .setStyle(NotificationCompat.BigTextStyle().bigText(prompt))
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setAutoCancel(true)
-            .setContentIntent(openIntent)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .addAction(
-                android.R.drawable.ic_menu_view,
-                "Open",
-                openIntent
-            )
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                "Dismiss",
-                dismissIntent
-            )
-            .build()
+        // Build notification with MessagingStyle for Android Auto
+        val notification = buildMessagingStyleNotification(
+            dialogId, title, prompt, dialogType, priority, channelId, openIntent, dismissIntent, optionsJson
+        )
         
         notificationManager.notify(DIALOG_NOTIFICATION_ID, notification)
+        
+        // Read dialog aloud using TTS (for Android Auto hands-free use)
+        ttsHelper?.speakDialog(title, prompt, dialogType, optionsJson, priority)
+    }
+    
+    /**
+     * Build a MessagingStyle notification for Android Auto compatibility.
+     * Uses conversation-style formatting that works with Android Auto's messaging UI.
+     */
+    private fun buildMessagingStyleNotification(
+        dialogId: String,
+        title: String,
+        prompt: String,
+        dialogType: String,
+        priority: String,
+        channelId: String,
+        openIntent: PendingIntent,
+        dismissIntent: PendingIntent,
+        optionsJson: String? = null
+    ): Notification {
+        // Create Person for the agent (sender of the dialog)
+        val agentPerson = Person.Builder()
+            .setName("Synapsix Agent")
+            .setKey("synapsix_agent")
+            .build()
+        
+        // Create MessagingStyle with conversation-style layout
+        val messagingStyle = NotificationCompat.MessagingStyle(agentPerson)
+            .setConversationTitle(title.ifBlank { "Synapsix Dialog" })
+        
+        // Add the dialog prompt as the main message
+        messagingStyle.addMessage(
+            prompt,
+            System.currentTimeMillis(),
+            agentPerson
+        )
+        
+        // For choice dialogs, add options as a follow-up message with numbered list
+        // This makes it easier to respond via voice: "Reply with 1" or "Reply with OK"
+        val optionsText = when (dialogType.lowercase()) {
+            "choice" -> {
+                // Format options if available
+                val formattedOptions = formatOptionsForVoice(optionsJson)
+                if (formattedOptions.isNotEmpty()) {
+                    "\n\nOptions:\n$formattedOptions\n\nSay the option number or name."
+                } else {
+                    "\n\nReply with your choice (number or text)."
+                }
+            }
+            "confirm", "confirmation" -> {
+                "\n\nReply with YES or NO."
+            }
+            "text" -> {
+                "\n\nReply with your response."
+            }
+            else -> ""
+        }
+        
+        if (optionsText.isNotEmpty()) {
+            messagingStyle.addMessage(
+                optionsText,
+                System.currentTimeMillis() + 1,
+                agentPerson
+            )
+        }
+        
+        // Build RemoteInput for voice replies (Android Auto)
+        val remoteInput = RemoteInput.Builder(KEY_TEXT_REPLY)
+            .setLabel("Reply")
+            .build()
+        
+        // Reply action with RemoteInput
+        val replyIntent = Intent(this, AutoReplyService::class.java).apply {
+            action = ACTION_REPLY
+            putExtra(EXTRA_DIALOG_ID, dialogId)
+            putExtra(EXTRA_DIALOG_TYPE, dialogType)
+            putExtra(EXTRA_DIALOG_TITLE, title)
+            optionsJson?.let { putExtra(EXTRA_OPTIONS_JSON, it) }
+        }
+        
+        val replyPendingIntent = PendingIntent.getService(
+            this,
+            dialogId.hashCode() + 10,
+            replyIntent,
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
+        val replyAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_menu_send,
+            "Reply",
+            replyPendingIntent
+        )
+            .addRemoteInput(remoteInput)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .setShowsUserInterface(false)
+            .build()
+        
+        // Mark as read action
+        val markReadIntent = Intent(this, AutoReplyService::class.java).apply {
+            action = ACTION_MARK_READ
+            putExtra(EXTRA_DIALOG_ID, dialogId)
+        }
+        
+        val markReadPendingIntent = PendingIntent.getService(
+            this,
+            dialogId.hashCode() + 11,
+            markReadIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
+        val markReadAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_menu_close_clear_cancel,
+            "Mark Read",
+            markReadPendingIntent
+        )
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
+            .setShowsUserInterface(false)
+            .build()
+        
+        // Priority indicators for title (only in non-Auto views)
+        val priorityPrefix = when (priority.lowercase()) {
+            "critical" -> "🚨 "
+            "high" -> "🔴 "
+            else -> ""
+        }
+        
+        return NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setStyle(messagingStyle)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setContentIntent(openIntent)
+            .addAction(replyAction)
+            .addAction(markReadAction)
+            .addAction(
+                android.R.drawable.ic_menu_view,
+                "Open App",
+                openIntent
+            )
+            .build()
     }
     
     private fun showAgentStatusNotification(agentId: String, status: String) {
@@ -404,6 +584,28 @@ class DialogNotificationService : Service() {
             .build()
         
         notificationManager.notify(CONNECTION_NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Format options JSON into a human-readable numbered list for voice UI.
+     * Example output: "1. Continue\n2. Cancel\n3. Skip"
+     */
+    private fun formatOptionsForVoice(optionsJson: String?): String {
+        if (optionsJson.isNullOrBlank()) return ""
+
+        return try {
+            val jsonArray = Json.parseToJsonElement(optionsJson).jsonArray
+            jsonArray.mapIndexed { index, element ->
+                val obj = element.jsonObject
+                val label = obj["label"]?.jsonPrimitive?.content
+                    ?: obj["value"]?.jsonPrimitive?.content
+                    ?: return@mapIndexed null
+                "${index + 1}. $label"
+            }.filterNotNull().joinToString("\n")
+        } catch (e: Exception) {
+            Log.w("DialogNotificationSvc", "Failed to parse options for voice formatting: $optionsJson", e)
+            ""
+        }
     }
 }
 

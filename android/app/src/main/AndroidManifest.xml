@@ -5,33 +5,35 @@
     <!-- Network permissions for WebSocket -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    
+
     <!-- Notification permission (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    
+
     <!-- Voice input for XR mode -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    
+
     <!-- Keep screen on during dialogs -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    
+
     <!-- Media and notification access -->
     <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" />
-    
+
     <!-- Foreground service for background notifications -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    
+
     <!-- Camera and gallery permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <!-- OTA update installation -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
-    
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- Location permissions for navigation -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -46,6 +48,11 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.ContinuumStudio">
+
+        <!-- Android Auto support (notification-based messaging) -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -57,13 +64,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        
+
         <!-- Foreground service for dialog notifications -->
         <service
             android:name=".service.DialogNotificationService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
-            
+
         <!-- Foreground service for persistent XR glasses display -->
         <service
             android:name=".service.GlassesDisplayService"
@@ -73,7 +80,7 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Maintains XR glasses display when app is backgrounded" />
         </service>
-            
+
         <!-- Orchestrator homescreen widget -->
         <receiver
             android:name=".widget.OrchestratorWidgetReceiver"
@@ -100,7 +107,7 @@
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="${MAPS_API_KEY}" />
-        
+
         <!-- FileProvider for APK installation -->
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -111,10 +118,15 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_provider_paths" />
         </provider>
-        
+
         <!-- OTA Update install receiver -->
         <receiver
             android:name=".update.UpdateInstallReceiver"
+            android:exported="false" />
+
+        <!-- Android Auto reply handling service -->
+        <service
+            android:name=".service.AutoReplyService"
             android:exported="false" />
     </application>
 

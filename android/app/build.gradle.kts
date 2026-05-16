@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.continuumstudio"
         minSdk = 34
         targetSdk = 36
-        versionCode = 12
-        versionName = "1.8.1"
+        versionCode = 14
+        versionName = "1.9.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         

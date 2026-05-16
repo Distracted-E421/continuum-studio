@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android Auto application descriptor.
+    Currently only declares notification capability (Phase A - MessagingStyle).
+    Template capability will be added in Phase B when Google opens production distribution.
+-->
+<automotiveApp>
+    <!-- Notification-based messaging for Android Auto -->
+    <uses name="notification" />
+</automotiveApp>
