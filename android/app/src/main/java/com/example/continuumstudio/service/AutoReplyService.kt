@@ -13,12 +13,15 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -32,6 +35,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
 
@@ -40,6 +46,11 @@ import kotlin.math.min
  * 
  * This service receives RemoteInput from MessagingStyle notifications and
  * sends the response to the Synapsix dialog daemon via HTTP API.
+ *
+ * Features:
+ * - Voice reply parsing (fuzzy matching, ordinals, options)
+ * - TTS confirmation before sending
+ * - Offline queue with auto-sync
  */
 class AutoReplyService : Service() {
 
@@ -54,13 +65,27 @@ class AutoReplyService : Service() {
     // DataStore access for server URL
     private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
     private val serverUrlKey = stringPreferencesKey("dialog_server_url")
+    private val ttsConfirmationKey = stringPreferencesKey("tts_confirmation_enabled")
     
     // Offline queue for storing replies when server is unreachable
     private var offlineQueue: OfflineReplyQueue? = null
     
+    // TTS for confirmation messages
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    
     override fun onCreate() {
         super.onCreate()
         offlineQueue = OfflineReplyQueue(this)
+        
+        // Initialize TTS for confirmation
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.getDefault()
+                ttsReady = true
+                Log.d(TAG, "TTS ready for confirmations")
+            }
+        }
     }
     
     override fun onBind(intent: Intent?): IBinder? = null
@@ -77,6 +102,9 @@ class AutoReplyService : Service() {
         super.onDestroy()
         offlineQueue?.shutdown()
         offlineQueue = null
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
         serviceScope.cancel()
     }
 
@@ -112,6 +140,15 @@ class AutoReplyService : Service() {
 
                 // Parse the reply based on dialog type and available options
                 val selection = parseReply(dialogType, replyText, options)
+                
+                // Find the option label for better TTS confirmation
+                val optionLabel = findOptionLabel(selection, options)
+                
+                // Speak confirmation before sending (if TTS confirmation is enabled)
+                val confirmationEnabled = isTtsConfirmationEnabled()
+                if (confirmationEnabled && ttsReady) {
+                    speakConfirmationAndWait(dialogType, selection, optionLabel)
+                }
 
                 // Check if we're online
                 val isOnline = offlineQueue?.isOnline?.value ?: true
@@ -126,8 +163,10 @@ class AutoReplyService : Service() {
                     ) ?: false
                     
                     if (queued) {
+                        speakStatus("Queued for later")
                         showQueuedNotification(title, replyText, dialogId, offlineQueue?.pendingCount?.value ?: 1)
                     } else {
+                        speakStatus("Queue full")
                         showErrorNotification("Queue full - try again later", dialogId)
                     }
                     return@launch
@@ -137,6 +176,7 @@ class AutoReplyService : Service() {
                 val success = sendDialogResponse(serverUrl, dialogId, selection)
 
                 if (success) {
+                    speakStatus("Sent")
                     showSuccessNotification(title, replyText, dialogId)
                 } else {
                     // Server unreachable - queue for later
@@ -148,8 +188,10 @@ class AutoReplyService : Service() {
                     ) ?: false
                     
                     if (queued) {
+                        speakStatus("Server unreachable. Queued.")
                         showQueuedNotification(title, replyText, dialogId, offlineQueue?.pendingCount?.value ?: 1)
                     } else {
+                        speakStatus("Failed")
                         showErrorNotification("Failed to send or queue reply", dialogId)
                     }
                 }
@@ -161,11 +203,96 @@ class AutoReplyService : Service() {
                     val options = parseOptionsJson(optionsJson)
                     val selection = parseReply(dialogType, replyText, options)
                     offlineQueue?.queueReply(dialogId, selection)
+                    speakStatus("Error. Queued.")
                     showQueuedNotification(title, replyText, dialogId, offlineQueue?.pendingCount?.value ?: 1)
                 } catch (qe: Exception) {
+                    speakStatus("Error")
                     showErrorNotification("Error: ${e.message}", dialogId)
                 }
             }
+        }
+    }
+    
+    private fun findOptionLabel(selection: Any, options: List<DialogOption>): String? {
+        val selectionStr = selection.toString()
+        return options.find { it.value == selectionStr }?.label
+    }
+    
+    private suspend fun isTtsConfirmationEnabled(): Boolean {
+        return try {
+            val prefs = dataStore.data.first()
+            prefs[ttsConfirmationKey]?.toBoolean() ?: true  // Default enabled
+        } catch (e: Exception) {
+            true
+        }
+    }
+    
+    private suspend fun speakConfirmationAndWait(dialogType: String, selection: Any, optionLabel: String?) {
+        val text = buildConfirmationText(dialogType, selection, optionLabel)
+        
+        suspendCancellableCoroutine<Unit> { continuation ->
+            val utteranceId = "confirmation_${System.currentTimeMillis()}"
+            
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {}
+                
+                override fun onDone(utteranceId: String?) {
+                    if (continuation.isActive) {
+                        continuation.resume(Unit) {}
+                    }
+                }
+                
+                override fun onError(utteranceId: String?) {
+                    if (continuation.isActive) {
+                        continuation.resume(Unit) {}
+                    }
+                }
+                
+                @Deprecated("Deprecated in API 21")
+                override fun onError(utteranceId: String?, errorCode: Int) {
+                    onError(utteranceId)
+                }
+            })
+            
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+            
+            // Timeout after 5 seconds max
+            serviceScope.launch {
+                kotlinx.coroutines.delay(5000)
+                if (continuation.isActive) {
+                    continuation.resume(Unit) {}
+                }
+            }
+        }
+    }
+    
+    private fun buildConfirmationText(dialogType: String, selection: Any, optionLabel: String?): String {
+        return when (dialogType.lowercase()) {
+            "choice" -> {
+                val label = optionLabel ?: selection.toString()
+                "Sending: $label"
+            }
+            "confirm", "confirmation" -> {
+                val response = when (selection) {
+                    true -> "Yes"
+                    false -> "No"
+                    else -> selection.toString()
+                }
+                "Sending: $response"
+            }
+            "text" -> {
+                val text = selection.toString()
+                val preview = if (text.length > 20) "${text.take(20)}..." else text
+                "Sending: $preview"
+            }
+            "slider" -> "Sending: $selection"
+            else -> "Sending response"
+        }
+    }
+    
+    private fun speakStatus(status: String) {
+        if (ttsReady) {
+            tts?.speak(status, TextToSpeech.QUEUE_ADD, null, "status_${System.currentTimeMillis()}")
         }
     }
 

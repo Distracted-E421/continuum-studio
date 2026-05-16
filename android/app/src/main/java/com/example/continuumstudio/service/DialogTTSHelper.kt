@@ -176,6 +176,98 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
     }
 
     /**
+     * Speak a confirmation of the parsed response before sending.
+     *
+     * @param dialogType Type of dialog (choice, confirmation, text, slider)
+     * @param parsedValue The parsed value that will be sent
+     * @param optionLabel Optional human-readable label for choice dialogs
+     * @param onComplete Callback when confirmation speech is complete
+     */
+    fun speakConfirmation(
+        dialogType: String,
+        parsedValue: Any,
+        optionLabel: String? = null,
+        onComplete: (() -> Unit)? = null
+    ) {
+        if (!ttsEnabled || !isInitialized) {
+            onComplete?.invoke()
+            return
+        }
+
+        scope.launch(Dispatchers.Main) {
+            stop()
+            utteranceQueue.clear()
+
+            val confirmationText = buildConfirmationText(dialogType, parsedValue, optionLabel)
+            utteranceQueue.add(confirmationText)
+            
+            // Set up completion callback
+            if (onComplete != null) {
+                val originalListener = tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {
+                        _isSpeaking.value = true
+                    }
+                    
+                    override fun onDone(utteranceId: String?) {
+                        _isSpeaking.value = false
+                        abandonAudioFocus()
+                        scope.launch(Dispatchers.Main) {
+                            onComplete()
+                        }
+                        setupUtteranceListener() // Restore original listener
+                    }
+                    
+                    override fun onError(utteranceId: String?) {
+                        _isSpeaking.value = false
+                        abandonAudioFocus()
+                        scope.launch(Dispatchers.Main) {
+                            onComplete()
+                        }
+                        setupUtteranceListener()
+                    }
+                    
+                    @Deprecated("Deprecated in API 21")
+                    override fun onError(utteranceId: String?, errorCode: Int) {
+                        onError(utteranceId)
+                    }
+                })
+            }
+
+            if (requestAudioFocus()) {
+                speakNext()
+            } else {
+                onComplete?.invoke()
+            }
+        }
+    }
+
+    private fun buildConfirmationText(dialogType: String, parsedValue: Any, optionLabel: String?): String {
+        return when (dialogType.lowercase()) {
+            "choice" -> {
+                val label = optionLabel ?: parsedValue.toString()
+                "Sending: $label"
+            }
+            "confirm", "confirmation" -> {
+                val response = when (parsedValue) {
+                    true -> "Yes"
+                    false -> "No"
+                    else -> parsedValue.toString()
+                }
+                "Sending: $response"
+            }
+            "text" -> {
+                val text = parsedValue.toString()
+                val preview = if (text.length > 30) "${text.take(30)}..." else text
+                "Sending: $preview"
+            }
+            "slider" -> {
+                "Sending: $parsedValue"
+            }
+            else -> "Sending response"
+        }
+    }
+
+    /**
      * Stop current speech and clear queue.
      */
     fun stop() {
