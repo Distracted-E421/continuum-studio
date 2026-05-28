@@ -34,9 +34,17 @@ crates/      # Shared Rust libraries
 
 ### Android (`android/`)
 
+- **XR middleware overlay** for Samsung S23 Ultra + RayNeo 3 glasses (evolving beyond Dex/mirror)
+- `ZonedGlassesLayout`: left=dialog content, center=see-through, right=options; entrance animations (v1.9.0+)
+- `DialogControlPanel`: phone becomes input device in XR mode (numbered options, fixed keyboard, voice typing)
+- **Agent Camera**: Capture images from phone camera and send directly to agents (Settings → Agent Camera)
+  - `camera/AgentCameraClient.kt`: HTTP client for Synapsix/Cognix visual context API
+  - `ui/camera/AgentCameraScreen.kt`: CameraX preview + capture + send flow
+  - Connection indicators for both Synapsix and Cognix backends
 - Widget Bay dashboard, Dialog Client (WS :8080)
 - Multi-endpoint config with auto-fallback
-- Notification service, coordination dashboard
+- **OTA updates** via GitHub releases (`gh release create`); app checks releases for APK download
+- Android Auto integration planned (`docs/ANDROID_AUTO_INTEGRATION_PLAN.md`)
 
 ### Core (`core/`)
 

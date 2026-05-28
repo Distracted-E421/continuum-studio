@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.LocalParking
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -67,6 +68,10 @@ import com.example.continuumstudio.viewmodel.XRViewModel
 import com.example.continuumstudio.viewmodel.YouTubeViewModel
 import com.example.continuumstudio.viewmodel.NavigationViewModel
 import com.example.continuumstudio.ui.navigation.NavigationScreen
+import com.example.continuumstudio.ui.capture.GeminiCaptureScreen
+import com.example.continuumstudio.viewmodel.GeminiCaptureViewModel
+import com.example.continuumstudio.ui.camera.AgentCameraScreen
+import com.example.continuumstudio.viewmodel.AgentCameraViewModel
 import com.example.continuumstudio.util.rememberDisplayInfo
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -91,6 +96,8 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object XRConfig : Screen("xr_config", "XR Config", Icons.Outlined.Tune)
     object Updates : Screen("updates", "Updates", Icons.Default.SystemUpdate)
     object Navigation : Screen("navigation", "Nav", Icons.Default.Map)
+    object GeminiCapture : Screen("gemini_capture", "Gemini Capture", Icons.Default.SmartToy)
+    object AgentCamera : Screen("agent_camera", "Agent Camera", Icons.Default.CameraAlt)
 }
 
 class MainActivity : ComponentActivity() {
@@ -663,6 +670,16 @@ class MainActivity : ComponentActivity() {
                                     navController.navigate(Screen.Updates.route) {
                                         launchSingleTop = true
                                     }
+                                },
+                                onNavigateToGeminiCapture = {
+                                    navController.navigate(Screen.GeminiCapture.route) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onNavigateToAgentCamera = {
+                                    navController.navigate(Screen.AgentCamera.route) {
+                                        launchSingleTop = true
+                                    }
                                 }
                             )
                         }
@@ -708,6 +725,30 @@ class MainActivity : ComponentActivity() {
                         ) {
                             NavigationScreen(
                                 navigationViewModel = navigationViewModel,
+                                onNavigateBack = { navController.popBackStack() }
+                            )
+                        }
+                        
+                        composable(
+                            Screen.GeminiCapture.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            val geminiCaptureViewModel: GeminiCaptureViewModel = viewModel()
+                            GeminiCaptureScreen(
+                                viewModel = geminiCaptureViewModel,
+                                onNavigateBack = { navController.popBackStack() }
+                            )
+                        }
+                        
+                        composable(
+                            Screen.AgentCamera.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            val agentCameraViewModel: AgentCameraViewModel = viewModel()
+                            AgentCameraScreen(
+                                viewModel = agentCameraViewModel,
                                 onNavigateBack = { navController.popBackStack() }
                             )
                         }

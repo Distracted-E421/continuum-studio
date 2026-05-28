@@ -82,6 +82,14 @@ dependencies {
     
     // Location services
     implementation(libs.play.services.location)
+    
+    // CameraX for Agent Camera
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    
+    // Accompanist (permissions handling)
+    implementation(libs.accompanist.permissions)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

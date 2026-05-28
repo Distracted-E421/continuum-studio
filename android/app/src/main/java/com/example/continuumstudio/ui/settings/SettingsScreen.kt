@@ -19,6 +19,8 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,6 +47,8 @@ fun SettingsScreen(
     otaViewModel: OtaUpdateViewModel = viewModel(),
     dialogViewModel: DialogViewModel = viewModel(),
     onNavigateToUpdates: () -> Unit = {},
+    onNavigateToGeminiCapture: () -> Unit = {},
+    onNavigateToAgentCamera: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -454,6 +458,34 @@ fun SettingsScreen(
                 )
             }
             
+            // Agent Camera Section
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SettingsSection(title = "Agent Camera", icon = Icons.Default.CameraAlt)
+            }
+            
+            item {
+                SettingsNavigationItem(
+                    label = "Agent Camera",
+                    description = "Capture images and send to agents",
+                    onClick = onNavigateToAgentCamera
+                )
+            }
+            
+            // Project Ouroboros Section
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SettingsSection(title = "Project Ouroboros", icon = Icons.Default.SmartToy)
+            }
+            
+            item {
+                SettingsNavigationItem(
+                    label = "Gemini Capture",
+                    description = "Capture Gemini interactions for local AI training",
+                    onClick = onNavigateToGeminiCapture
+                )
+            }
+            
             item {
                 Spacer(modifier = Modifier.height(16.dp))
                 SettingsSection(title = "About", icon = Icons.Default.Info)
@@ -669,5 +701,43 @@ private fun SettingsInfo(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun SettingsNavigationItem(
+    label: String,
+    description: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                Icons.Default.KeyboardArrowRight,
+                contentDescription = "Navigate",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
