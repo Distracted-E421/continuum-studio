@@ -21,6 +21,8 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -49,6 +51,7 @@ fun SettingsScreen(
     onNavigateToUpdates: () -> Unit = {},
     onNavigateToGeminiCapture: () -> Unit = {},
     onNavigateToAgentCamera: () -> Unit = {},
+    onSwitchToCognix: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -483,6 +486,26 @@ fun SettingsScreen(
                     label = "Gemini Capture",
                     description = "Capture Gemini interactions for local AI training",
                     onClick = onNavigateToGeminiCapture
+                )
+            }
+            
+            // App Mode Section
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SettingsSection(title = "App Mode", icon = Icons.Default.Psychology)
+            }
+            
+            item {
+                ListItem(
+                    headlineContent = { Text("Switch to Cognix") },
+                    supportingContent = { Text("ADHD support, nudges, patterns, ambient awareness") },
+                    leadingContent = {
+                        Icon(Icons.Default.SwapHoriz, contentDescription = null)
+                    },
+                    trailingContent = {
+                        Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
+                    },
+                    modifier = Modifier.clickable(onClick = onSwitchToCognix)
                 )
             }
             

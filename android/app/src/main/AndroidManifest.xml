@@ -81,6 +81,12 @@
                 android:value="Maintains XR glasses display when app is backgrounded" />
         </service>
 
+        <!-- Foreground service for Cognix nudge delivery -->
+        <service
+            android:name=".service.CognixPushService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- Orchestrator homescreen widget -->
         <receiver
             android:name=".widget.OrchestratorWidgetReceiver"
@@ -128,6 +134,20 @@
         <service
             android:name=".service.AutoReplyService"
             android:exported="false" />
+
+        <!-- Gemini Accessibility Service for Project Ouroboros -->
+        <service
+            android:name=".service.GeminiAccessibilityService"
+            android:exported="true"
+            android:label="@string/gemini_accessibility_service_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/gemini_accessibility_service_config" />
+        </service>
     </application>
 
 </manifest>

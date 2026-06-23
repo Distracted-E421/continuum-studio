@@ -92,17 +92,20 @@ This document outlines the implementation plan for adding Android Auto support t
 ### Path A: MessagingStyle Notifications (Recommended First)
 
 **Pros:**
+
 - Production-ready immediately
 - Simple implementation
 - Leverages existing notification infrastructure
 - Can ship to Play Store without restrictions
 
 **Cons:**
+
 - Limited UI customization
 - History limited to current AA session
 - Less control over conversation flow
 
 **Implementation:**
+
 1. Add `automotive_app_desc.xml` with notification capability
 2. Convert dialogs to `MessagingStyle` notifications
 3. Add reply action with `RemoteInput`
@@ -111,12 +114,14 @@ This document outlines the implementation plan for adding Android Auto support t
 ### Path B: Cars App Library (Future)
 
 **Pros:**
+
 - Full templated UI
 - ConversationItem with rich affordances
 - Better conversation history
 - More control over UX
 
 **Cons:**
+
 - **Currently in BETA** - cannot ship to Open/Production testing
 - More complex implementation
 - Requires Google approval for distribution
@@ -131,6 +136,7 @@ This document outlines the implementation plan for adding Android Auto support t
 ### Step 1: Manifest & Descriptor
 
 **File:** `android/app/src/main/res/xml/automotive_app_desc.xml`
+
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <automotiveApp>
@@ -139,6 +145,7 @@ This document outlines the implementation plan for adding Android Auto support t
 ```
 
 **File:** `android/app/src/main/AndroidManifest.xml` (additions)
+
 ```xml
 <application>
     <!-- Existing content -->
@@ -389,6 +396,7 @@ sealed class DialogResponse {
 ### Step 4: Testing on Android Auto
 
 1. **Desktop Head Unit (DHU):** Use Google's Desktop Head Unit for testing
+
    ```bash
    $ANDROID_HOME/extras/google/auto/desktop-head-unit
    ```
@@ -405,12 +413,14 @@ sealed class DialogResponse {
 ## Phase B: Cars App Library (Future)
 
 **Prerequisites:**
+
 - Google opens templated messaging to production distribution
 - OR: Internal-only deployment acceptable
 
 ### Dependencies
 
 **File:** `android/app/build.gradle.kts`
+
 ```kotlin
 dependencies {
     // ... existing
@@ -490,6 +500,7 @@ class ConversationListScreen(carContext: CarContext) : Screen(carContext) {
 ## Testing Checklist
 
 ### Development Testing
+
 - [ ] DHU messaging notification appears
 - [ ] Voice reply triggers RemoteInput
 - [ ] Number parsing works (1, 2, 3...)
@@ -499,6 +510,7 @@ class ConversationListScreen(carContext: CarContext) : Screen(carContext) {
 - [ ] Notification dismissal after response
 
 ### Quality Gates (Pre-Release)
+
 - [ ] [Car app quality checklist](https://developer.android.com/docs/quality-guidelines/car-app-quality) passed
 - [ ] No more than 5 steps per task flow
 - [ ] Dialogs flatten gracefully (no crashes on complex content)

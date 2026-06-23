@@ -16,6 +16,7 @@ import com.example.continuumstudio.service.NowPlayingState
 import com.example.continuumstudio.navigation.NavigationState
 import com.example.continuumstudio.youtube.YouTubeState
 import com.example.continuumstudio.ui.glasses.*
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import org.osmdroid.util.GeoPoint
 import kotlinx.coroutines.launch
@@ -43,6 +44,8 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
     private var glassesService: GlassesDisplayService? = null
     private var isServiceBound = false
     
+    private var displayModeJob: Job? = null
+    
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as? GlassesDisplayService.LocalBinder
@@ -50,12 +53,34 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
             isServiceBound = true
             // Push current theme to service immediately on connect
             glassesService?.updateTheme(_glassesTheme.value)
+            
+            // Subscribe to display mode changes from the service
+            displayModeJob?.cancel()
+            displayModeJob = viewModelScope.launch {
+                glassesService?.displayMode?.collect { mode ->
+                    val previousMode = _currentDisplayMode.value
+                    _currentDisplayMode.value = mode
+                    Log.d(TAG, "Display mode updated from service: $mode")
+                    
+                    // Auto-apply driving preset when Android Auto is detected
+                    if (_autoDrivingPreset.value &&
+                        mode == GlassesDisplayService.DisplayMode.ANDROID_AUTO && 
+                        previousMode != GlassesDisplayService.DisplayMode.ANDROID_AUTO) {
+                        Log.i(TAG, "Android Auto detected - auto-applying driving preset")
+                        applyPreset("driving")
+                    }
+                }
+            }
+            
             Log.d(TAG, "GlassesDisplayService bound, pushed current theme")
         }
         
         override fun onServiceDisconnected(name: ComponentName?) {
+            displayModeJob?.cancel()
+            displayModeJob = null
             glassesService = null
             isServiceBound = false
+            _currentDisplayMode.value = GlassesDisplayService.DisplayMode.UNKNOWN
             Log.d(TAG, "GlassesDisplayService unbound")
         }
     }
@@ -69,6 +94,16 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
         val ACTIVE_PRESET = stringPreferencesKey("xr_active_preset")
         val GLASSES_THEME = stringPreferencesKey("glasses_theme")
         val PERSISTENT_MODE = booleanPreferencesKey("glasses_persistent_mode")
+        val AUTO_DRIVING_PRESET = booleanPreferencesKey("auto_driving_preset")
+    }
+    
+    // Auto-activate driving preset when Android Auto is detected
+    private val _autoDrivingPreset = MutableStateFlow(true) // Enabled by default
+    val autoDrivingPreset: StateFlow<Boolean> = _autoDrivingPreset.asStateFlow()
+    
+    fun setAutoDrivingPreset(enabled: Boolean) {
+        _autoDrivingPreset.value = enabled
+        saveConfig()
     }
     
     // Persistent mode - keeps glasses display active when app is backgrounded
@@ -165,6 +200,9 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
                 // Load persistent mode setting
                 _persistentModeEnabled.value = prefs[PrefsKeys.PERSISTENT_MODE] ?: false
                 
+                // Load auto driving preset setting
+                _autoDrivingPreset.value = prefs[PrefsKeys.AUTO_DRIVING_PRESET] ?: true
+                
                 // Restore service binding once after first load
                 if (!hasRestoredServiceBinding) {
                     hasRestoredServiceBinding = true
@@ -182,6 +220,7 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
                     _activePreset.value?.let { prefs[PrefsKeys.ACTIVE_PRESET] = it }
                     prefs[PrefsKeys.GLASSES_THEME] = json.encodeToString(_glassesTheme.value)
                     prefs[PrefsKeys.PERSISTENT_MODE] = _persistentModeEnabled.value
+                    prefs[PrefsKeys.AUTO_DRIVING_PRESET] = _autoDrivingPreset.value
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save XR config: ${e.message}")
@@ -248,6 +287,7 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
             GlassesDisplayService.DisplayMode.MIRROR -> "Mirror mode (duplicate)"
             GlassesDisplayService.DisplayMode.EXTENDED -> "Extended mode (independent)"
             GlassesDisplayService.DisplayMode.SAMSUNG_DEX -> "Samsung DeX mode"
+            GlassesDisplayService.DisplayMode.ANDROID_AUTO -> "Android Auto (car display)"
         }
     }
     
@@ -257,6 +297,47 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
     fun canShowIndependentContent(): Boolean {
         return _currentDisplayMode.value == GlassesDisplayService.DisplayMode.EXTENDED ||
                _currentDisplayMode.value == GlassesDisplayService.DisplayMode.SAMSUNG_DEX
+    }
+    
+    // ============================================================================
+    // Display Target Routing
+    // ============================================================================
+    
+    /**
+     * Routes content updates to the correct display target.
+     * When persistent mode is active and service is bound, use service.
+     * Otherwise, use the activity-bound manager.
+     */
+    private fun routeDialogUpdate(state: GlassesDialogState?) {
+        if (_persistentModeEnabled.value && glassesService != null) {
+            glassesService?.updateDialog(state)
+        } else {
+            glassesManager.updateDialog(state)
+        }
+    }
+    
+    private fun routeNavigationUpdate(state: NavigationState) {
+        if (_persistentModeEnabled.value && glassesService != null) {
+            glassesService?.updateNavigation(state)
+        } else {
+            glassesManager.updateNavigation(state)
+        }
+    }
+    
+    private fun routeOsmMapUpdate(location: GeoPoint?, destination: GeoPoint?, routeGeometry: List<GeoPoint>) {
+        if (_persistentModeEnabled.value && glassesService != null) {
+            glassesService?.updateOsmMap(location, destination, routeGeometry)
+        } else {
+            glassesManager.updateOsmMap(location, destination, routeGeometry)
+        }
+    }
+    
+    /**
+     * Check if persistent mode is active with service bound.
+     * Use this to skip manager lifecycle when service owns the display.
+     */
+    fun shouldSkipManagerLifecycle(): Boolean {
+        return _persistentModeEnabled.value && glassesService != null
     }
     
     // ============================================================================
@@ -285,7 +366,7 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         
-        glassesManager.updateDialog(glassesState)
+        routeDialogUpdate(glassesState)
     }
     
     // ============================================================================
@@ -360,7 +441,7 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
      * Update glasses display with navigation state
      */
     fun updateNavigationForGlasses(state: NavigationState) {
-        glassesManager.updateNavigation(state)
+        routeNavigationUpdate(state)
     }
     
     /**
@@ -372,7 +453,7 @@ class XRViewModel(application: Application) : AndroidViewModel(application) {
         destination: GeoPoint? = null,
         routeGeometry: List<GeoPoint> = emptyList()
     ) {
-        glassesManager.updateOsmMap(location, destination, routeGeometry)
+        routeOsmMapUpdate(location, destination, routeGeometry)
     }
     
     fun updateYoutubeForGlasses(state: YouTubeState) {

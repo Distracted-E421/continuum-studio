@@ -51,7 +51,8 @@ import java.util.concurrent.Executors
 @Composable
 fun AgentCameraScreen(
     viewModel: AgentCameraViewModel = viewModel(),
-    onNavigateBack: () -> Unit = {}
+    onNavigateBack: () -> Unit = {},
+    onNavigateToGallery: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val events by viewModel.events.collectAsState()
@@ -86,6 +87,9 @@ fun AgentCameraScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onNavigateToGallery) {
+                        Icon(Icons.Default.PhotoLibrary, "Gallery")
+                    }
                     ConnectionIndicator(
                         synapsixConnected = state.synapsixConnected,
                         cognixConnected = state.cognixConnected

@@ -58,6 +58,56 @@ fun ZonedGlassesLayout(
     onOptionHighlight: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    // Track dialog changes for entrance animation
+    var previousDialogId by remember { mutableStateOf<String?>(null) }
+    var animationKey by remember { mutableStateOf(0) }
+    
+    // Trigger animation when dialog changes
+    LaunchedEffect(dialogState?.id) {
+        if (dialogState?.id != previousDialogId && dialogState != null) {
+            animationKey++
+            previousDialogId = dialogState.id
+        }
+    }
+    
+    // Entrance animations - skip if theme.reduceAnimations is true
+    val useAnimations = !theme.reduceAnimations
+    
+    // Left zone slide-in from left
+    val leftZoneOffsetX by animateIntAsState(
+        targetValue = if (dialogState != null) 0 else -200,
+        animationSpec = if (useAnimations) tween(400, easing = FastOutSlowInEasing) else snap(),
+        label = "leftZoneOffset"
+    )
+    
+    // Right zone slide-in from right
+    val rightZoneOffsetX by animateIntAsState(
+        targetValue = if (dialogState != null) 0 else 200,
+        animationSpec = if (useAnimations) tween(400, delayMillis = 100, easing = FastOutSlowInEasing) else snap(),
+        label = "rightZoneOffset"
+    )
+    
+    // Overall fade in
+    val contentAlpha by animateFloatAsState(
+        targetValue = if (dialogState != null) 1f else 0f,
+        animationSpec = if (useAnimations) tween(300) else snap(),
+        label = "contentAlpha"
+    )
+    
+    // Top bar slide down
+    val topBarOffsetY by animateIntAsState(
+        targetValue = if (dialogState != null) 0 else -50,
+        animationSpec = if (useAnimations) tween(350) else snap(),
+        label = "topBarOffset"
+    )
+    
+    // Bottom bar slide up
+    val bottomBarOffsetY by animateIntAsState(
+        targetValue = if (dialogState != null || typingText != null) 0 else 50,
+        animationSpec = if (useAnimations) tween(350) else snap(),
+        label = "bottomBarOffset"
+    )
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -73,11 +123,13 @@ fun ZonedGlassesLayout(
             modifier = Modifier.fillMaxSize(),
             horizontalArrangement = Arrangement.spacedBy(zoneConfig.zoneSpacing.dp)
         ) {
-            // LEFT ZONE - Dialog content/prompt
+            // LEFT ZONE - Dialog content/prompt (slides in from left)
             Box(
                 modifier = Modifier
                     .weight(zoneConfig.leftWidthPercent)
                     .fillMaxHeight()
+                    .offset { IntOffset(leftZoneOffsetX, 0) }
+                    .alpha(contentAlpha)
                     .then(
                         if (zoneConfig.showZoneBorders)
                             Modifier.border(1.dp, dimColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
@@ -94,15 +146,15 @@ fun ZonedGlassesLayout(
                         scrollOffset = contentScrollOffset
                     )
                 } else {
-                    // Debug: Show when no dialog
+                    // Idle state - show subtle hint
                     Column(
                         modifier = Modifier.fillMaxSize().padding(12.dp),
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
                             text = "Waiting for dialog...",
-                            color = dimColor.copy(alpha = 0.5f),
-                            fontSize = 16.sp
+                            color = dimColor.copy(alpha = 0.3f),
+                            fontSize = 14.sp
                         )
                     }
                 }
@@ -122,21 +174,28 @@ fun ZonedGlassesLayout(
             ) {
                 // Intentionally empty - see-through zone
                 // Only show minimal status if needed
-                if (!connectionStatus.isConnected) {
+                val disconnectedAlpha by animateFloatAsState(
+                    targetValue = if (!connectionStatus.isConnected) 0.5f else 0f,
+                    animationSpec = tween(300),
+                    label = "disconnectedAlpha"
+                )
+                if (disconnectedAlpha > 0f) {
                     Text(
                         text = "⊘",
-                        color = GlassesColors.AlertRed.copy(alpha = 0.5f),
+                        color = GlassesColors.AlertRed.copy(alpha = disconnectedAlpha),
                         fontSize = 24.sp,
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
             }
 
-            // RIGHT ZONE - Dialog options
+            // RIGHT ZONE - Dialog options (slides in from right)
             Box(
                 modifier = Modifier
                     .weight(zoneConfig.rightWidthPercent)
                     .fillMaxHeight()
+                    .offset { IntOffset(rightZoneOffsetX, 0) }
+                    .alpha(contentAlpha)
                     .then(
                         if (zoneConfig.showZoneBorders)
                             Modifier.border(1.dp, dimColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
@@ -153,15 +212,15 @@ fun ZonedGlassesLayout(
                         onOptionHighlight = onOptionHighlight
                     )
                 } else {
-                    // Debug: Show when no options
+                    // Idle state
                     Column(
                         modifier = Modifier.fillMaxSize().padding(12.dp),
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.End
                     ) {
                         Text(
-                            text = "No options yet",
-                            color = dimColor.copy(alpha = 0.3f),
+                            text = "No options",
+                            color = dimColor.copy(alpha = 0.2f),
                             fontSize = 12.sp,
                             textAlign = TextAlign.End
                         )
@@ -170,24 +229,36 @@ fun ZonedGlassesLayout(
             }
         }
 
-        // Top bar - connection status and timer
+        // Top bar - connection status and timer (slides down)
         TopStatusBar(
             connectionStatus = connectionStatus,
             timeRemaining = dialogState?.timeRemaining,
             isUrgent = dialogState?.isUrgent == true,
             primaryColor = primaryColor,
             dimColor = dimColor,
-            modifier = Modifier.align(Alignment.TopCenter)
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset { IntOffset(0, topBarOffsetY) }
+                .alpha(if (dialogState != null) 1f else 0.5f)
         )
 
-        // Bottom bar - typing indicator and current action
-        if (typingText != null || dialogState != null) {
+        // Bottom bar - typing indicator and current action (slides up)
+        val showBottomBar = typingText != null || dialogState != null
+        val bottomBarAlpha by animateFloatAsState(
+            targetValue = if (showBottomBar) 1f else 0f,
+            animationSpec = if (useAnimations) tween(300) else snap(),
+            label = "bottomBarAlpha"
+        )
+        if (bottomBarAlpha > 0f) {
             BottomStatusBar(
                 typingText = typingText,
                 dialogTitle = dialogState?.title,
                 primaryColor = primaryColor,
                 dimColor = dimColor,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .offset { IntOffset(0, bottomBarOffsetY) }
+                    .alpha(bottomBarAlpha)
             )
         }
     }

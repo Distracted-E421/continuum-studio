@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.continuumstudio"
         minSdk = 34
         targetSdk = 36
-        versionCode = 15
-        versionName = "1.10.0"
+        versionCode = 25
+        versionName = "1.18.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -38,6 +38,11 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    
+    lint {
+        baseline = file("lint-baseline.xml")
+        abortOnError = false
     }
 }
 

@@ -110,7 +110,8 @@ class GlassesDisplayService : Service(), DisplayManager.DisplayListener {
         PHONE_ONLY,     // No external display
         MIRROR,         // External display, but duplicating phone (no FLAG_PRESENTATION)
         EXTENDED,       // Presentation display available (can show independent content)
-        SAMSUNG_DEX     // Samsung DeX desktop mode active
+        SAMSUNG_DEX,    // Samsung DeX desktop mode active
+        ANDROID_AUTO    // Connected to Android Auto (USB-C or wireless)
     }
     
     data class GlassesDisplayState(
@@ -239,8 +240,17 @@ class GlassesDisplayService : Service(), DisplayManager.DisplayListener {
             it.flags and Display.FLAG_PRESENTATION != 0 && it.isValid 
         }?.let { return it }
         
-        // Priority 3: Any valid external display
-        return displays.firstOrNull { it.isValid }
+        // Priority 3: Samsung DeX mode - treat as extended
+        if (isDeXMode()) {
+            return displays.firstOrNull { it.isValid }
+        }
+        
+        // DO NOT fall back to mirror mode displays!
+        // If we don't have a proper presentation display, return null.
+        // This prevents creating a Presentation that fights with Android Auto
+        // when USB-C is just mirroring the phone screen.
+        Log.d(TAG, "No presentation-capable display found (mirror mode detected)")
+        return null
     }
     
     private fun showPresentation(display: Display) {
@@ -296,6 +306,12 @@ class GlassesDisplayService : Service(), DisplayManager.DisplayListener {
             return
         }
         
+        // Check for Android Auto first (USB-C car connection)
+        if (isAndroidAutoMode()) {
+            _displayMode.value = DisplayMode.ANDROID_AUTO
+            return
+        }
+        
         // Check for Samsung DeX
         if (isDeXMode()) {
             _displayMode.value = DisplayMode.SAMSUNG_DEX
@@ -314,6 +330,17 @@ class GlassesDisplayService : Service(), DisplayManager.DisplayListener {
         }
         
         Log.d(TAG, "Display mode detected: ${_displayMode.value}")
+    }
+    
+    /**
+     * Check if we can show independent content on the glasses.
+     * Returns false in MIRROR mode, ANDROID_AUTO, or PHONE_ONLY.
+     */
+    fun canShowIndependentContent(): Boolean {
+        return when (_displayMode.value) {
+            DisplayMode.EXTENDED, DisplayMode.SAMSUNG_DEX -> true
+            DisplayMode.MIRROR, DisplayMode.ANDROID_AUTO, DisplayMode.PHONE_ONLY, DisplayMode.UNKNOWN -> false
+        }
     }
     
     /**
@@ -348,6 +375,22 @@ class GlassesDisplayService : Service(), DisplayManager.DisplayListener {
             Log.v(TAG, "semDesktopModeEnabled method not available: ${e.message}")
         }
         
+        return false
+    }
+    
+    /**
+     * Check if Android Auto mode is active using UiModeManager
+     */
+    private fun isAndroidAutoMode(): Boolean {
+        try {
+            val uiModeManager = getSystemService(Context.UI_MODE_SERVICE) as? android.app.UiModeManager
+            if (uiModeManager?.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_CAR) {
+                Log.d(TAG, "Android Auto detected via UiModeManager")
+                return true
+            }
+        } catch (e: Exception) {
+            Log.v(TAG, "UiModeManager check failed: ${e.message}")
+        }
         return false
     }
     
@@ -422,6 +465,7 @@ class GlassesDisplayService : Service(), DisplayManager.DisplayListener {
         val contentText = when (_displayMode.value) {
             DisplayMode.EXTENDED -> "Extended display active"
             DisplayMode.SAMSUNG_DEX -> "Samsung DeX mode"
+            DisplayMode.ANDROID_AUTO -> "Android Auto (dialogs via car display)"
             DisplayMode.MIRROR -> "Mirror mode (tap to configure)"
             DisplayMode.PHONE_ONLY -> "Waiting for glasses..."
             DisplayMode.UNKNOWN -> "Checking display..."

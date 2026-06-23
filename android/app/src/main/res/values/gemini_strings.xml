@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gemini_accessibility_service_name">Gemini Capture</string>
+    <string name="gemini_accessibility_description">Captures Gemini app interactions for local AI training. All data is stored locally on your device and synced only to your homelab. No data is sent to external servers.</string>
+</resources>

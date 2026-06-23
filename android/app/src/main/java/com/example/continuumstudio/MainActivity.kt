@@ -29,6 +29,8 @@ import androidx.compose.material.icons.filled.LocalParking
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -41,6 +43,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.continuumstudio.network.DialogEvent
 import com.example.continuumstudio.service.DialogNotificationService
+import com.example.continuumstudio.service.GlassesDisplayService
 import com.example.continuumstudio.ui.activityfeed.ActivityFeedScreen
 import com.example.continuumstudio.ui.cliagents.CLIAgentsScreen
 import com.example.continuumstudio.ui.coordination.CoordinationDashboard
@@ -71,13 +74,23 @@ import com.example.continuumstudio.ui.navigation.NavigationScreen
 import com.example.continuumstudio.ui.capture.GeminiCaptureScreen
 import com.example.continuumstudio.viewmodel.GeminiCaptureViewModel
 import com.example.continuumstudio.ui.camera.AgentCameraScreen
+import com.example.continuumstudio.ui.camera.CaptureGalleryScreen
+import com.example.continuumstudio.viewmodel.CaptureGalleryViewModel
 import com.example.continuumstudio.viewmodel.AgentCameraViewModel
 import com.example.continuumstudio.util.rememberDisplayInfo
+import com.example.continuumstudio.ui.mode.AppMode
+import com.example.continuumstudio.ui.mode.AppModeSelector
+import com.example.continuumstudio.viewmodel.AppModeViewModel
+import com.example.continuumstudio.viewmodel.CognixViewModel
+import com.example.continuumstudio.ui.cognix.CognixHomeScreen
+import com.example.continuumstudio.ui.cognix.CognixPatternsScreen
+import com.example.continuumstudio.ui.cognix.CognixSettingsScreen
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import com.example.continuumstudio.ui.components.DisplayModeIndicator
 import com.example.continuumstudio.ui.components.AdaptiveLayout
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Alignment
@@ -85,6 +98,10 @@ import androidx.compose.ui.unit.dp
 
 // Navigation routes
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
+    // Mode selection
+    object ModeSelector : Screen("mode_selector", "Choose Mode", Icons.Default.Home)
+    
+    // Continuum screens
     object Dashboard : Screen("dashboard", "Home", Icons.Default.Home)
     object Dialog : Screen("dialog", "Dialog", Icons.AutoMirrored.Filled.List)
     object CLIAgents : Screen("cli_agents", "Agents", Icons.Default.SmartToy)
@@ -98,6 +115,12 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object Navigation : Screen("navigation", "Nav", Icons.Default.Map)
     object GeminiCapture : Screen("gemini_capture", "Gemini Capture", Icons.Default.SmartToy)
     object AgentCamera : Screen("agent_camera", "Agent Camera", Icons.Default.CameraAlt)
+    object CaptureGallery : Screen("capture_gallery", "Captures", Icons.Default.Collections)
+    
+    // Cognix screens
+    object CognixHome : Screen("cognix_home", "Cognix", Icons.Default.Psychology)
+    object CognixPatterns : Screen("cognix_patterns", "Patterns", Icons.Default.Timeline)
+    object CognixSettings : Screen("cognix_settings", "Settings", Icons.Default.Settings)
 }
 
 class MainActivity : ComponentActivity() {
@@ -135,6 +158,15 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ContinuumStudioTheme {
+                // App mode selection
+                val appModeViewModel: AppModeViewModel = viewModel()
+                val currentMode by appModeViewModel.currentMode.collectAsState()
+                val hasSelectedMode by appModeViewModel.hasSelectedMode.collectAsState()
+                val isModeLoading by appModeViewModel.isLoading.collectAsState()
+                
+                // Cognix ViewModel (always available for shared features)
+                val cognixViewModel: CognixViewModel = viewModel()
+                
                 val navController = rememberNavController()
                 val dialogViewModel: DialogViewModel = viewModel()
                 val widgetBayViewModel: WidgetBayViewModel = viewModel()
@@ -162,10 +194,16 @@ class MainActivity : ComponentActivity() {
                 }
                 
                 // XR Glasses lifecycle management
+                // Skip manager lifecycle when persistent mode has the service owning the display
                 val lifecycleOwner = LocalLifecycleOwner.current
-                DisposableEffect(lifecycleOwner) {
+                val persistentModeEnabled by xrViewModel.persistentModeEnabled.collectAsState()
+                DisposableEffect(lifecycleOwner, persistentModeEnabled) {
                     val observer = xrViewModel.glassesManager.createLifecycleObserver { xrViewModel.glassesTheme.value }
-                    lifecycleOwner.lifecycle.addObserver(observer)
+                    
+                    // Only add observer if persistent mode service isn't owning the display
+                    if (!xrViewModel.shouldSkipManagerLifecycle()) {
+                        lifecycleOwner.lifecycle.addObserver(observer)
+                    }
                     onDispose {
                         lifecycleOwner.lifecycle.removeObserver(observer)
                     }
@@ -207,6 +245,7 @@ class MainActivity : ComponentActivity() {
                 val isGlassesConnected by xrViewModel.isGlassesConnected.collectAsState()
                 val glassesDisplayState by xrViewModel.glassesDisplayState.collectAsState()
                 val xrLayoutMode by xrViewModel.layoutMode.collectAsState()
+                val currentDisplayMode by xrViewModel.currentDisplayMode.collectAsState()
                 
                 // Bridge states to glasses display
                 LaunchedEffect(dialogState.activeDialog) {
@@ -346,8 +385,16 @@ class MainActivity : ComponentActivity() {
                                 // Show toast
                                 dialogViewModel.showToast("New dialog: ${event.title}")
                                 
-                                // Show notification if app is in background
-                                if (!isInForeground) {
+                                // Mode-aware dialog routing:
+                                // - Android Auto: Always notify (car display handles it)
+                                // - Background: Notify (standard behavior)
+                                // - Foreground + glasses: Glasses handle it (notified via XRViewModel)
+                                val shouldShowNotification = when (currentDisplayMode) {
+                                    GlassesDisplayService.DisplayMode.ANDROID_AUTO -> true // Always notify for car
+                                    else -> !isInForeground // Standard: notify when in background
+                                }
+                                
+                                if (shouldShowNotification) {
                                     DialogNotificationService.notifyNewDialog(
                                         this@MainActivity,
                                         event.id,
@@ -356,9 +403,12 @@ class MainActivity : ComponentActivity() {
                                         event.dialogType
                                     )
                                 }
-                                // Auto-navigate to dialog screen when new dialog arrives
-                                navController.navigate(Screen.Dialog.route) {
-                                    launchSingleTop = true
+                                
+                                // Auto-navigate to dialog screen (unless in Android Auto)
+                                if (currentDisplayMode != GlassesDisplayService.DisplayMode.ANDROID_AUTO) {
+                                    navController.navigate(Screen.Dialog.route) {
+                                        launchSingleTop = true
+                                    }
                                 }
                             }
                             is DialogEvent.DialogCompleted -> {
@@ -424,39 +474,49 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     bottomBar = {
-                        NavigationBar {
-                            bottomNavScreens.forEach { screen ->
-                                val isSelected = currentRoute == screen.route
-                                NavigationBarItem(
-                                    icon = { 
-                                        if (screen == Screen.Dialog) {
-                                            BadgedBox(
-                                                badge = {
-                                                    if (dialogState.queueCount > 0 || dialogState.activeDialog != null) {
-                                                        Badge { 
-                                                            Text(
-                                                                if (dialogState.activeDialog != null) "!" 
-                                                                else dialogState.queueCount.toString()
-                                                            )
+                        // Only show bottom bar for Continuum mode, not Cognix or mode selector
+                        val isCognixScreen = currentRoute in listOf(
+                            Screen.CognixHome.route,
+                            Screen.CognixPatterns.route,
+                            Screen.CognixSettings.route
+                        )
+                        val isModeSelector = currentRoute == Screen.ModeSelector.route
+                        
+                        if (!isCognixScreen && !isModeSelector) {
+                            NavigationBar {
+                                bottomNavScreens.forEach { screen ->
+                                    val isSelected = currentRoute == screen.route
+                                    NavigationBarItem(
+                                        icon = { 
+                                            if (screen == Screen.Dialog) {
+                                                BadgedBox(
+                                                    badge = {
+                                                        if (dialogState.queueCount > 0 || dialogState.activeDialog != null) {
+                                                            Badge { 
+                                                                Text(
+                                                                    if (dialogState.activeDialog != null) "!" 
+                                                                    else dialogState.queueCount.toString()
+                                                                )
+                                                            }
                                                         }
                                                     }
+                                                ) {
+                                                    Icon(screen.icon, contentDescription = screen.title)
                                                 }
-                                            ) {
+                                            } else {
                                                 Icon(screen.icon, contentDescription = screen.title)
                                             }
-                                        } else {
-                                            Icon(screen.icon, contentDescription = screen.title)
+                                        },
+                                        label = { Text(screen.title) },
+                                        selected = isSelected,
+                                        onClick = {
+                                            navController.navigate(screen.route) {
+                                                popUpTo(navController.graph.startDestinationId)
+                                                launchSingleTop = true
+                                            }
                                         }
-                                    },
-                                    label = { Text(screen.title) },
-                                    selected = isSelected,
-                                    onClick = {
-                                        navController.navigate(screen.route) {
-                                            popUpTo(navController.graph.startDestinationId)
-                                            launchSingleTop = true
-                                        }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         }
                     }
@@ -464,11 +524,105 @@ class MainActivity : ComponentActivity() {
                     AdaptiveLayout(
                         displayInfo = displayInfo,
                         primaryContent = {
+                    // Determine start destination based on mode
+                    val startDestination = when {
+                        isModeLoading -> Screen.ModeSelector.route
+                        !hasSelectedMode -> Screen.ModeSelector.route
+                        currentMode == AppMode.COGNIX -> Screen.CognixHome.route
+                        else -> Screen.Dashboard.route
+                    }
+                    
                     NavHost(
                         navController = navController,
-                        startDestination = Screen.Dashboard.route,
+                        startDestination = startDestination,
                         modifier = Modifier.fillMaxSize()
                     ) {
+                        // Mode selector screen
+                        composable(Screen.ModeSelector.route) {
+                            if (isModeLoading) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator()
+                                }
+                            } else {
+                                AppModeSelector(
+                                    onModeSelected = { mode ->
+                                        appModeViewModel.selectMode(mode)
+                                        val destination = when (mode) {
+                                            AppMode.CONTINUUM -> Screen.Dashboard.route
+                                            AppMode.COGNIX -> Screen.CognixHome.route
+                                        }
+                                        navController.navigate(destination) {
+                                            popUpTo(Screen.ModeSelector.route) { inclusive = true }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        
+                        // Cognix screens
+                        composable(
+                            Screen.CognixHome.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            CognixHomeScreen(
+                                viewModel = cognixViewModel,
+                                onNavigateToCapture = {
+                                    navController.navigate(Screen.AgentCamera.route) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onNavigateToPatterns = {
+                                    navController.navigate(Screen.CognixPatterns.route) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onNavigateToSettings = {
+                                    navController.navigate(Screen.CognixSettings.route) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onSwitchMode = {
+                                    appModeViewModel.selectMode(AppMode.CONTINUUM)
+                                    navController.navigate(Screen.Dashboard.route) {
+                                        popUpTo(Screen.CognixHome.route) { inclusive = true }
+                                    }
+                                }
+                            )
+                        }
+                        
+                        composable(
+                            Screen.CognixPatterns.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            CognixPatternsScreen(
+                                viewModel = cognixViewModel,
+                                onNavigateBack = { navController.popBackStack() }
+                            )
+                        }
+                        
+                        composable(
+                            Screen.CognixSettings.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            CognixSettingsScreen(
+                                viewModel = cognixViewModel,
+                                onNavigateBack = { navController.popBackStack() },
+                                onResetAppMode = {
+                                    appModeViewModel.selectMode(AppMode.CONTINUUM)
+                                    navController.navigate(Screen.Dashboard.route) {
+                                        popUpTo(Screen.CognixSettings.route) { inclusive = true }
+                                    }
+                                }
+                            )
+                        }
+                        
+                        // Continuum screens
                         composable(
                             Screen.Dashboard.route,
                             enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) },
@@ -680,6 +834,12 @@ class MainActivity : ComponentActivity() {
                                     navController.navigate(Screen.AgentCamera.route) {
                                         launchSingleTop = true
                                     }
+                                },
+                                onSwitchToCognix = {
+                                    appModeViewModel.selectMode(AppMode.COGNIX)
+                                    navController.navigate(Screen.CognixHome.route) {
+                                        popUpTo(Screen.Dashboard.route) { inclusive = true }
+                                    }
                                 }
                             )
                         }
@@ -749,7 +909,29 @@ class MainActivity : ComponentActivity() {
                             val agentCameraViewModel: AgentCameraViewModel = viewModel()
                             AgentCameraScreen(
                                 viewModel = agentCameraViewModel,
-                                onNavigateBack = { navController.popBackStack() }
+                                onNavigateBack = { navController.popBackStack() },
+                                onNavigateToGallery = {
+                                    navController.navigate(Screen.CaptureGallery.route) {
+                                        launchSingleTop = true
+                                    }
+                                }
+                            )
+                        }
+                        
+                        composable(
+                            Screen.CaptureGallery.route,
+                            enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(300)) },
+                            exitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(300)) }
+                        ) {
+                            val captureGalleryViewModel: CaptureGalleryViewModel = viewModel()
+                            CaptureGalleryScreen(
+                                viewModel = captureGalleryViewModel,
+                                onNavigateBack = { navController.popBackStack() },
+                                onNavigateToCamera = {
+                                    navController.navigate(Screen.AgentCamera.route) {
+                                        launchSingleTop = true
+                                    }
+                                }
                             )
                         }
                     }

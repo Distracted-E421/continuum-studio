@@ -450,12 +450,12 @@ private fun DialogOptionButton(
         ButtonSize.SMALL -> 56.dp
         ButtonSize.MEDIUM -> 72.dp
         ButtonSize.LARGE -> 88.dp
-        ButtonSize.XR_LARGE -> 100.dp
+        ButtonSize.XR_LARGE -> 80.dp  // Reduced from 100dp to fit more options
     }
     
-    val cornerRadius = if (xrMode) 16.dp else 12.dp
-    val padding = if (xrMode) 16.dp else 12.dp
-    val badgeSize = if (xrMode) 44.dp else 36.dp
+    val cornerRadius = if (xrMode) 12.dp else 12.dp
+    val padding = if (xrMode) 12.dp else 12.dp
+    val badgeSize = if (xrMode) 36.dp else 36.dp
 
     Surface(
         modifier = modifier
@@ -718,39 +718,50 @@ private fun XRActionBar(
     onScrollDown: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val buttonSize = if (xrMode) 56.dp else 48.dp
-    val iconSize = if (xrMode) 28.dp else 24.dp
-    val spacing = if (xrMode) 12.dp else 8.dp
+    // Use smaller sizes in XR mode to fit all buttons
+    val buttonSize = if (xrMode) 48.dp else 48.dp
+    val iconSize = if (xrMode) 24.dp else 24.dp
+    val spacing = if (xrMode) 8.dp else 8.dp
+    val scrollButtonSize = if (xrMode) 40.dp else 40.dp
     
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(spacing),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        OutlinedIconButton(
-            onClick = onToggleKeyboard,
-            modifier = Modifier.size(buttonSize)
+        // Left group: Secondary actions (compact)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = if (showKeyboard) Icons.Default.KeyboardHide else Icons.Default.Keyboard,
-                contentDescription = if (showKeyboard) "Hide keyboard" else "Show keyboard",
-                modifier = Modifier.size(iconSize)
-            )
+            OutlinedIconButton(
+                onClick = onToggleKeyboard,
+                modifier = Modifier.size(buttonSize)
+            ) {
+                Icon(
+                    imageVector = if (showKeyboard) Icons.Default.KeyboardHide else Icons.Default.Keyboard,
+                    contentDescription = if (showKeyboard) "Hide keyboard" else "Show keyboard",
+                    modifier = Modifier.size(iconSize)
+                )
+            }
+
+            OutlinedIconButton(
+                onClick = onRefresh,
+                modifier = Modifier.size(buttonSize)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Refresh",
+                    modifier = Modifier.size(iconSize)
+                )
+            }
         }
 
-        OutlinedIconButton(
-            onClick = onRefresh,
-            modifier = Modifier.size(buttonSize)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Refresh,
-                contentDescription = "Refresh",
-                modifier = Modifier.size(iconSize)
-            )
-        }
-
+        Spacer(Modifier.weight(1f))
+        
+        // Center: Scroll controls (compact vertical stack)
         Surface(
-            shape = RoundedCornerShape(if (xrMode) 16.dp else 12.dp),
+            shape = RoundedCornerShape(12.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
             modifier = Modifier.height(buttonSize)
         ) {
@@ -760,24 +771,24 @@ private fun XRActionBar(
             ) {
                 IconButton(
                     onClick = onScrollUp,
-                    modifier = Modifier.size(buttonSize)
+                    modifier = Modifier.size(scrollButtonSize)
                 ) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowUp,
                         contentDescription = "Scroll up",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(iconSize)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
                 IconButton(
                     onClick = onScrollDown,
-                    modifier = Modifier.size(buttonSize)
+                    modifier = Modifier.size(scrollButtonSize)
                 ) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
                         contentDescription = "Scroll down",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(iconSize)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
@@ -785,19 +796,20 @@ private fun XRActionBar(
 
         Spacer(Modifier.weight(1f))
 
+        // Right: Primary action (Submit)
         Button(
             onClick = onSubmit,
             enabled = hasSelection && !isSubmitting,
             modifier = Modifier.height(buttonSize),
             contentPadding = PaddingValues(
-                horizontal = if (xrMode) 24.dp else 16.dp,
-                vertical = if (xrMode) 16.dp else 12.dp
+                horizontal = 16.dp,
+                vertical = 12.dp
             )
         ) {
             if (isSubmitting) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(if (xrMode) 24.dp else 20.dp),
-                    strokeWidth = if (xrMode) 3.dp else 2.dp,
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.onPrimary
                 )
             } else {
