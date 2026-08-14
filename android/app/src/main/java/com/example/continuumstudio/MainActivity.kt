@@ -241,6 +241,10 @@ class MainActivity : ComponentActivity() {
                 // Orchestrator mode state (from dialog or settings)
                 val orchestratorMode by dialogViewModel.orchestratorMode.collectAsState()
                 
+                // Coordinator v2 state
+                val useCoordinatorV2 by dialogViewModel.useCoordinatorV2.collectAsState()
+                val coordinatorSurfaceId = dialogViewModel.coordinatorSurfaceId
+                
                 // XR/Glasses state
                 val isGlassesConnected by xrViewModel.isGlassesConnected.collectAsState()
                 val glassesDisplayState by xrViewModel.glassesDisplayState.collectAsState()
@@ -776,7 +780,11 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onScrollGlasses = { scrollAmount ->
                                     xrViewModel.scrollGlassesContent(scrollAmount)
-                                }
+                                },
+                                // Coordinator v2 API
+                                useCoordinatorV2 = useCoordinatorV2,
+                                onUseCoordinatorV2Change = dialogViewModel::setUseCoordinatorV2,
+                                coordinatorSurfaceId = coordinatorSurfaceId
                             )
                         }
                         

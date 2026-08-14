@@ -17,6 +17,9 @@ import com.example.continuumstudio.data.*
 import com.example.continuumstudio.data.DialogDetails
 import com.example.continuumstudio.network.DialogEvent
 import com.example.continuumstudio.network.DialogWebSocketClient
+import com.example.continuumstudio.network.CoordinatorWebSocketClient
+import com.example.continuumstudio.network.CoordinatorEvent
+import com.example.continuumstudio.network.CoordinatorDialog
 import com.example.continuumstudio.network.NetworkMonitor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -50,6 +53,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     
     private val dataStore = application.dataStore
     private val wsClient = DialogWebSocketClient(viewModelScope)
+    private val coordinatorClient = CoordinatorWebSocketClient(viewModelScope)
     private val networkMonitor = NetworkMonitor(application)
     
     // TTS engine
@@ -125,6 +129,51 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         val TTS_ENABLED = booleanPreferencesKey("tts_enabled")
         val TTS_AUTO_READ = booleanPreferencesKey("tts_auto_read")
         val TTS_SPEED = floatPreferencesKey("tts_speed")
+        val USE_COORDINATOR_V2 = booleanPreferencesKey("use_coordinator_v2")
+    }
+    
+    // ========================================================================
+    // Coordinator (v2 API) Support
+    // ========================================================================
+    
+    // v2 mode setting - when enabled, uses CoordinatorWebSocketClient for multi-surface support
+    val useCoordinatorV2: StateFlow<Boolean> = dataStore.data.map { prefs ->
+        prefs[PrefsKeys.USE_COORDINATOR_V2] ?: false
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    
+    // Coordinator state
+    val coordinatorConnectionState = coordinatorClient.connectionState
+    val coordinatorDialogs = coordinatorClient.dialogs
+    val coordinatorSurfaces = coordinatorClient.surfaces
+    val coordinatorEvents = coordinatorClient.events
+    val coordinatorSurfaceId: String get() = coordinatorClient.surfaceId
+    
+    fun setUseCoordinatorV2(enabled: Boolean) {
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.USE_COORDINATOR_V2] = enabled
+            }
+        }
+    }
+    
+    fun connectCoordinator(serverUrl: String, clientId: String = "", clientSecret: String = "") {
+        coordinatorClient.connect(serverUrl, clientId, clientSecret)
+    }
+    
+    fun disconnectCoordinator() {
+        coordinatorClient.disconnect()
+    }
+    
+    fun answerDialogV2(dialogId: String, selection: kotlinx.serialization.json.JsonElement, comment: String? = null) {
+        coordinatorClient.answerDialog(dialogId, selection, comment)
+    }
+    
+    fun claimDialog(dialogId: String) {
+        coordinatorClient.claimDialog(dialogId)
+    }
+    
+    fun releaseClaimDialog(dialogId: String) {
+        coordinatorClient.releaseClaimDialog(dialogId)
     }
 
     // Default endpoints - ordered by preference for failover

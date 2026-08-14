@@ -98,6 +98,10 @@ fun DialogScreen(
     onCfAccessClientIdChange: (String) -> Unit = {},
     onCfAccessClientSecretChange: (String) -> Unit = {},
     onTestNotification: () -> Unit = {},
+    // Coordinator v2 API
+    useCoordinatorV2: Boolean = false,
+    onUseCoordinatorV2Change: (Boolean) -> Unit = {},
+    coordinatorSurfaceId: String = "",
     onCopyToClipboard: (String) -> Unit = {},
     // Endpoint configuration
     endpoints: List<ServerEndpoint> = emptyList(),
@@ -327,6 +331,9 @@ fun DialogScreen(
                         onSetEndpointFallbackEnabled = onSetEndpointFallbackEnabled,
                         onTestEndpoint = onTestEndpoint,
                         onTestAllEndpoints = onTestAllEndpoints,
+                        useCoordinatorV2 = useCoordinatorV2,
+                        onUseCoordinatorV2Change = onUseCoordinatorV2Change,
+                        coordinatorSurfaceId = coordinatorSurfaceId,
                     )
                 }
                 else -> {
@@ -634,6 +641,10 @@ fun SettingsView(
     onSetEndpointFallbackEnabled: (Boolean) -> Unit = {},
     onTestEndpoint: (Int) -> Unit = {},
     onTestAllEndpoints: () -> Unit = {},
+    // Coordinator v2 API
+    useCoordinatorV2: Boolean = false,
+    onUseCoordinatorV2Change: (Boolean) -> Unit = {},
+    coordinatorSurfaceId: String = "",
 ) {
     val hapticFeedback = LocalHapticFeedback.current
     var showAddEndpointDialog by remember { mutableStateOf(false) }
@@ -1021,6 +1032,49 @@ fun SettingsView(
                             onVibrationEnabledChange(it)
                         }
                     )
+                }
+            }
+        }
+        
+        // Experimental Section (Coordinator v2)
+        item {
+            SettingsSectionHeader(title = "Experimental")
+        }
+        
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    SettingsToggleRow(
+                        title = "Multi-Surface Mode (v2)",
+                        subtitle = "Use coordinator API for simultaneous dialog display on all surfaces",
+                        checked = useCoordinatorV2,
+                        onCheckedChange = {
+                            if (vibrationEnabled) hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onUseCoordinatorV2Change(it)
+                        }
+                    )
+                    
+                    if (useCoordinatorV2) {
+                        HorizontalDivider()
+                        Text(
+                            "Surface ID: ${coordinatorSurfaceId.takeLast(8)}...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "When enabled, dialogs appear on all connected surfaces simultaneously. First response wins.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
