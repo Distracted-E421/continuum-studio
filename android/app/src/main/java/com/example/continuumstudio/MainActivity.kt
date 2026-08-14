@@ -115,7 +115,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector)
     object Navigation : Screen("navigation", "Nav", Icons.Default.Map)
     object GeminiCapture : Screen("gemini_capture", "Gemini Capture", Icons.Default.SmartToy)
     object AgentCamera : Screen("agent_camera", "Agent Camera", Icons.Default.CameraAlt)
-    object CaptureGallery : Screen("capture_gallery", "Captures", Icons.Default.Collections)
+    object CaptureGallery : Screen("capture_gallery", "Captures", Icons.Default.CameraAlt)
     
     // Cognix screens
     object CognixHome : Screen("cognix_home", "Cognix", Icons.Default.Psychology)

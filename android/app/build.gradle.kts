@@ -95,6 +95,9 @@ dependencies {
     
     // Accompanist (permissions handling)
     implementation(libs.accompanist.permissions)
+    
+    // Coil (async image loading)
+    implementation(libs.coil.compose)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
