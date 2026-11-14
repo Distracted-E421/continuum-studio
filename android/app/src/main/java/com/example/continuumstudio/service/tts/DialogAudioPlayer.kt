@@ -112,7 +112,8 @@ class DialogAudioPlayer(private val context: Context) {
      *         fall back to Android TTS — this includes the timeout case, so a
      *         slow network degrades rather than leaving dead air indefinitely.
      */
-    suspend fun speak(text: String): Boolean = speak(text, dialogId = null, title = null, optionCount = 0)
+    suspend fun speak(text: String): Boolean =
+        speak(text, dialogId = null, title = null, optionCount = 0, optionLabels = emptyList())
 
     /**
      * Speak [text], optionally publishing full dialog metadata to the car.
@@ -120,6 +121,7 @@ class DialogAudioPlayer(private val context: Context) {
      * @param dialogId stable id, used as the MediaItem mediaId
      * @param title dialog title shown on the head unit
      * @param optionCount how many choices the dialog offers
+     * @param optionLabels choice labels, rendered as tappable chapters on the car
      * @return true if audio actually started playing. false means the caller must
      *         fall back to Android TTS - this includes the timeout case, so a
      *         slow network degrades rather than leaving dead air indefinitely.
@@ -129,6 +131,7 @@ class DialogAudioPlayer(private val context: Context) {
         dialogId: String?,
         title: String?,
         optionCount: Int,
+        optionLabels: List<String> = emptyList(),
     ): Boolean {
         if (!easyVoice.isConfigured) return false
         if (text.isBlank()) return false
@@ -150,6 +153,7 @@ class DialogAudioPlayer(private val context: Context) {
                 title = title ?: "Dialog",
                 prompt = text,
                 optionCount = optionCount,
+                optionLabels = optionLabels,
             )
             if (ok) {
                 _isPlaying.value = true

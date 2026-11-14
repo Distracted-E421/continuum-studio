@@ -45,6 +45,7 @@ object MediaSessionBridge {
         title: String,
         prompt: String,
         optionCount: Int,
+        optionLabels: List<String> = emptyList(),
     ): Boolean {
         val c = controller ?: return false
         if (!c.isConnected) return false
@@ -56,6 +57,7 @@ object MediaSessionBridge {
                 title = title,
                 prompt = prompt,
                 optionCount = optionCount,
+                optionLabels = optionLabels,
             )
             logState("before-set")
             c.setMediaItem(item)

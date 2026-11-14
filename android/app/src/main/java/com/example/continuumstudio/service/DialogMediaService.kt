@@ -50,6 +50,7 @@ class DialogMediaService : MediaLibraryService() {
 
         const val KEY_DIALOG_ID = "dialog_id"
         const val KEY_OPTION_COUNT = "option_count"
+        const val KEY_OPTION_LABELS = "option_labels"
 
         /** Foreground notification id. */
         const val FOREGROUND_ID = 7301
@@ -253,6 +254,7 @@ fun dialogMediaItem(
     title: String,
     prompt: String,
     optionCount: Int,
+    optionLabels: List<String> = emptyList(),
 ): MediaItem = MediaItem.Builder()
     .setUri(fileUri)
     .setMediaId(dialogId)
@@ -268,6 +270,10 @@ fun dialogMediaItem(
                 setExtras(android.os.Bundle().apply {
                     putInt(DialogMediaService.KEY_OPTION_COUNT, optionCount)
                     putString(DialogMediaService.KEY_DIALOG_ID, dialogId)
+                    putStringArrayList(
+                        DialogMediaService.KEY_OPTION_LABELS,
+                        ArrayList(optionLabels)
+                    )
                 })
             }
             .build()

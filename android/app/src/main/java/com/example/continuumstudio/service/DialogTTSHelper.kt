@@ -169,12 +169,13 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
             // instant. It returns false when unconfigured, failed, or exceeded
             // EASYVOICE_WAIT_MS - only then do we use Android TTS.
             if (audioPlayer.usesEasyVoice) {
-                val optionCount = countOptions(optionsJson)
+                val labels = optionLabels(optionsJson)
                 val ok = audioPlayer.speak(
                     text = text,
                     dialogId = title.hashCode().toString(),
                     title = title,
-                    optionCount = optionCount,
+                    optionCount = labels.size,
+                    optionLabels = labels,
                 )
                 if (ok) {
                     Log.d(TAG, "Speaking dialog via EasyVoice")
@@ -187,13 +188,16 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
         }
     }
 
-    /** Number of choices in a choice dialog, for the car UI's button row. */
-    private fun countOptions(optionsJson: String?): Int {
-        if (optionsJson.isNullOrBlank()) return 0
+    /** Choice labels for a choice dialog, used as car-screen rows. */
+    private fun optionLabels(optionsJson: String?): List<String> {
+        if (optionsJson.isNullOrBlank()) return emptyList()
         return try {
-            Json.parseToJsonElement(optionsJson).jsonArray.size
+            Json.parseToJsonElement(optionsJson).jsonArray.mapNotNull { el ->
+                val obj = el.jsonObject
+                (obj["label"] ?: obj["value"])?.jsonPrimitive?.content
+            }
         } catch (e: Exception) {
-            0
+            emptyList()
         }
     }
 
