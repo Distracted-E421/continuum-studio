@@ -37,6 +37,8 @@ camerax = "1.4.2"
 accompanist = "0.36.0"
 # Coil (async image loading)
 coil = "2.7.0"
+# Shizuku (ADB shell bridge for MultiSound / appops control without root)
+shizuku = "13.1.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -90,6 +92,9 @@ androidx-camera-view = { group = "androidx.camera", name = "camera-view", versio
 accompanist-permissions = { group = "com.google.accompanist", name = "accompanist-permissions", version.ref = "accompanist" }
 # Coil (async image loading)
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+# Shizuku
+shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
+shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

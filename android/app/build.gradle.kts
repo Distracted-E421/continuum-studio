@@ -41,8 +41,8 @@ android {
         targetSdk = 36
         // versionCode must match OtaUpdateManager.extractVersionCode(tag):
         // major*10000 + minor*100 + patch, or every check reports an "update".
-        versionCode = 11901
-        versionName = "1.19.1"
+        versionCode = 11903
+        versionName = "1.19.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -128,6 +128,11 @@ dependencies {
     
     // Coil (async image loading)
     implementation(libs.coil.compose)
+
+    // Shizuku - lets the app run commands with ADB shell (UID 2000) privileges,
+    // which is what makes MultiSound / appops control possible without root.
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

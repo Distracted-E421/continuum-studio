@@ -429,11 +429,12 @@ class MainActivity : ComponentActivity() {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route
                 
-                // List of screens for bottom nav
+                // Primary destinations only. The widget dashboard and control
+                // deck are still reachable by route but no longer occupy a slot:
+                // the app's job is dialogs, so Dialog leads and the nav stays at
+                // four items instead of six.
                 val bottomNavScreens = listOf(
-                    Screen.Dashboard,
                     Screen.Dialog,
-                    Screen.ControlSurface,
                     Screen.CLIAgents,
                     Screen.Activity,
                     Screen.Settings
@@ -533,7 +534,7 @@ class MainActivity : ComponentActivity() {
                         isModeLoading -> Screen.ModeSelector.route
                         !hasSelectedMode -> Screen.ModeSelector.route
                         currentMode == AppMode.COGNIX -> Screen.CognixHome.route
-                        else -> Screen.Dashboard.route
+                        else -> Screen.Dialog.route
                     }
                     
                     NavHost(
@@ -555,7 +556,7 @@ class MainActivity : ComponentActivity() {
                                     onModeSelected = { mode ->
                                         appModeViewModel.selectMode(mode)
                                         val destination = when (mode) {
-                                            AppMode.CONTINUUM -> Screen.Dashboard.route
+                                            AppMode.CONTINUUM -> Screen.Dialog.route
                                             AppMode.COGNIX -> Screen.CognixHome.route
                                         }
                                         navController.navigate(destination) {
@@ -591,7 +592,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onSwitchMode = {
                                     appModeViewModel.selectMode(AppMode.CONTINUUM)
-                                    navController.navigate(Screen.Dashboard.route) {
+                                    navController.navigate(Screen.Dialog.route) {
                                         popUpTo(Screen.CognixHome.route) { inclusive = true }
                                     }
                                 }

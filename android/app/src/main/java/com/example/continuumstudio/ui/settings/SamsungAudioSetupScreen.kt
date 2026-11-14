@@ -1,41 +1,78 @@
 package com.example.continuumstudio.ui.settings
 
-import android.content.Context
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.Settings
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.continuumstudio.audio.AudioFocusHelper
+import com.example.continuumstudio.audio.MultiSoundController
+import com.example.continuumstudio.audio.ShizukuBridge
+import kotlinx.coroutines.launch
 
+/**
+ * Multi-app audio setup and control.
+ *
+ * This is a working control panel, not a list of instructions. It drives
+ * MultiSound through Shizuku (ADB shell, UID 2000) - see MultiSoundController
+ * for what was verified to be possible without root, and what is not.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SamsungAudioSetupScreen(
-    onBack: () -> Unit
-) {
+fun SamsungAudioSetupScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val isSamsung = AudioFocusHelper.isSamsungDevice()
-    val hasSoundAssistant = AudioFocusHelper.isSoundAssistantInstalled(context)
-    
+    val scope = rememberCoroutineScope()
+    val controller = remember { MultiSoundController(context) }
+
+    val isSamsung = remember { controller.isSupportedDevice() }
+    val hasSoundAssistant = remember { controller.isSoundAssistantInstalled() }
+
+    var shizukuReady by remember { mutableStateOf(false) }
+    var multiAudio by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var suppressed by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // Shizuku permission prompt; result arrives via the Shizuku listener, so we
+    // simply re-check state when the user returns to the screen.
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+
+    suspend fun refresh() {
+        shizukuReady = controller.isReady()
+        if (shizukuReady) {
+            multiAudio = controller.isMultiAudioFocusEnabled()
+            val off = MultiSoundController.COMMON_MEDIA_APPS.mapNotNull { (pkg, _) ->
+                if (controller.isFocusStealingAllowed(pkg) == false) pkg else null
+            }.toSet()
+            suppressed = off
+        }
+    }
+
+    LaunchedEffect(Unit) { refresh() }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Samsung Audio Setup") },
+                title = { Text("Multi-App Audio") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
@@ -52,261 +89,225 @@ fun SamsungAudioSetupScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Device Detection Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isSamsung) 
-                        MaterialTheme.colorScheme.primaryContainer 
-                    else 
-                        MaterialTheme.colorScheme.errorContainer
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(
-                        if (isSamsung) Icons.Default.CheckCircle else Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = if (isSamsung) Color(0xFF4CAF50) else Color(0xFFFF9800)
-                    )
-                    Column {
-                        Text(
-                            if (isSamsung) "Samsung Galaxy Detected" else "Non-Samsung Device",
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            if (isSamsung) 
-                                "You can use Samsung's audio features" 
-                            else 
-                                "Some features may not be available",
-                            style = MaterialTheme.typography.bodySmall
-                        )
+            if (!isSamsung) {
+                Card(colors = CardDefaults.cardColors(MaterialTheme.colorScheme.errorContainer)) {
+                    Row(
+                        Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(Icons.Default.Warning, null, tint = Color(0xFFFF9800))
+                        Text("MultiSound is a Samsung One UI feature. This device does not have it.")
                     }
                 }
+                return@Column
             }
-            
-            if (isSamsung) {
-                // Sound Assistant Card
-                SetupStepCard(
-                    stepNumber = 1,
-                    title = "Sound Assistant",
-                    description = "Enable Multisound to allow Continuum to speak while music plays",
-                    isAvailable = hasSoundAssistant,
-                    availableText = "Installed",
-                    unavailableText = "Not installed - get from Galaxy Store",
-                    icon = Icons.Default.GraphicEq,
-                    onAction = if (hasSoundAssistant) {
-                        { openSoundAssistant(context) }
-                    } else {
-                        { openGalaxyStore(context, "com.samsung.android.soundassistant") }
-                    },
-                    actionText = if (hasSoundAssistant) "Open Sound Assistant" else "Get from Galaxy Store"
-                )
-                
-                // Instructions for Sound Assistant
-                if (hasSoundAssistant) {
-                    InstructionCard(
-                        title = "Enable Multisound",
-                        steps = listOf(
-                            "Open Sound Assistant",
-                            "Find 'Multisound' or 'Multi sound' toggle",
-                            "Enable it to allow multiple apps to play audio",
-                            "This lets Continuum TTS overlay your music"
-                        )
-                    )
-                }
-                
-                // Separate App Sound
-                SetupStepCard(
-                    stepNumber = 2,
-                    title = "Separate App Sound",
-                    description = "Route specific apps to different audio outputs (glasses, phone, Bluetooth)",
-                    isAvailable = true,
-                    availableText = "System feature",
-                    unavailableText = "",
-                    icon = Icons.Default.SettingsInputComponent,
-                    onAction = { openSoundSettings(context) },
-                    actionText = "Open Sound Settings"
-                )
-                
-                InstructionCard(
-                    title = "Configure Separate App Sound",
-                    steps = listOf(
-                        "Go to Settings → Sounds and vibration",
-                        "Tap 'Separate app sound'",
-                        "Turn it ON",
-                        "Add the apps you want to route:",
-                        "  • Continuum → Phone speaker (for TTS)",
-                        "  • Spotify → Bluetooth/Glasses",
-                        "  • YouTube → Bluetooth/Glasses"
-                    )
-                )
-                
-                // Notification Access
-                SetupStepCard(
-                    stepNumber = 3,
-                    title = "Notification Access",
-                    description = "Required to see Now Playing info from Spotify/YouTube",
-                    isAvailable = true,
-                    availableText = "Required permission",
-                    unavailableText = "",
-                    icon = Icons.Default.Notifications,
-                    onAction = { openNotificationAccessSettings(context) },
-                    actionText = "Grant Notification Access"
-                )
-            }
-            
-            // Tips Card
+
+            // --- Shizuku gate -------------------------------------------------
             Card(
-                modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    if (shizukuReady) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.errorContainer
                 )
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.Lightbulb, contentDescription = null)
-                        Text("Tips", fontWeight = FontWeight.Bold)
+                        Icon(
+                            if (shizukuReady) Icons.Default.CheckCircle else Icons.Default.Warning,
+                            null,
+                            tint = if (shizukuReady) Color(0xFF4CAF50) else Color(0xFFFF9800)
+                        )
+                        Text(
+                            if (shizukuReady) "Shizuku connected" else "Shizuku permission required",
+                            fontWeight = FontWeight.Bold
+                        )
                     }
-                    Text("• TTS will automatically duck (lower volume) other audio")
-                    Text("• Use Separate App Sound for precise routing to glasses")
-                    Text("• RayNeo 3 appears as a Bluetooth audio device")
-                    Text("• Android Auto integration routes audio automatically")
+                    Text(
+                        if (shizukuReady)
+                            "Controlling audio settings with ADB shell privileges (no root)."
+                        else
+                            "This screen changes system settings through Shizuku. " +
+                                "Open Shizuku and grant Continuum permission, then tap Recheck.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (!shizukuReady) {
+                            Button(onClick = {
+                                ShizukuBridge.requestPermission(SHIZUKU_REQUEST_CODE)
+                            }) { Text("Request permission") }
+                        }
+                        OutlinedButton(
+                            onClick = { scope.launch { busy = true; refresh(); busy = false } },
+                            enabled = !busy
+                        ) { Text("Recheck") }
+                    }
                 }
             }
-        }
-    }
-}
 
-@Composable
-private fun SetupStepCard(
-    stepNumber: Int,
-    title: String,
-    description: String,
-    isAvailable: Boolean,
-    availableText: String,
-    unavailableText: String,
-    icon: ImageVector,
-    onAction: () -> Unit,
-    actionText: String
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(
-                            MaterialTheme.colorScheme.primary,
-                            RoundedCornerShape(16.dp)
-                        ),
-                    contentAlignment = Alignment.Center
+            // --- MultiSound toggle -------------------------------------------
+            Card {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.GraphicEq, null)
+                        Text("Multi-app audio", fontWeight = FontWeight.Bold)
+                    }
                     Text(
-                        "$stepNumber",
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        fontWeight = FontWeight.Bold
+                        "Lets several apps play at once instead of each one pausing the last. " +
+                            "This is the setting that makes music survive a dialog.",
+                        style = MaterialTheme.typography.bodySmall
                     )
-                }
-                Icon(icon, contentDescription = null)
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(title, fontWeight = FontWeight.Bold)
-                    Text(
-                        if (isAvailable) availableText else unavailableText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (isAvailable) Color(0xFF4CAF50) else Color(0xFFFF9800)
+                    Switch(
+                        checked = multiAudio,
+                        enabled = shizukuReady && !busy,
+                        onCheckedChange = { want ->
+                            scope.launch {
+                                busy = true
+                                controller.setMultiAudioFocus(want)
+                                    .onSuccess {
+                                        multiAudio = want
+                                        status = if (want) "Multi-app audio on" else "Multi-app audio off"
+                                    }
+                                    .onFailure { status = it.message }
+                                busy = false
+                            }
+                        }
                     )
                 }
             }
-            Text(description, style = MaterialTheme.typography.bodyMedium)
+
+            // --- Focus stealing ----------------------------------------------
+            Card {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Stop apps taking over audio", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Android Auto re-checks audio focus on every route change, so an app " +
+                            "that grabs focus will interrupt playback regardless of the setting above. " +
+                            "Suppressing focus here is the fix that survives the car.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    MultiSoundController.COMMON_MEDIA_APPS.forEach { (pkg, label) ->
+                        val isSuppressed = pkg in suppressed
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                            Switch(
+                                checked = isSuppressed,
+                                enabled = shizukuReady && !busy,
+                                onCheckedChange = { wantSuppress ->
+                                    scope.launch {
+                                        busy = true
+                                        controller.setFocusStealingAllowed(pkg, allowed = !wantSuppress)
+                                            .onSuccess {
+                                                suppressed = if (wantSuppress) suppressed + pkg
+                                                else suppressed - pkg
+                                            }
+                                            .onFailure { status = it.message }
+                                        busy = false
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
             Button(
-                onClick = onAction,
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        val pkgs = MultiSoundController.COMMON_MEDIA_APPS.map { it.first }
+                        controller.applyCarProfile(pkgs)
+                            .onSuccess {
+                                status = "Car profile applied ($it settings)"
+                                refresh()
+                            }
+                            .onFailure { status = it.message }
+                        busy = false
+                    }
+                },
+                enabled = shizukuReady && !busy,
                 modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(actionText)
-            }
-        }
-    }
-}
+            ) { Text("Apply car profile") }
 
-@Composable
-private fun InstructionCard(
-    title: String,
-    steps: List<String>
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(title, fontWeight = FontWeight.Bold)
-            steps.forEachIndexed { index, step ->
-                if (step.startsWith("  •")) {
-                    Text(step, style = MaterialTheme.typography.bodySmall)
-                } else {
-                    Text("${index + 1}. $step", style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        controller.clearFocusOverrides(
+                            MultiSoundController.COMMON_MEDIA_APPS.map { it.first }
+                        )
+                        status = "Focus overrides cleared"
+                        refresh()
+                        busy = false
+                    }
+                },
+                enabled = shizukuReady && !busy,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Clear focus overrides") }
+
+            status?.let {
+                Card(colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceVariant)) {
+                    Text(it, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
                 }
             }
+
+            // --- Honest limitation note --------------------------------------
+            Text(
+                "Per-app volume levels are held in memory by the system and cannot be " +
+                    "changed without root, so they still need Sound Assistant itself. " +
+                    "Everything above works without root.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (hasSoundAssistant) {
+                OutlinedButton(
+                    onClick = { openSoundAssistant(context) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Open Sound Assistant") }
+            }
+            OutlinedButton(
+                onClick = { openSoundSettings(context) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Open system sound settings") }
         }
     }
 }
 
-private fun openSoundAssistant(context: Context) {
+private const val SHIZUKU_REQUEST_CODE = 4242
+
+private fun openSoundAssistant(context: android.content.Context) {
     try {
-        val intent = context.packageManager.getLaunchIntentForPackage("com.samsung.android.soundassistant")
-        if (intent != null) {
-            context.startActivity(intent)
-        }
+        context.packageManager
+            .getLaunchIntentForPackage(MultiSoundController.SOUND_ASSISTANT_PKG)
+            ?.let { context.startActivity(it) }
+            ?: openSoundSettings(context)
     } catch (e: Exception) {
-        // Fallback to sound settings
         openSoundSettings(context)
     }
 }
 
-private fun openGalaxyStore(context: Context, packageName: String) {
-    try {
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            data = android.net.Uri.parse("samsungapps://ProductDetail/$packageName")
-        }
-        context.startActivity(intent)
-    } catch (e: Exception) {
-        // Fallback to web
-    }
-}
-
-private fun openSoundSettings(context: Context) {
+private fun openSoundSettings(context: android.content.Context) {
     try {
         context.startActivity(Intent(Settings.ACTION_SOUND_SETTINGS))
-    } catch (e: Exception) {
-        context.startActivity(Intent(Settings.ACTION_SETTINGS))
-    }
-}
-
-private fun openNotificationAccessSettings(context: Context) {
-    try {
-        context.startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
     } catch (e: Exception) {
         context.startActivity(Intent(Settings.ACTION_SETTINGS))
     }
