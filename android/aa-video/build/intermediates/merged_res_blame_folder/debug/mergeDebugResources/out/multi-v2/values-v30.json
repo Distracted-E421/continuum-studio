@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.datapunk.aa.video.aa-video-mergeDebugResources-31:/values-v30/values-v30.xml",
+            "map": [
+                {
+                    "source": "/home/e421/.gradle/caches/9.9.1/transforms/75d192e55661e5490704bc220b5bd5d5/transformed/material3/res/values-v30/values-v30.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "72",
+                        "endOffsets": "123"
+                    }
+                }
+            ]
+        }
+    ]
+}

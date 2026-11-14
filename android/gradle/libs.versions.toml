@@ -41,6 +41,8 @@ coil = "2.7.0"
 shizuku = "13.1.5"
 # Media3 - MediaSession/MediaLibraryService so Android Auto keeps our audio route
 media3 = "1.11.1"
+# Car App Library - templates and (via NAVIGATION) raw Surface for video
+carApp = "1.7.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -101,6 +103,8 @@ shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref
 media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
+# Car App Library
+car-app = { group = "androidx.car.app", name = "app", version.ref = "carApp" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

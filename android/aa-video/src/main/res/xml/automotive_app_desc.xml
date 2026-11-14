@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<automotiveApp>
+    <!-- Templated car app. `template` is what makes Android Auto bind our
+         CarAppService; the NAVIGATION category on the service is what grants
+         access to the Surface we draw video into. -->
+    <uses name="template" />
+</automotiveApp>

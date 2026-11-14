@@ -1,0 +1,4 @@
+com.datapunk.aa.video
+string app_name
+style Theme_AaVideo
+xml automotive_app_desc
