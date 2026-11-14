@@ -1,0 +1,170 @@
+package com.example.continuumstudio.ui.settings
+
+import android.content.Context
+import android.media.AudioManager
+import android.media.MediaCodecList
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.example.continuumstudio.audio.MultiSoundController
+import com.example.continuumstudio.audio.ShizukuBridge
+import com.example.continuumstudio.service.tts.MediaSessionBridge
+import kotlinx.coroutines.launch
+
+/**
+ * On-device audio diagnostics.
+ *
+ * The Android Auto audio-route problem is invisible from the phone, so this
+ * screen surfaces the facts that determine whether the car keeps our audio:
+ * whether the MediaSession is connected, what the audio manager thinks the
+ * active output is, and whether MultiSound is engaged.
+ *
+ * Read-only by design - it changes nothing, so it is safe to open while driving
+ * (passenger) or debugging.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AudioDiagnosticsScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val controller = remember { MultiSoundController(context) }
+
+    var lines by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+
+    suspend fun collect() {
+        val out = mutableListOf<Pair<String, String>>()
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        out += "MediaSession" to runCatching {
+            // Reflect the bridge state without exposing internals.
+            if (MediaSessionBridge.toString().isNotEmpty()) "see logcat tag MediaSessionBridge" else "?"
+        }.getOrDefault("?")
+
+        out += "Shizuku available" to runCatching { ShizukuBridge.isAvailable() }.getOrDefault(false).toString()
+
+        out += "MultiSound" to runCatching {
+            if (controller.isReady()) controller.isMultiAudioFocusEnabled().toString() else "unknown (Shizuku)"
+        }.getOrDefault("unknown")
+
+        out += "Media volume" to "${am.getStreamVolume(AudioManager.STREAM_MUSIC)} / ${am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)}"
+
+        out += "Mode" to when (am.mode) {
+            AudioManager.MODE_NORMAL -> "NORMAL"
+            AudioManager.MODE_IN_CALL -> "IN_CALL"
+            AudioManager.MODE_RINGTONE -> "RINGTONE"
+            AudioManager.MODE_IN_COMMUNICATION -> "IN_COMMUNICATION"
+            else -> am.mode.toString()
+        }
+
+        out += "Music active" to am.isMusicActive.toString()
+
+        out += "Speaker on" to am.isSpeakerphoneOn.toString()
+
+        val devices = runCatching {
+            am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .joinToString(", ") { d ->
+                    when (d.type) {
+                        android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "speaker"
+                        android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "wired"
+                        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "bt-a2dp"
+                        android.media.AudioDeviceInfo.TYPE_USB_HEADSET -> "usb"
+                        android.media.AudioDeviceInfo.TYPE_USB_DEVICE -> "usb-dev"
+                        else -> "t${d.type}"
+                    }
+                }
+        }.getOrDefault("none")
+        out += "Outputs" to devices
+
+        out += "AA connected" to (
+            context.getSystemService(android.app.UiModeManager::class.java)
+                ?.currentModeType
+                ?.toString() ?: "?"
+            )
+
+        val hasAssistantDucking = runCatching {
+            am.requestAudioFocus(
+                null,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+            ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        }.getOrDefault(false)
+        out += "Focus grantable" to hasAssistantDucking.toString()
+
+        lines = out
+    }
+
+    LaunchedEffect(Unit) { collect() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Audio Diagnostics") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { scope.launch { collect() } }) {
+                        Icon(Icons.Default.Refresh, "Refresh")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                "Use this when audio misbehaves in the car. It reports what the phone " +
+                    "believes about audio routing and the media session.",
+                style = MaterialTheme.typography.bodySmall
+            )
+
+            lines.forEach { (label, value) ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        value,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.weight(1.4f)
+                    )
+                }
+                HorizontalDivider()
+            }
+
+            Text(
+                "Full session detail is in logcat under tags MediaSessionBridge and " +
+                    "DialogMediaService.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}

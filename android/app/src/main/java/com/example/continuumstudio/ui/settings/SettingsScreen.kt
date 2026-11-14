@@ -66,6 +66,7 @@ fun SettingsScreen(
     // "Activity Feed TTS" sections; the Voice section below supersedes them.
     
     var showSamsungAudioSetup by remember { mutableStateOf(false) }
+    var showAudioDiagnostics by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         viewModel.loadSettings()
     }
@@ -81,6 +82,10 @@ fun SettingsScreen(
     
     if (showSamsungAudioSetup) {
         SamsungAudioSetupScreen(onBack = { showSamsungAudioSetup = false })
+        return
+    }
+    if (showAudioDiagnostics) {
+        AudioDiagnosticsScreen(onBack = { showAudioDiagnostics = false })
         return
     }
 
@@ -253,6 +258,14 @@ fun SettingsScreen(
                     label = "Multi-app audio",
                     description = "Control MultiSound and per-app audio focus (needs Shizuku)",
                     onClick = { showSamsungAudioSetup = true }
+                )
+            }
+
+            item {
+                SettingsNavigationItem(
+                    label = "Audio diagnostics",
+                    description = "Inspect media session and routing when car audio misbehaves",
+                    onClick = { showAudioDiagnostics = true }
                 )
             }            
             item {

@@ -27,6 +27,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Required on Android 14+ for any service declaring
+         foregroundServiceType="mediaPlayback". Without it the media session
+         service fails to start, the session dies, and Android Auto drops the
+         audio route back to the car's own tuner. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <!-- Camera and gallery permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -166,12 +171,15 @@
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <!-- Owns a MediaSession so Android Auto keeps the audio route alive.
-             Without this the car drops back to its own radio. -->
+             Without this the car drops back to its own radio.
+             MediaLibraryService (browsable) + the mediaroute/AUTO action are
+             what make AA treat this as a media source at all. -->
         <service
             android:name=".service.DialogMediaService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="androidx.media3.session.MediaSessionService" />
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>

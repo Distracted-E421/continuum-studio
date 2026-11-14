@@ -57,12 +57,14 @@ object MediaSessionBridge {
                 prompt = prompt,
                 optionCount = optionCount,
             )
+            logState("before-set")
             c.setMediaItem(item)
             c.prepare()
             c.play()
+            logState("after-play")
             true
         } catch (e: Exception) {
-            Log.w(TAG, "play failed: ${e.message}")
+            Log.e(TAG, "play failed: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
     }
@@ -88,17 +90,35 @@ object MediaSessionBridge {
         future.addListener({
             try {
                 controller = future.get()
-                Log.d(TAG, "connected to DialogMediaService")
+                Log.i(TAG, "CONNECTED to DialogMediaService")
                 onReady(true)
             } catch (e: Exception) {
                 // Service not registered or app in a bad state; caller falls back.
-                Log.w(TAG, "controller connect failed: ${e.message}")
+                Log.e(TAG, "CONTROLLER CONNECT FAILED: ${e.javaClass.simpleName}: ${e.message}")
                 controller = null
                 onReady(false)
             } finally {
                 connecting = null
             }
         }, MoreExecutors.directExecutor())
+    }
+
+    /**
+     * Log the live session state. Called around playback so the car-side
+     * behaviour can be correlated with what the app actually did.
+     */
+    fun logState(stage: String) {
+        val c = controller
+        if (c == null) {
+            Log.i(TAG, "[$stage] controller=null (session not connected)")
+            return
+        }
+        Log.i(
+            TAG,
+            "[$stage] connected=${c.isConnected} playing=${c.isPlaying} " +
+                "playWhenReady=${c.playWhenReady} items=${c.mediaItemCount} " +
+                "state=${c.playbackState}"
+        )
     }
 
     fun release() {

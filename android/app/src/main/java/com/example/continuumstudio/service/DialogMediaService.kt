@@ -6,44 +6,52 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
-import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 
 /**
- * MediaSessionService that keeps Continuum's dialog audio on the Android Auto
- * audio channel.
+ * Browsable media service that keeps Continuum's dialog audio on the Android
+ * Auto audio channel.
  *
- * Why this exists: the app previously only *read* other apps' MediaSessions
- * (NowPlayingService) and never owned one. On Android Auto, the head unit
- * arbitrates audio through media sessions - with no session of ours, the
- * projection host sees nothing holding the channel, tears the route down, and
- * the car falls back to its own radio. That is the "radio static" symptom.
+ * Two things had to be true for Android Auto to keep the route alive, and the
+ * app previously had neither:
  *
- * With this service the app is a first-class media app. Dialog speech becomes a
- * MediaItem played by ExoPlayer, so:
- *   - Android Auto keeps the USB/Bluetooth audio route alive
- *   - play/pause/seek on the car screen and steering wheel work natively
- *   - MultiSound has something legitimate to mix against
+ *  1. **Own a MediaSession.** The app only read other apps' sessions
+ *     (NowPlayingService). AA arbitrates the head unit's audio channel through
+ *     sessions, so with none of ours it saw nothing holding the route, tore it
+ *     down, and the car reverted to its own tuner - the "radio static" symptom.
  *
- * Dialogs are exposed as MediaItems whose title/artist carry the prompt text,
- * so the car's now-playing view can render the question without a template app.
+ *  2. **Be browsable.** AA lists media apps via MediaLibraryService and
+ *     onGetLibraryRoot. A bare MediaSessionService is not enough to appear as a
+ *     media source.
+ *
+ * Additionally the service must be able to run as a foreground service with
+ * type mediaPlayback, which requires FOREGROUND_SERVICE_MEDIA_PLAYBACK on
+ * Android 14+. Without that permission the service fails to start and the
+ * session dies immediately, which looks exactly like "audio gets forced off".
  */
-class DialogMediaService : MediaSessionService() {
+class DialogMediaService : MediaLibraryService() {
 
     companion object {
         const val TAG = "DialogMediaService"
-
-        /** Session id used by MediaController clients to find us. */
         const val SESSION_ID = "continuum-dialog"
 
-        /** Metadata keys used to carry dialog structure through to the car. */
+        /** Root node id for the browsable tree. */
+        const val ROOT_ID = "continuum_root"
+
+        /** Node holding pending dialogs. */
+        const val DIALOGS_ID = "continuum_dialogs"
+
         const val KEY_DIALOG_ID = "dialog_id"
         const val KEY_OPTION_COUNT = "option_count"
     }
 
-    private var mediaSession: MediaSession? = null
+    private var mediaSession: MediaLibrarySession? = null
     private lateinit var player: ExoPlayer
 
     override fun onCreate() {
@@ -67,32 +75,87 @@ class DialogMediaService : MediaSessionService() {
             )
         }
 
-        mediaSession = MediaSession.Builder(this, player)
+        val callback = object : MediaLibrarySession.Callback {
+
+            override fun onAddMediaItems(
+                mediaSession: MediaSession,
+                controller: MediaSession.ControllerInfo,
+                mediaItems: MutableList<MediaItem>
+            ): ListenableFuture<MutableList<MediaItem>> =
+                // Items already carry a local file URI set by the app.
+                Futures.immediateFuture(mediaItems)
+
+            override fun onGetLibraryRoot(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                params: LibraryParams?
+            ): ListenableFuture<LibraryResult<MediaItem>> =
+                Futures.immediateFuture(
+                    LibraryResult.ofItem(
+                        MediaItem.Builder()
+                            .setMediaId(ROOT_ID)
+                            .setMediaMetadata(
+                                MediaMetadata.Builder()
+                                    .setTitle("Continuum")
+                                    .setIsBrowsable(true)
+                                    .setIsPlayable(false)
+                                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                                    .build()
+                            )
+                            .build(),
+                        params
+                    )
+                )
+
+            override fun onGetChildren(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                parentId: String,
+                page: Int,
+                pageSize: Int,
+                params: LibraryParams?
+            ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+                // Dialog content is pushed on demand rather than enumerated; an
+                // empty child list still makes the app a valid media source.
+                val children = if (parentId == ROOT_ID) {
+                    ImmutableList.of(
+                        MediaItem.Builder()
+                            .setMediaId(DIALOGS_ID)
+                            .setMediaMetadata(
+                                MediaMetadata.Builder()
+                                    .setTitle("Dialogs")
+                                    .setIsBrowsable(true)
+                                    .setIsPlayable(false)
+                                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                                    .build()
+                            )
+                            .build()
+                    )
+                } else {
+                    ImmutableList.of()
+                }
+                return Futures.immediateFuture(LibraryResult.ofItemList(children, params))
+            }
+
+            override fun onSubscribe(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                parentId: String,
+                params: LibraryParams?
+            ): ListenableFuture<LibraryResult<Void>> =
+                Futures.immediateFuture(LibraryResult.ofVoid())
+        }
+
+        mediaSession = MediaLibrarySession.Builder(this, player, callback)
             .setId(SESSION_ID)
             .apply { sessionActivity?.let { setSessionActivity(it) } }
-            .setCallback(object : MediaSession.Callback {
-                override fun onAddMediaItems(
-                    mediaSession: MediaSession,
-                    controller: MediaSession.ControllerInfo,
-                    mediaItems: MutableList<MediaItem>
-                ): com.google.common.util.concurrent.ListenableFuture<MutableList<MediaItem>> {
-                    // Items arrive carrying a local file URI set by the app when
-                    // it enqueues speech; nothing to resolve here, so pass them
-                    // through unchanged.
-                    return com.google.common.util.concurrent.Futures.immediateFuture(mediaItems)
-                }
-            })
             .build()
     }
 
     override fun onGetSession(
         controllerInfo: MediaSession.ControllerInfo
-    ): MediaSession? = mediaSession
+    ): MediaLibrarySession? = mediaSession
 
-    /**
-     * Drop the session when the user swipes the app away, but keep it alive
-     * while playing so Android Auto does not lose the route mid-dialog.
-     */
     override fun onTaskRemoved(rootIntent: Intent?) {
         val p = mediaSession?.player
         if (p == null || !p.playWhenReady || p.mediaItemCount == 0) {
