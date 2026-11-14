@@ -78,6 +78,7 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
         // Connect the media session up front so dialog audio plays through it.
         // Holding a MediaSession is what keeps Android Auto from dropping back
         // to the car's own radio.
+        DialogMediaService.start(context)
         MediaSessionBridge.connect(context) { ok ->
             audioPlayer.preferMediaSession = ok
             Log.i(TAG, "media session connected=$ok")

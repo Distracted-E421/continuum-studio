@@ -211,6 +211,10 @@ class DialogAudioPlayer(private val context: Context) {
     fun stop() {
         playbackJob?.cancel()
         playbackJob = null
+        // Only tear down the local MediaPlayer. When playback is going through
+        // the MediaSession the clip is owned by the service, and releasing it
+        // here would drop the session - which is what made Android Auto revert
+        // to the car's own radio the moment a dialog finished speaking.
         player?.runCatching {
             if (isPlaying) stop()
             release()

@@ -2,6 +2,7 @@ package com.example.continuumstudio.service
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -49,6 +50,50 @@ class DialogMediaService : MediaLibraryService() {
 
         const val KEY_DIALOG_ID = "dialog_id"
         const val KEY_OPTION_COUNT = "option_count"
+
+        /** Foreground notification id. */
+        const val FOREGROUND_ID = 7301
+        const val CHANNEL_ID = "continuum_media"
+
+        /** Start the media service. Safe to call repeatedly. */
+        fun start(context: android.content.Context) {
+            val intent = Intent(context, DialogMediaService::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+    }
+
+    /** Low-importance notification required by foreground service rules. */
+    private fun buildForegroundNotification(): android.app.Notification {
+        val nm = getSystemService(android.app.NotificationManager::class.java)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                CHANNEL_ID,
+                "Dialog audio",
+                android.app.NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps dialog audio available to Android Auto"
+                setShowBadge(false)
+            }
+            nm.createNotificationChannel(channel)
+        }
+        val open = packageManager.getLaunchIntentForPackage(packageName)?.let {
+            PendingIntent.getActivity(
+                this, 0, it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+        return androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Continuum")
+            .setContentText("Dialog audio ready")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setOngoing(true)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
+            .apply { open?.let { setContentIntent(it) } }
+            .build()
     }
 
     private var mediaSession: MediaLibrarySession? = null
@@ -56,6 +101,11 @@ class DialogMediaService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Stay alive as a foreground service so Android Auto always sees a
+        // media source. A session that only exists while speaking is exactly
+        // what caused the car to revert to its tuner between dialogs.
+        startForeground(FOREGROUND_ID, buildForegroundNotification())
 
         player = ExoPlayer.Builder(this)
             .setAudioAttributes(
@@ -157,10 +207,17 @@ class DialogMediaService : MediaLibraryService() {
     ): MediaLibrarySession? = mediaSession
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val p = mediaSession?.player
-        if (p == null || !p.playWhenReady || p.mediaItemCount == 0) {
-            stopSelf()
-        }
+        // Deliberately does NOT stop the service.
+        //
+        // Stopping when idle was the cause of the remaining car-audio failure:
+        // the session would die the instant a dialog finished speaking, Android
+        // Auto would see the media source disappear, and the head unit would
+        // revert to its own tuner - which reads as "audio only works while it
+        // is talking". A media app must stay resident so AA keeps the route.
+        //
+        // The session is released in onDestroy when the service is genuinely
+        // torn down (by the system or explicitly), not on task removal.
+        Log.i(TAG, "task removed; keeping session alive so AA retains the audio route")
     }
 
     override fun onDestroy() {
