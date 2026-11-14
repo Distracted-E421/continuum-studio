@@ -39,6 +39,7 @@ import java.util.Locale
 import java.util.UUID
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.example.continuumstudio.service.DialogTTSHelper
 
 // DataStore extension
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -57,8 +58,14 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     private val networkMonitor = NetworkMonitor(application)
     
     // TTS engine
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
+    //
+    // This ViewModel used to own its own bare TextToSpeech, which meant dialog
+    // audio could take a completely different path (no EasyVoice, no media
+    // session, no car routing) depending on which surface triggered it.
+    // DialogTTSHelper is now the single pipeline: EasyVoice -> media session ->
+    // Android TTS fallback.
+    private val ttsHelper = DialogTTSHelper(application)
+    private var ttsReady = true
     private var lastSpokenDialogId: String? = null
     
     private val _ttsState = MutableStateFlow(TtsState())
@@ -327,46 +334,16 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     }
     
     /**
-     * Initialize the TTS engine
+     * TTS engine initialisation now lives in DialogTTSHelper.
+     *
+     * Keeping a second TextToSpeech here meant dialog audio could bypass
+     * EasyVoice and the media session entirely, which is why behaviour differed
+     * between surfaces. This is intentionally a no-op kept for the call site.
      */
     private fun initTts() {
-        tts = TextToSpeech(getApplication()) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.let { engine ->
-                    val result = engine.setLanguage(Locale.US)
-                    if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        android.util.Log.w("DialogViewModel", "TTS language not supported")
-                    } else {
-                        ttsReady = true
-                        _ttsState.value = _ttsState.value.copy(isReady = true)
-                        
-                        // Set speech rate
-                        engine.setSpeechRate(_ttsSpeed.value)
-                        
-                        // Set utterance progress listener
-                        engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                            override fun onStart(utteranceId: String?) {
-                                _ttsState.value = _ttsState.value.copy(isSpeaking = true)
-                            }
-                            override fun onDone(utteranceId: String?) {
-                                _ttsState.value = _ttsState.value.copy(isSpeaking = false)
-                            }
-                            @Deprecated("Deprecated in Java")
-                            override fun onError(utteranceId: String?) {
-                                _ttsState.value = _ttsState.value.copy(isSpeaking = false)
-                            }
-                            override fun onError(utteranceId: String?, errorCode: Int) {
-                                _ttsState.value = _ttsState.value.copy(isSpeaking = false)
-                            }
-                        })
-                    }
-                }
-            } else {
-                android.util.Log.e("DialogViewModel", "TTS initialization failed: $status")
-            }
-        }
+        _ttsState.value = _ttsState.value.copy(isReady = true)
     }
-    
+
     /**
      * Clean text for TTS (remove markdown, code blocks, etc.)
      */
@@ -388,54 +365,55 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     }
     
     /**
-     * Speak text using TTS
+     * Speak text using TTS.
+     *
+     * Routed through DialogTTSHelper so this path gets EasyVoice audio and the
+     * media session (and therefore Android Auto routing) rather than a bare
+     * on-device voice.
      */
     fun speak(text: String) {
-        if (!ttsReady || !_ttsEnabled.value) return
-        
+        if (!_ttsEnabled.value) return
         val cleanText = cleanTextForTts(text)
         if (cleanText.isBlank()) return
-        
-        tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString())
+        ttsHelper.speakDialog(
+            title = "",
+            prompt = cleanText,
+            dialogType = "text",
+            optionsJson = null,
+            priority = "normal",
+        )
     }
-    
+
     /**
-     * Speak a dialog's content
+     * Speak a dialog's content, with the same audio path as the notification
+     * service so in-app and car playback sound and behave identically.
      */
     fun speakDialog(dialog: DialogDetails) {
-        if (!ttsReady || !_ttsEnabled.value) return
-        
-        val parts = mutableListOf<String>()
-        
-        // Add title if present and not blank
-        if (dialog.title.isNotBlank()) {
-            parts.add(cleanTextForTts(dialog.title))
-        }
-        
-        // Add prompt
-        parts.add(cleanTextForTts(dialog.prompt))
-        
-        // Add options for choice dialogs
-        if (dialog.dialogType.type == "choice") {
-            dialog.dialogType.options?.let { options ->
-                parts.add("Options are:")
-                options.forEachIndexed { index, option ->
-                    parts.add("${index + 1}. ${cleanTextForTts(option.label)}")
-                }
+        if (!_ttsEnabled.value) return
+
+        val optionsJson = dialog.dialogType.options?.let { options ->
+            options.joinToString(",", "[", "]") { o ->
+                org.json.JSONObject()
+                    .put("value", o.value)
+                    .put("label", o.label)
+                    .toString()
             }
         }
-        
-        val fullText = parts.joinToString(". ")
-        if (fullText.isNotBlank()) {
-            tts?.speak(fullText, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString())
-        }
+
+        ttsHelper.speakDialog(
+            title = dialog.title,
+            prompt = dialog.prompt,
+            dialogType = dialog.dialogType.type,
+            optionsJson = optionsJson,
+            priority = "normal",
+        )
     }
-    
+
     /**
      * Stop TTS playback
      */
     fun stopSpeaking() {
-        tts?.stop()
+        ttsHelper.stop()
         _ttsState.value = _ttsState.value.copy(isSpeaking = false)
     }
     
@@ -472,7 +450,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     fun setTtsSpeed(speed: Float) {
         val clampedSpeed = speed.coerceIn(0.5f, 2.0f)
         _ttsSpeed.value = clampedSpeed
-        tts?.setSpeechRate(clampedSpeed)
+        ttsHelper.speechRate = clampedSpeed
         viewModelScope.launch {
             dataStore.edit { prefs ->
                 prefs[PrefsKeys.TTS_SPEED] = clampedSpeed
@@ -1154,9 +1132,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
-        tts?.stop()
-        tts?.shutdown()
-        tts = null
+        ttsHelper.shutdown()
         wsClient.disconnect()
     }
 }

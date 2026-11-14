@@ -59,7 +59,7 @@ import com.example.continuumstudio.ui.widgets.*
  * Tab options for main navigation
  */
 private enum class MainTab {
-    DIALOG, HISTORY, SETTINGS
+    DIALOG, HISTORY
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -199,20 +199,8 @@ fun DialogScreen(
                         IconButton(onClick = onRefresh) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                         }
-                        // Settings
-                        IconButton(onClick = { 
-                            // Toggle to Settings tab
-                            selectedTab = if (selectedTab == MainTab.SETTINGS) MainTab.DIALOG else MainTab.SETTINGS
-                        }) {
-                            Icon(
-                                Icons.Default.Settings, 
-                                contentDescription = "Settings",
-                                tint = if (selectedTab == MainTab.SETTINGS) 
-                                    MaterialTheme.colorScheme.primary 
-                                else 
-                                    MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                        // Settings live in the app's own Settings tab; there is
+                        // deliberately no second settings surface here.
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer
@@ -249,7 +237,9 @@ fun DialogScreen(
                     }
                 }
                 
-                // Tab bar - always visible, but only Dialog/History require connection
+                // Tab bar - Dialog is the primary surface, History is secondary.
+                // Settings moved to the app-level Settings tab (it was
+                // duplicated here, costing ~630 lines of UI in this file).
                 TabRow(
                     selectedTabIndex = selectedTab.ordinal,
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -268,12 +258,6 @@ fun DialogScreen(
                             },
                             text = { Text("History") },
                             icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                        )
-                        Tab(
-                            selected = selectedTab == MainTab.SETTINGS,
-                            onClick = { selectedTab = MainTab.SETTINGS },
-                            text = { Text("Settings") },
-                            icon = { Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp)) }
                         )
                     }
             }
@@ -300,42 +284,9 @@ fun DialogScreen(
                 )
             }
 
-            // Main content - Settings tab is always accessible
+            // Main content. Settings lives in the app-level Settings tab; this
+            // screen only owns the dialog itself and its history.
             when (selectedTab) {
-                MainTab.SETTINGS -> {
-                    SettingsView(
-                        serverUrl = serverUrlInput,
-                        onServerUrlChange = { serverUrlInput = it },
-                        onConnect = { onConnect(serverUrlInput) },
-                        onDisconnect = onDisconnect,
-                        isConnected = connectionState.isConnected,
-                        autoReconnect = autoReconnect,
-                        notificationsEnabled = notificationsEnabled,
-                        vibrationEnabled = vibrationEnabled,
-                        onAutoReconnectChange = onAutoReconnectChange,
-                        onNotificationsEnabledChange = onNotificationsEnabledChange,
-                        onVibrationEnabledChange = onVibrationEnabledChange,
-                        cfAccessClientId = cfAccessClientId,
-                        cfAccessClientSecret = cfAccessClientSecret,
-                        onCfAccessClientIdChange = onCfAccessClientIdChange,
-                        onCfAccessClientSecretChange = onCfAccessClientSecretChange,
-                        onTestNotification = onTestNotification,
-                        endpoints = endpoints,
-                        activeEndpointIndex = activeEndpointIndex,
-                        endpointFallbackEnabled = endpointFallbackEnabled,
-                        endpointStatus = endpointStatus,
-                        onAddEndpoint = onAddEndpoint,
-                        onRemoveEndpoint = onRemoveEndpoint,
-                        onToggleEndpoint = onToggleEndpoint,
-                        onSetActiveEndpoint = onSetActiveEndpoint,
-                        onSetEndpointFallbackEnabled = onSetEndpointFallbackEnabled,
-                        onTestEndpoint = onTestEndpoint,
-                        onTestAllEndpoints = onTestAllEndpoints,
-                        useCoordinatorV2 = useCoordinatorV2,
-                        onUseCoordinatorV2Change = onUseCoordinatorV2Change,
-                        coordinatorSurfaceId = coordinatorSurfaceId,
-                    )
-                }
                 else -> {
                     if (connectionState.isConnected) {
                         when (selectedTab) {
@@ -426,7 +377,6 @@ fun DialogScreen(
                                     onCopy = onCopyToClipboard,
                                 )
                             }
-                            MainTab.SETTINGS -> { /* Handled above */ }
                         }
                     } else if (!connectionState.isConnecting) {
                         // Not connected prompt

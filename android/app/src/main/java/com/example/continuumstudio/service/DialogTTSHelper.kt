@@ -56,12 +56,18 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
     private val _isSpeaking = MutableStateFlow(false)
     val isSpeaking: StateFlow<Boolean> = _isSpeaking
 
-    /** Playback progress for the audio indicator/scrubber. Null when idle. */
     val playback: StateFlow<PlaybackState?> get() = audioPlayer.playback
 
-    fun seekTo(fraction: Float) = audioPlayer.seekTo(fraction)
+    /** Seek to a fraction (0f..1f) of the current clip. */
+    fun seekAudio(fraction: Float) = audioPlayer.seekTo(fraction)
+
+    /** Pause the current clip without dropping the media session. */
     fun pauseAudio() = audioPlayer.pause()
+
+    /** Resume the current clip. */
     fun resumeAudio() = audioPlayer.resume()
+
+    /** Snapshot of live position/duration, for the UI to poll while visible. */
     fun currentPlayback(): PlaybackState? = audioPlayer.currentPlayback()
     
     // Queue of utterances to speak
