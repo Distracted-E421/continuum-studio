@@ -14,7 +14,9 @@ android {
         applicationId = "com.example.continuumstudio"
         minSdk = 34
         targetSdk = 36
-        versionCode = 26
+        // versionCode must match OtaUpdateManager.extractVersionCode(tag):
+        // major*10000 + minor*100 + patch, or every check reports an "update".
+        versionCode = 11900
         versionName = "1.19.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
