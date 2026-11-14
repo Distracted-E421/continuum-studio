@@ -8,6 +8,7 @@ import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import com.example.continuumstudio.service.tts.DialogAudioPlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,7 +36,14 @@ import java.util.UUID
 class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListener {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    
+
+    /**
+     * Plays EasyVoice (Kokoro) audio when available. Android's built-in
+     * TextToSpeech remains as the fallback for when EasyVoice is unconfigured,
+     * fails, or does not deliver within DialogAudioPlayer.EASYVOICE_WAIT_MS.
+     */
+    private val audioPlayer = DialogAudioPlayer(context)
+
     private var tts: TextToSpeech? = null
     private var isInitialized = false
     
@@ -130,48 +138,73 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
         optionsJson: String? = null,
         priority: String = "normal"
     ) {
-        if (!ttsEnabled || !isInitialized) {
-            Log.d(TAG, "TTS disabled or not initialized")
+        if (!ttsEnabled) {
+            Log.d(TAG, "TTS disabled")
             return
         }
 
         scope.launch(Dispatchers.Main) {
-            // Clear any pending utterances for a new dialog
             stop()
-            utteranceQueue.clear()
+            val text = buildDialogUtterance(title, prompt, dialogType, optionsJson, priority)
 
-            // Build utterance text
-            val cleanTitle = cleanTextForSpeech(title)
-            val cleanPrompt = cleanTextForSpeech(prompt)
-
-            // Priority announcement for critical/high
-            if (priority.lowercase() in listOf("critical", "high")) {
-                utteranceQueue.add("Important dialog from Synapsix.")
+            // EasyVoice is the preferred path: better voice, and cached audio is
+            // instant. It returns false when unconfigured, failed, or exceeded
+            // EASYVOICE_WAIT_MS - only then do we use Android TTS.
+            if (audioPlayer.usesEasyVoice && audioPlayer.speak(text)) {
+                Log.d(TAG, "Speaking dialog via EasyVoice")
+                return@launch
             }
 
-            // Title and prompt
-            utteranceQueue.add("$cleanTitle. $cleanPrompt")
+            Log.d(TAG, "Falling back to Android TTS")
+            speakWithSystemTts(text)
+        }
+    }
 
-            // Options for choice dialogs
-            if (dialogType.lowercase() == "choice" && readOptionsAloud && !optionsJson.isNullOrBlank()) {
-                val optionsText = formatOptionsForSpeech(optionsJson)
-                if (optionsText.isNotEmpty()) {
-                    utteranceQueue.add("Your options are: $optionsText")
-                }
-            }
+    /**
+     * Flatten a dialog into a single spoken string.
+     *
+     * Built as one utterance rather than a queue so that EasyVoice synthesizes
+     * it in one request (one round-trip, one cache entry) instead of several.
+     */
+    private fun buildDialogUtterance(
+        title: String,
+        prompt: String,
+        dialogType: String,
+        optionsJson: String?,
+        priority: String
+    ): String {
+        val parts = mutableListOf<String>()
 
-            // Instruction based on dialog type
-            when (dialogType.lowercase()) {
-                "choice" -> utteranceQueue.add("Say the option number or name to reply.")
-                "confirm", "confirmation" -> utteranceQueue.add("Say yes or no to respond.")
-                "text" -> utteranceQueue.add("Speak your response.")
-                "slider" -> utteranceQueue.add("Say a number to set the value.")
-            }
+        if (priority.lowercase() in listOf("critical", "high")) {
+            parts.add("Important dialog from Synapsix.")
+        }
+        parts.add("${cleanTextForSpeech(title)}. ${cleanTextForSpeech(prompt)}")
 
-            // Request audio focus and start speaking
-            if (requestAudioFocus()) {
-                speakNext()
-            }
+        if (dialogType.lowercase() == "choice" && readOptionsAloud && !optionsJson.isNullOrBlank()) {
+            val optionsText = formatOptionsForSpeech(optionsJson)
+            if (optionsText.isNotEmpty()) parts.add("Your options are: $optionsText")
+        }
+
+        when (dialogType.lowercase()) {
+            "choice" -> parts.add("Say the option number or name to reply.")
+            "confirm", "confirmation" -> parts.add("Say yes or no to respond.")
+            "text" -> parts.add("Speak your response.")
+            "slider" -> parts.add("Say a number to set the value.")
+        }
+
+        return parts.joinToString(" ")
+    }
+
+    /** Android TTS path. Used only when EasyVoice cannot deliver. */
+    private fun speakWithSystemTts(text: String) {
+        if (!isInitialized) {
+            Log.w(TAG, "System TTS not initialized; cannot speak dialog")
+            return
+        }
+        utteranceQueue.clear()
+        utteranceQueue.add(text)
+        if (requestAudioFocus()) {
+            speakNext()
         }
     }
 
@@ -189,16 +222,28 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
         optionLabel: String? = null,
         onComplete: (() -> Unit)? = null
     ) {
-        if (!ttsEnabled || !isInitialized) {
+        if (!ttsEnabled) {
             onComplete?.invoke()
             return
         }
 
         scope.launch(Dispatchers.Main) {
             stop()
-            utteranceQueue.clear()
-
             val confirmationText = buildConfirmationText(dialogType, parsedValue, optionLabel)
+
+            if (audioPlayer.usesEasyVoice) {
+                // Confirmation must be short and immediate; if EasyVoice has it
+                // cached (same reply as before) playback is instant, otherwise
+                // this still respects the wait bound before falling through.
+                if (audioPlayer.speak(confirmationText)) {
+                    _isSpeaking.value = false
+                    onComplete?.invoke()
+                    return@launch
+                }
+            }
+
+            utteranceQueue.clear()
+            utteranceQueue.add(confirmationText)
             utteranceQueue.add(confirmationText)
             
             // Set up completion callback
@@ -271,6 +316,7 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
      * Stop current speech and clear queue.
      */
     fun stop() {
+        audioPlayer.stop()
         tts?.stop()
         utteranceQueue.clear()
         _isSpeaking.value = false
@@ -282,6 +328,7 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
      */
     fun shutdown() {
         stop()
+        audioPlayer.shutdown()
         scope.cancel()
         tts?.shutdown()
         tts = null

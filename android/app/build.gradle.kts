@@ -1,7 +1,32 @@
+import java.util.Properties as JavaProperties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+}
+
+/**
+ * EasyVoice TTS key.
+ *
+ * Gradle does NOT expose local.properties as project properties (only the
+ * Android plugin reads sdk.dir from it), so load it explicitly.
+ *
+ * Precedence: local.properties, then a -P property, then the env var.
+ * local.properties wins deliberately so an ambient EASYVOICE_API_KEY in a shell
+ * session cannot silently change which account a build talks to.
+ *
+ * Empty string disables EasyVoice; the app then falls back to Android TTS.
+ */
+val easyVoiceApiKey: String = run {
+    val localProps = JavaProperties().apply {
+        val f = rootProject.file("local.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    localProps.getProperty("EASYVOICE_API_KEY")
+        ?: providers.gradleProperty("EASYVOICE_API_KEY").orNull
+        ?: System.getenv("EASYVOICE_API_KEY")
+        ?: ""
 }
 
 android {
@@ -16,13 +41,15 @@ android {
         targetSdk = 36
         // versionCode must match OtaUpdateManager.extractVersionCode(tag):
         // major*10000 + minor*100 + patch, or every check reports an "update".
-        versionCode = 11900
-        versionName = "1.19.0"
+        versionCode = 11901
+        versionName = "1.19.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
         // Maps API Key - Set via environment or local.properties
         manifestPlaceholders["MAPS_API_KEY"] = project.findProperty("MAPS_API_KEY")?.toString() ?: ""
+
+        buildConfigField("String", "EASYVOICE_API_KEY", "\"$easyVoiceApiKey\"")
     }
 
     buildTypes {
@@ -40,6 +67,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     
     lint {
