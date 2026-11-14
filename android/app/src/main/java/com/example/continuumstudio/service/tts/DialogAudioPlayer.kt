@@ -171,8 +171,11 @@ class DialogAudioPlayer(private val context: Context) {
         return try {
             val mp = MediaPlayer()
             mp.setAudioAttributes(
+                // Must match DialogMediaService: USAGE_MEDIA keeps the Android
+                // Auto route alive, USAGE_ASSISTANT binds to the STT voice
+                // channel and dies when STT ends.
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -234,7 +237,7 @@ class DialogAudioPlayer(private val context: Context) {
         if (hasFocus) return true
 
         val attrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ASSISTANT)
+            .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 

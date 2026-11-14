@@ -58,10 +58,19 @@ class DialogMediaService : MediaLibraryService() {
         /** Start the media service. Safe to call repeatedly. */
         fun start(context: android.content.Context) {
             val intent = Intent(context, DialogMediaService::class.java)
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                // Background-start restrictions (Android 12+) or a
+                // ForegroundServiceStartNotAllowedException both land here.
+                // Letting this propagate crashed the app; the service also
+                // starts from the foreground activity, so failing quietly is
+                // correct here.
+                Log.w(TAG, "could not start media service from background: ${e.message}")
             }
         }
     }
@@ -109,8 +118,15 @@ class DialogMediaService : MediaLibraryService() {
 
         player = ExoPlayer.Builder(this)
             .setAudioAttributes(
+                // USAGE_MEDIA, not USAGE_ASSISTANT.
+                //
+                // ASSISTANT routes through Android Auto's voice channel, which is
+                // opened by speech-to-text and closed the moment STT ends. That
+                // made playback survive only while the mic was active and revert
+                // to the car's tuner otherwise. MEDIA is the normal music/audiobook
+                // channel, which AA keeps alive for as long as the session exists.
                 AudioAttributes.Builder()
-                    .setUsage(C.USAGE_ASSISTANT)
+                    .setUsage(C.USAGE_MEDIA)
                     .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
                     .build(),
                 /* handleAudioFocus = */ false

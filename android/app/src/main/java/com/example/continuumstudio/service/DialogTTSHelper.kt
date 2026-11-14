@@ -394,7 +394,10 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
         if (hasAudioFocus) return true
 
         val audioAttributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ASSISTANT)
+            // Matches the media channel used by DialogMediaService and the
+            // local player. USAGE_ASSISTANT would tie the TTS fallback to the
+            // STT voice session too.
+            .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 
