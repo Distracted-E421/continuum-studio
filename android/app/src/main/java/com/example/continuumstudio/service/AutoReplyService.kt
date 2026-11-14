@@ -74,22 +74,17 @@ class AutoReplyService : Service() {
     private var historyManager: DialogHistoryManager? = null
     
     // TTS for confirmation messages
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
+    private var ttsHelper: DialogTTSHelper? = null
     
     override fun onCreate() {
         super.onCreate()
         offlineQueue = OfflineReplyQueue(this)
         historyManager = DialogHistoryManager(this)
         
-        // Initialize TTS for confirmation
-        tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.getDefault()
-                ttsReady = true
-                Log.d(TAG, "TTS ready for confirmations")
-            }
-        }
+        // TTS for reply confirmations. Shares the one pipeline
+        // (EasyVoice -> media session -> Android TTS) instead of owning a
+        // second engine that the car could never hear.
+        ttsHelper = DialogTTSHelper(this)
     }
     
     override fun onBind(intent: Intent?): IBinder? = null
@@ -107,9 +102,8 @@ class AutoReplyService : Service() {
         offlineQueue?.shutdown()
         offlineQueue = null
         historyManager = null
-        tts?.stop()
-        tts?.shutdown()
-        tts = null
+        ttsHelper?.shutdown()
+        ttsHelper = null
         serviceScope.cancel()
     }
 
@@ -151,7 +145,7 @@ class AutoReplyService : Service() {
                 
                 // Speak confirmation before sending (if TTS confirmation is enabled)
                 val confirmationEnabled = isTtsConfirmationEnabled()
-                if (confirmationEnabled && ttsReady) {
+                if (confirmationEnabled) {
                     speakConfirmationAndWait(dialogType, selection, optionLabel)
                 }
 
@@ -240,41 +234,17 @@ class AutoReplyService : Service() {
     
     private suspend fun speakConfirmationAndWait(dialogType: String, selection: Any, optionLabel: String?) {
         val text = buildConfirmationText(dialogType, selection, optionLabel)
-        
-        suspendCancellableCoroutine<Unit> { continuation ->
-            val utteranceId = "confirmation_${System.currentTimeMillis()}"
-            
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {}
-                
-                override fun onDone(utteranceId: String?) {
-                    if (continuation.isActive) {
-                        continuation.resume(Unit) {}
-                    }
-                }
-                
-                override fun onError(utteranceId: String?) {
-                    if (continuation.isActive) {
-                        continuation.resume(Unit) {}
-                    }
-                }
-                
-                @Deprecated("Deprecated in API 21")
-                override fun onError(utteranceId: String?, errorCode: Int) {
-                    onError(utteranceId)
-                }
-            })
-            
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-            
-            // Timeout after 5 seconds max
-            serviceScope.launch {
-                kotlinx.coroutines.delay(5000)
-                if (continuation.isActive) {
-                    continuation.resume(Unit) {}
-                }
-            }
-        }
+
+        // Speak through the shared pipeline, then wait a bounded time so the
+        // reply still sends promptly if audio never finishes.
+        ttsHelper?.speakDialog(
+            title = "",
+            prompt = text,
+            dialogType = "text",
+            optionsJson = null,
+            priority = "normal",
+        )
+        kotlinx.coroutines.delay(1200)
     }
     
     private fun buildConfirmationText(dialogType: String, selection: Any, optionLabel: String?): String {
@@ -302,9 +272,16 @@ class AutoReplyService : Service() {
     }
     
     private fun speakStatus(status: String) {
-        if (ttsReady) {
-            tts?.speak(status, TextToSpeech.QUEUE_ADD, null, "status_${System.currentTimeMillis()}")
-        }
+        // Route through DialogTTSHelper so reply confirmations use EasyVoice and
+        // the media session. A local TextToSpeech here meant the car never heard
+        // these, because only session-backed audio keeps the AA route alive.
+        ttsHelper?.speakDialog(
+            title = "",
+            prompt = status,
+            dialogType = "text",
+            optionsJson = null,
+            priority = "normal",
+        )
     }
 
     private fun showQueuedNotification(title: String, reply: String, dialogId: String, pendingCount: Int) {
