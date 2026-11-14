@@ -24,6 +24,35 @@ object ShizukuBridge {
 
     private const val TAG = "ShizukuBridge"
 
+    /** Set by the UI so a granted permission can trigger a refresh. */
+    @Volatile
+    var onPermissionResult: ((granted: Boolean) -> Unit)? = null
+
+    private val permissionListener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
+        val granted = grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED
+        Log.d(TAG, "permission result granted=$granted")
+        onPermissionResult?.invoke(granted)
+    }
+
+    private var listenerRegistered = false
+
+    /**
+     * Register the permission-result listener once.
+     *
+     * Shizuku delivers the grant asynchronously through this listener; without
+     * it a request appears to do nothing at all, which is exactly the failure
+     * this app had.
+     */
+    fun ensureListener() {
+        if (listenerRegistered) return
+        try {
+            Shizuku.addRequestPermissionResultListener(permissionListener)
+            listenerRegistered = true
+        } catch (e: Throwable) {
+            Log.d(TAG, "could not register listener: ${e.message}")
+        }
+    }
+
     /** True when the Shizuku service is alive AND we hold shell permission. */
     fun isAvailable(): Boolean = try {
         Shizuku.pingBinder() && Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -32,17 +61,30 @@ object ShizukuBridge {
         false
     }
 
-    /** Launch the Shizuku permission prompt. No-op if already alive or not installed. */
-    fun requestPermission(requestCode: Int) {
+    /**
+     * Launch the Shizuku permission prompt.
+     *
+     * Requires the result listener to already be registered, otherwise the grant
+     * is never observed. [ensureListener] is idempotent.
+     */
+    fun requestPermission() {
         try {
-            if (!Shizuku.pingBinder()) return
-            if (Shizuku.checkSelfPermission() != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                Shizuku.requestPermission(requestCode)
+            if (!Shizuku.pingBinder()) {
+                Log.d(TAG, "Shizuku binder not alive; cannot request permission")
+                return
             }
+            if (Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                onPermissionResult?.invoke(true)
+                return
+            }
+            ensureListener()
+            Shizuku.requestPermission(PERMISSION_REQUEST_CODE)
         } catch (e: Throwable) {
             Log.d(TAG, "requestPermission failed: ${e.message}")
         }
     }
+
+    const val PERMISSION_REQUEST_CODE = 4242
 
     /**
      * Run a shell command as the Shizuku user and return its stdout.

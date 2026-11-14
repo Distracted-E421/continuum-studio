@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.continuumstudio.BuildConfig
 import com.example.continuumstudio.data.DecisionEngineConfig
 import com.example.continuumstudio.viewmodel.SettingsViewModel
 import com.example.continuumstudio.viewmodel.OtaUpdateViewModel
@@ -224,7 +225,39 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 SettingsSection(title = "Decision Engine", icon = Icons.Default.Settings)
             }
-            
+
+            // Voice / TTS engine status
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SettingsSection(
+                    title = "Voice",
+                    icon = Icons.AutoMirrored.Filled.VolumeUp
+                )
+            }
+
+            item {
+                val easyVoiceConfigured = remember { BuildConfig.EASYVOICE_API_KEY.isNotBlank() }
+                SettingsInfo(
+                    label = "Engine",
+                    value = if (easyVoiceConfigured) "EasyVoice (Kokoro)" else "Android TTS"
+                )
+            }
+
+            item {
+                SettingsInfo(
+                    label = "Fallback",
+                    value = if (BuildConfig.EASYVOICE_API_KEY.isNotBlank())
+                        "Android TTS after 8s" else "Android TTS only"
+                )
+            }
+
+            item {
+                SettingsNavigationItem(
+                    label = "Multi-app audio",
+                    description = "Control MultiSound and per-app audio focus (needs Shizuku)",
+                    onClick = { showSamsungAudioSetup = true }
+                )
+            }            
             item {
                 SettingsSlider(
                     label = "Triage Timeout",
@@ -524,7 +557,7 @@ fun SettingsScreen(
             item {
                 SettingsInfo(
                     label = "Build",
-                    value = "Debug"
+                    value = if (BuildConfig.DEBUG) "Debug" else "Release"
                 )
             }
             

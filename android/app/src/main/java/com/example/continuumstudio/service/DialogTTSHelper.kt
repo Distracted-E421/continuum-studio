@@ -9,6 +9,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import com.example.continuumstudio.service.tts.DialogAudioPlayer
+import com.example.continuumstudio.service.tts.PlaybackState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,6 +54,14 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
     
     private val _isSpeaking = MutableStateFlow(false)
     val isSpeaking: StateFlow<Boolean> = _isSpeaking
+
+    /** Playback progress for the audio indicator/scrubber. Null when idle. */
+    val playback: StateFlow<PlaybackState?> get() = audioPlayer.playback
+
+    fun seekTo(fraction: Float) = audioPlayer.seekTo(fraction)
+    fun pauseAudio() = audioPlayer.pause()
+    fun resumeAudio() = audioPlayer.resume()
+    fun currentPlayback(): PlaybackState? = audioPlayer.currentPlayback()
     
     // Queue of utterances to speak
     private val utteranceQueue = mutableListOf<String>()

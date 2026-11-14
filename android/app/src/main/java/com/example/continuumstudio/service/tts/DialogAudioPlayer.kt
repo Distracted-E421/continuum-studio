@@ -54,8 +54,46 @@ class DialogAudioPlayer(private val context: Context) {
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying
 
+    /**
+     * Playback position and duration for UI indicators and scrubbing.
+     * Null when nothing is loaded.
+     */
+    private val _playback = MutableStateFlow<PlaybackState?>(null)
+    val playback: StateFlow<PlaybackState?> = _playback
+
     /** True when EasyVoice is configured; false means callers should go straight to TTS. */
     val usesEasyVoice: Boolean get() = easyVoice.isConfigured
+
+    /** Seek to [fraction] (0f..1f) of the current clip. No-op when nothing is playing. */
+    fun seekTo(fraction: Float) {
+        val mp = player ?: return
+        val dur = try { mp.duration.takeIf { it > 0 } } catch (e: Exception) { null } ?: return
+        val target = (dur * fraction.coerceIn(0f, 1f)).toInt()
+        mp.seekTo(target)
+        _playback.value = _playback.value?.copy(positionMs = target)
+    }
+
+    fun pause() {
+        player?.let { if (it.isPlaying) { it.pause(); _isPlaying.value = false } }
+    }
+
+    fun resume() {
+        player?.let { if (!it.isPlaying) { it.start(); _isPlaying.value = true } }
+    }
+
+    /** Current position/duration snapshot, polled by the UI while visible. */
+    fun currentPlayback(): PlaybackState? {
+        val mp = player ?: return _playback.value?.copy(playing = false)
+        return try {
+            PlaybackState(
+                positionMs = mp.currentPosition,
+                durationMs = mp.duration.coerceAtLeast(0),
+                playing = mp.isPlaying,
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     /**
      * Speak [text] with EasyVoice.
@@ -98,11 +136,13 @@ class DialogAudioPlayer(private val context: Context) {
             mp.setDataSource(file.absolutePath)
             mp.setOnCompletionListener {
                 _isPlaying.value = false
+                _playback.value = null
                 abandonFocus()
             }
             mp.setOnErrorListener { _, what, extra ->
                 Log.w(TAG, "MediaPlayer error what=$what extra=$extra")
                 _isPlaying.value = false
+                _playback.value = null
                 abandonFocus()
                 true
             }
@@ -110,6 +150,11 @@ class DialogAudioPlayer(private val context: Context) {
             mp.start()
             player = mp
             _isPlaying.value = true
+            _playback.value = PlaybackState(
+                positionMs = 0,
+                durationMs = mp.duration.coerceAtLeast(0),
+                playing = true,
+            )
             true
         } catch (e: Exception) {
             Log.w(TAG, "Playback failed: ${e.message}")
@@ -129,6 +174,7 @@ class DialogAudioPlayer(private val context: Context) {
         }
         player = null
         _isPlaying.value = false
+        _playback.value = null
         abandonFocus()
     }
 
@@ -165,5 +211,23 @@ class DialogAudioPlayer(private val context: Context) {
         focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         focusRequest = null
         hasFocus = false
+    }
+}
+
+/** Snapshot of dialog audio progress, for the player indicator and scrubber. */
+data class PlaybackState(
+    val positionMs: Int,
+    val durationMs: Int,
+    val playing: Boolean,
+) {
+    val progress: Float
+        get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+
+    fun positionLabel(): String = formatMs(positionMs)
+    fun durationLabel(): String = formatMs(durationMs)
+
+    private fun formatMs(ms: Int): String {
+        val total = (ms / 1000).coerceAtLeast(0)
+        return "%d:%02d".format(total / 60, total % 60)
     }
 }

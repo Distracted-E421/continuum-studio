@@ -5,8 +5,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -50,12 +48,6 @@ fun SamsungAudioSetupScreen(onBack: () -> Unit) {
     var status by remember { mutableStateOf<String?>(null) }
     var suppressed by remember { mutableStateOf<Set<String>>(emptySet()) }
 
-    // Shizuku permission prompt; result arrives via the Shizuku listener, so we
-    // simply re-check state when the user returns to the screen.
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { }
-
     suspend fun refresh() {
         shizukuReady = controller.isReady()
         if (shizukuReady) {
@@ -65,6 +57,17 @@ fun SamsungAudioSetupScreen(onBack: () -> Unit) {
             }.toSet()
             suppressed = off
         }
+    }
+
+    // Shizuku permission prompt. The grant arrives asynchronously through
+    // Shizuku's listener, so refresh state when it lands.
+    DisposableEffect(Unit) {
+        ShizukuBridge.ensureListener()
+        ShizukuBridge.onPermissionResult = { granted ->
+            status = if (granted) "Shizuku permission granted" else "Shizuku permission denied"
+            scope.launch { refresh() }
+        }
+        onDispose { ShizukuBridge.onPermissionResult = null }
     }
 
     LaunchedEffect(Unit) { refresh() }
@@ -139,7 +142,7 @@ fun SamsungAudioSetupScreen(onBack: () -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (!shizukuReady) {
                             Button(onClick = {
-                                ShizukuBridge.requestPermission(SHIZUKU_REQUEST_CODE)
+                                ShizukuBridge.requestPermission()
                             }) { Text("Request permission") }
                         }
                         OutlinedButton(
@@ -292,7 +295,6 @@ fun SamsungAudioSetupScreen(onBack: () -> Unit) {
     }
 }
 
-private const val SHIZUKU_REQUEST_CODE = 4242
 
 private fun openSoundAssistant(context: android.content.Context) {
     try {
