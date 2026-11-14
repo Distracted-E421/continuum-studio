@@ -9,6 +9,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import com.example.continuumstudio.service.tts.DialogAudioPlayer
+import com.example.continuumstudio.service.tts.MediaSessionBridge
 import com.example.continuumstudio.service.tts.PlaybackState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -74,6 +75,13 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
 
     init {
         tts = TextToSpeech(context, this)
+        // Connect the media session up front so dialog audio plays through it.
+        // Holding a MediaSession is what keeps Android Auto from dropping back
+        // to the car's own radio.
+        MediaSessionBridge.connect(context) { ok ->
+            audioPlayer.preferMediaSession = ok
+            Log.i(TAG, "media session connected=$ok")
+        }
     }
 
     override fun onInit(status: Int) {
@@ -159,13 +167,32 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
             // EasyVoice is the preferred path: better voice, and cached audio is
             // instant. It returns false when unconfigured, failed, or exceeded
             // EASYVOICE_WAIT_MS - only then do we use Android TTS.
-            if (audioPlayer.usesEasyVoice && audioPlayer.speak(text)) {
-                Log.d(TAG, "Speaking dialog via EasyVoice")
-                return@launch
+            if (audioPlayer.usesEasyVoice) {
+                val optionCount = countOptions(optionsJson)
+                val ok = audioPlayer.speak(
+                    text = text,
+                    dialogId = title.hashCode().toString(),
+                    title = title,
+                    optionCount = optionCount,
+                )
+                if (ok) {
+                    Log.d(TAG, "Speaking dialog via EasyVoice")
+                    return@launch
+                }
             }
 
             Log.d(TAG, "Falling back to Android TTS")
             speakWithSystemTts(text)
+        }
+    }
+
+    /** Number of choices in a choice dialog, for the car UI's button row. */
+    private fun countOptions(optionsJson: String?): Int {
+        if (optionsJson.isNullOrBlank()) return 0
+        return try {
+            Json.parseToJsonElement(optionsJson).jsonArray.size
+        } catch (e: Exception) {
+            0
         }
     }
 

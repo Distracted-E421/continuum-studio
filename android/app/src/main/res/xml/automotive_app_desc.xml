@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     Android Auto application descriptor.
-    Currently only declares notification capability (Phase A - MessagingStyle).
-    Template capability will be added in Phase B when Google opens production distribution.
+
+    `media` is what lets the head unit talk to DialogMediaService. Without it
+    Android Auto never queries our MediaSession, so the audio route is never
+    held by us and the car falls back to its own radio.
+
+    `notification` keeps the MessagingStyle dialog notifications working.
 -->
 <automotiveApp>
-    <!-- Notification-based messaging for Android Auto -->
+    <uses name="media" />
     <uses name="notification" />
 </automotiveApp>

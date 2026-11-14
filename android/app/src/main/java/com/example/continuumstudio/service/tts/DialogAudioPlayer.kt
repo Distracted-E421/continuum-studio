@@ -64,6 +64,16 @@ class DialogAudioPlayer(private val context: Context) {
     /** True when EasyVoice is configured; false means callers should go straight to TTS. */
     val usesEasyVoice: Boolean get() = easyVoice.isConfigured
 
+    /**
+     * True when a MediaSession-owning service is responsible for playback.
+     *
+     * When the media service is running we hand the clip to it rather than
+     * playing through a bare MediaPlayer, because only a MediaSession keeps the
+     * Android Auto audio route alive.
+     */
+    @Volatile
+    var preferMediaSession: Boolean = false
+
     /** Seek to [fraction] (0f..1f) of the current clip. No-op when nothing is playing. */
     fun seekTo(fraction: Float) {
         val mp = player ?: return
@@ -102,7 +112,24 @@ class DialogAudioPlayer(private val context: Context) {
      *         fall back to Android TTS — this includes the timeout case, so a
      *         slow network degrades rather than leaving dead air indefinitely.
      */
-    suspend fun speak(text: String): Boolean {
+    suspend fun speak(text: String): Boolean = speak(text, dialogId = null, title = null, optionCount = 0)
+
+    /**
+     * Speak [text], optionally publishing full dialog metadata to the car.
+     *
+     * @param dialogId stable id, used as the MediaItem mediaId
+     * @param title dialog title shown on the head unit
+     * @param optionCount how many choices the dialog offers
+     * @return true if audio actually started playing. false means the caller must
+     *         fall back to Android TTS - this includes the timeout case, so a
+     *         slow network degrades rather than leaving dead air indefinitely.
+     */
+    suspend fun speak(
+        text: String,
+        dialogId: String?,
+        title: String?,
+        optionCount: Int,
+    ): Boolean {
         if (!easyVoice.isConfigured) return false
         if (text.isBlank()) return false
 
@@ -113,6 +140,22 @@ class DialogAudioPlayer(private val context: Context) {
         if (file == null) {
             Log.d(TAG, "EasyVoice unavailable within ${EASYVOICE_WAIT_MS}ms; caller should fall back")
             return false
+        }
+
+        if (preferMediaSession && dialogId != null) {
+            val ok = MediaSessionBridge.play(
+                context = context,
+                dialogId = dialogId,
+                file = file,
+                title = title ?: "Dialog",
+                prompt = text,
+                optionCount = optionCount,
+            )
+            if (ok) {
+                _isPlaying.value = true
+                return true
+            }
+            Log.d(TAG, "MediaSession playback unavailable; falling back to local player")
         }
 
         return playFile(file)

@@ -41,8 +41,8 @@ android {
         targetSdk = 36
         // versionCode must match OtaUpdateManager.extractVersionCode(tag):
         // major*10000 + minor*100 + patch, or every check reports an "update".
-        versionCode = 11906
-        versionName = "1.19.6"
+        versionCode = 11907
+        versionName = "1.19.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -133,6 +133,12 @@ dependencies {
     // which is what makes MultiSound / appops control possible without root.
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
+
+    // Media3 - owning a MediaSession is what stops Android Auto from tearing
+    // down the audio route and falling back to the car's own radio.
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.session)
+    implementation(libs.media3.common)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
