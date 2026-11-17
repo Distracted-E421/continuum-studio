@@ -803,6 +803,7 @@ class MainActivity : ComponentActivity() {
                                 onStopAudio = dialogViewModel::stopSpeaking,
                                 onMuteCurrentDialog = dialogViewModel::muteCurrentDialog,
                                 onSeekAudio = dialogViewModel::seekPlayback,
+                                onSkipToOptions = dialogViewModel::skipToOptions,
                             )
                         }
                         

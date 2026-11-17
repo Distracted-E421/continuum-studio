@@ -251,4 +251,75 @@ class SpeechScriptCompilerTest {
         assertTrue(script.characterCount > 0)
         assertEquals(script.segments.sumOf { it.spoken.length }, script.characterCount)
     }
+
+    // --- Skip to options --------------------------------------------------
+
+    @Test
+    fun `firstOptionIndex points at the first spoken option`() {
+        val script = SpeechScriptCompiler.compile(
+            title = "Title",
+            prompt = "A prompt sentence. Another one.",
+            dialogType = "choice",
+            optionLabels = listOf("Alpha", "Bravo"),
+        )
+        val index = script.firstOptionIndex()
+        assertTrue(index > 0)
+        assertEquals(
+            SpeechScriptCompiler.Kind.OPTION,
+            script.segments[index].kind,
+        )
+        assertTrue(script.segments[index].spoken.startsWith("Option 1."))
+    }
+
+    @Test
+    fun `everything before the first option is prompt material`() {
+        val script = SpeechScriptCompiler.compile(
+            title = "Title",
+            prompt = "Body text here.",
+            dialogType = "choice",
+            optionLabels = listOf("Alpha"),
+        )
+        val index = script.firstOptionIndex()
+        // Skipping must land on the options, never inside the body.
+        assertTrue(
+            "segments before $index should not be options",
+            script.segments.take(index).none {
+                it.kind == SpeechScriptCompiler.Kind.OPTION
+            },
+        )
+    }
+
+    @Test
+    fun `a dialog with no options reports no skip target`() {
+        val script = SpeechScriptCompiler.compile(
+            title = "T",
+            prompt = "Just text.",
+            dialogType = "text",
+        )
+        assertEquals(-1, script.firstOptionIndex())
+    }
+
+    @Test
+    fun `options suppressed means no skip target`() {
+        val script = SpeechScriptCompiler.compile(
+            title = "T",
+            prompt = "Body.",
+            dialogType = "choice",
+            optionLabels = listOf("Alpha"),
+            includeOptions = false,
+        )
+        assertEquals(-1, script.firstOptionIndex())
+    }
+
+    @Test
+    fun `option count matches the labels given`() {
+        val script = SpeechScriptCompiler.compile(
+            title = "T",
+            prompt = "P",
+            dialogType = "choice",
+            optionLabels = listOf("One", "Two", "Three"),
+        )
+        assertEquals(3, script.optionSegments.size)
+        assertEquals(3, script.optionSegments.size)
+    }
 }

@@ -571,6 +571,22 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     fun seekPlayback(fraction: Float) = ttsHelper.seekAudio(fraction)
 
     /**
+     * Jump playback to the options.
+     *
+     * The default read is prompt-first by the owner's choice, and a realistic
+     * dialog puts the options ~17s in. When the context is already known, this
+     * skips the body rather than making the listener sit through it.
+     */
+    fun skipToOptions() {
+        val dialog = dialogState.value.activeDialog ?: return
+        val script = _currentScript.value ?: return
+        val index = script.firstOptionIndex()
+        if (index <= 0) return
+        SpeechTrace.info("play", "skipping to option at segment ${index + 1}")
+        ttsHelper.audioPlayer.playScript(script, dialogId = dialog.id, startAtSegment = index)
+    }
+
+    /**
      * Mute just the dialog that is on screen right now.
      *
      * The id is remembered so a re-render or a reconnect cannot restart the

@@ -91,6 +91,19 @@ object SpeechScriptCompiler {
     /**
      * Build a script for a dialog.
      *
+     * ## Ordering is deliberate: prompt, then options
+     *
+     * Measured on a realistic dialog, the prompt is ~17s of speech before the
+     * options begin. Moving the options earlier would let you answer sooner, but
+     * the owner's decision (2026-11-17) is that **full context first** is what
+     * they want while driving - answering without the reasoning is worse than
+     * waiting for it.
+     *
+     * So do not reorder this to put options before the body. The escape hatch for
+     * "I already know the context" is the skip-to-options control in the app,
+     * which jumps playback to the first OPTION segment rather than changing the
+     * default read.
+     *
      * @param includeOptions read choice labels aloud, numbered
      * @param includeInstructions add the closing "say the option number" line
      */
@@ -503,6 +516,17 @@ data class SpeechScript(
     /** Options in the script, ordered, for the app's script inspector. */
     val optionSegments: List<SpeechScriptCompiler.Segment>
         get() = segments.filter { it.kind == SpeechScriptCompiler.Kind.OPTION }
+
+    /**
+     * Index of the first option, or -1 when the dialog has none.
+     *
+     * Used by the skip-to-options control. The default read is deliberately
+     * prompt-first (see [SpeechScriptCompiler.compile]), so this is the escape
+     * hatch for when the listener already knows the context.
+     */
+    fun firstOptionIndex(): Int = segments.indexOfFirst {
+        it.kind == SpeechScriptCompiler.Kind.OPTION
+    }
 
     /**
      * Human-readable annotated script, shown in the app so the read can be

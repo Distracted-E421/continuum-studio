@@ -131,6 +131,7 @@ fun DialogScreen(
     onStopAudio: () -> Unit = {},
     onMuteCurrentDialog: () -> Unit = {},
     onSeekAudio: (Float) -> Unit = {},
+    onSkipToOptions: () -> Unit = {},
 ) {
     // Initialize serverUrlInput from savedServerUrl (persisted in DataStore)
     var serverUrlInput by remember { mutableStateOf(savedServerUrl) }
@@ -373,6 +374,7 @@ fun DialogScreen(
                                                         onStopAudio = onStopAudio,
                                                         onMuteToggle = onMuteCurrentDialog,
                                                         onSeekAudio = onSeekAudio,
+                                                        onSkipToOptions = onSkipToOptions,
                                                     )
                                                 }
                                             } else {
@@ -1741,6 +1743,7 @@ fun ActiveDialogCard(
     onStopAudio: () -> Unit = {},
     onMuteToggle: () -> Unit = {},
     onSeekAudio: (Float) -> Unit = {},
+    onSkipToOptions: (() -> Unit)? = null,
 ) {
     // Three fixed zones: pinned options, scrolling reading pane, pinned action
     // dock. Only the middle zone moves, so the controls never leave the thumb
@@ -1970,6 +1973,7 @@ fun ActiveDialogCard(
             onStopAudio = onStopAudio,
             onMuteToggle = onMuteToggle,
             onSeek = onSeekAudio,
+            onSkipToOptions = onSkipToOptions,
         )
     }
 }

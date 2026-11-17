@@ -112,10 +112,14 @@ class DialogAudioPlayer(private val context: Context) {
      * Returns immediately; progress is published through [playback]. Callers
      * that need to know whether audio ever started should watch the flow for a
      * non-null value, or use [speakAndWait].
+     *
+     * @param startAtSegment index to begin from, so callers can jump straight to
+     *        the options when the listener already knows the context
      */
     fun playScript(
         script: SpeechScript,
         dialogId: String?,
+        startAtSegment: Int = 0,
         onFinished: () -> Unit = {},
     ) {
         stop()
@@ -124,6 +128,7 @@ class DialogAudioPlayer(private val context: Context) {
             onFinished()
             return
         }
+        val from = startAtSegment.coerceIn(0, script.segments.lastIndex)
 
         val labels = script.optionSegments.map { it.source }
         val title = script.title.ifBlank { "Dialog" }
@@ -142,6 +147,10 @@ class DialogAudioPlayer(private val context: Context) {
             )
 
             for ((index, segment) in script.segments.withIndex()) {
+                // Skip straight to the requested segment. Anything skipped has
+                // already been heard (or the listener chose to skip it), so it is
+                // not synthesized at all - which also saves the request.
+                if (index < from) continue
                 if (!isActive()) return@launch
 
                 publishGenerating(index, script.segments.size, segment.kind.name.lowercase())

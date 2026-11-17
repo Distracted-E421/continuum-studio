@@ -211,6 +211,7 @@ fun ActionDock(
     onStopAudio: () -> Unit,
     onMuteToggle: () -> Unit,
     onSeek: (Float) -> Unit,
+    onSkipToOptions: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -236,6 +237,7 @@ fun ActionDock(
                         onStop = onStopAudio,
                         onMuteToggle = onMuteToggle,
                         onSeek = onSeek,
+                        onSkipToOptions = onSkipToOptions,
                     )
                 }
             }
@@ -329,6 +331,7 @@ private fun LiveAudioStrip(
     onStop: () -> Unit,
     onMuteToggle: () -> Unit,
     onSeek: (Float) -> Unit,
+    onSkipToOptions: (() -> Unit)? = null,
 ) {
     Surface(
         color = Color(0xFF242424),
@@ -365,6 +368,19 @@ private fun LiveAudioStrip(
                     color = if (playback.isGenerating) Color(0xFFFFB74D) else Color(0xFFE0E0E0),
                     modifier = Modifier.weight(1f),
                 )
+
+                // Skip straight to the choices. Only offered when the dialog has
+                // options and the read has not already reached them - in the
+                // common case the body is ~17s of speech, so this is the
+                // difference between waiting and deciding.
+                if (onSkipToOptions != null && playback.segmentIndex < playback.segmentCount - 1) {
+                    TextButton(
+                        onClick = onSkipToOptions,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Text("Options", fontSize = 12.sp, color = Color(0xFF66BB6A))
+                    }
+                }
 
                 IconButton(onClick = onPlayPause, modifier = Modifier.size(38.dp)) {
                     Icon(
