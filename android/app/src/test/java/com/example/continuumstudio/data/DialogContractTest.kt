@@ -95,4 +95,75 @@ class DialogContractTest {
         assertNull(parsed.data)
         assertEquals("No active dialog", parsed.error)
     }
+
+    // --- WebSocket frames ------------------------------------------------
+
+    /**
+     * The daemon serialises its update enum with `#[serde(tag = "type")]`, so
+     * every frame is a flat object with a `type` discriminator. These fixtures
+     * mirror `DialogUpdate` in dialog/src/web.rs.
+     */
+    private val wsJson = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun `initial frame matches the daemon's actual handshake`() {
+        // Captured verbatim: the first frame after the upgrade.
+        val frame = """{"active_id":null,"has_active":false,"hold_mode":true,
+                        "queue_count":0,"type":"initial"}"""
+        val parsed = wsJson.decodeFromString<ServerMessage>(frame)
+        assertTrue(parsed is ServerMessage.Initial)
+        parsed as ServerMessage.Initial
+        assertEquals(false, parsed.hasActive)
+        assertEquals(0, parsed.queueCount)
+        assertEquals(true, parsed.holdMode)
+    }
+
+    @Test
+    fun `NewDialog frame deserialises with the daemon's field names`() {
+        val frame = """
+            {"type":"NewDialog","id":"abc","title":"Deploy?",
+             "prompt":"Ship it?","dialog_type":"choice","timeout_ms":60000}
+        """.trimIndent()
+        val parsed = wsJson.decodeFromString<ServerMessage>(frame)
+        assertTrue(parsed is ServerMessage.NewDialog)
+        parsed as ServerMessage.NewDialog
+        assertEquals("abc", parsed.id)
+        assertEquals("choice", parsed.dialogType)
+        assertEquals(60000, parsed.timeoutMs)
+    }
+
+    @Test
+    fun `NewDialog tolerates the optional agent field`() {
+        val frame = """
+            {"type":"NewDialog","id":"abc","title":"t","prompt":"p",
+             "dialog_type":"text","agent":{"name":"orchestrator"}}
+        """.trimIndent()
+        val parsed = wsJson.decodeFromString<ServerMessage>(frame)
+        assertTrue(parsed is ServerMessage.NewDialog)
+    }
+
+    @Test
+    fun `DialogCompleted frame deserialises`() {
+        val frame = """{"type":"DialogCompleted","id":"abc","selection":"a","cancelled":false}"""
+        val parsed = wsJson.decodeFromString<ServerMessage>(frame)
+        assertTrue(parsed is ServerMessage.DialogCompleted)
+        parsed as ServerMessage.DialogCompleted
+        assertEquals("abc", parsed.id)
+        assertEquals(false, parsed.cancelled)
+    }
+
+    @Test
+    fun `QueueUpdate and HoldModeChanged deserialise`() {
+        val q = wsJson.decodeFromString<ServerMessage>(
+            """{"type":"QueueUpdate","active_id":null,"queue_count":3}"""
+        )
+        assertTrue(q is ServerMessage.QueueUpdate)
+        assertEquals(3, (q as ServerMessage.QueueUpdate).queueCount)
+
+        val h = wsJson.decodeFromString<ServerMessage>(
+            """{"type":"HoldModeChanged","enabled":true}"""
+        )
+        assertTrue(h is ServerMessage.HoldModeChanged)
+        assertEquals(true, (h as ServerMessage.HoldModeChanged).enabled)
+    }
 }
