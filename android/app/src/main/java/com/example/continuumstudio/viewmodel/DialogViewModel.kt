@@ -1128,8 +1128,11 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                     showToast("Could not send answer: ${result.reason}")
                 }
                 is com.example.continuumstudio.network.AnswerOutcome.Rejected -> {
-                    SpeechTrace.error("answer", "rejected: ${result.reason}")
-                    showToast("Answer rejected (${result.reason}); refreshing")
+                    // Not an error the user caused: the dialog expired or was
+                    // answered elsewhere. Say so plainly and resync rather than
+                    // showing a failure they might try to "fix".
+                    SpeechTrace.info("answer", "too late: ${result.reason}")
+                    showToast("That dialog was already handled")
                     refreshDialog()
                 }
             }

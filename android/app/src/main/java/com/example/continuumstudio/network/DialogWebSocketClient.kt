@@ -499,7 +499,18 @@ class DialogWebSocketClient(
                         return@withContext AnswerOutcome.Failed("unreadable response")
                     }
                     if (!apiResponse.success) {
-                        return@withContext AnswerOutcome.Failed(apiResponse.error ?: "server refused")
+                        // The daemon returns 200 with success=false for logical
+                        // failures, so the HTTP status says nothing about whether
+                        // retrying helps. These three messages all mean the
+                        // dialog is already gone (answered elsewhere, expired, or
+                        // another surface got there first): retrying cannot help
+                        // and the right response is to re-sync, not to warn.
+                        val reason = apiResponse.error ?: "server refused"
+                        return@withContext if (reason.isStaleDialogError()) {
+                            AnswerOutcome.Rejected(reason)
+                        } else {
+                            AnswerOutcome.Failed(reason)
+                        }
                     }
                     _dialogState.update { DialogStateMerge.onAnswered(it) }
                     AnswerOutcome.Sent
@@ -961,4 +972,20 @@ sealed class AnswerOutcome {
 
     /** The daemon refused (4xx); the dialog state is probably stale. */
     data class Rejected(val reason: String) : AnswerOutcome()
+}
+
+/**
+ * True for daemon messages that mean "this dialog is already gone".
+ *
+ * These come back as HTTP 200 with success=false, so the status code cannot
+ * distinguish them from a transient problem. Retrying is pointless and telling
+ * the user "could not send" is misleading - the answer was simply too late.
+ *
+ * Strings taken from dialog/src/web.rs.
+ */
+internal fun String.isStaleDialogError(): Boolean {
+    val lower = lowercase()
+    return lower.contains("not found") ||
+        lower.contains("no active dialog") ||
+        lower.contains("already responded")
 }
