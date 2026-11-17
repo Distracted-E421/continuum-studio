@@ -81,7 +81,9 @@ class DictionaryInSpeechTest {
     fun `project names are respelled in real prose`() {
         val out = spoken("Synapsix is talking to Forgejo.")
         assertTrue(out.contains("sin-app-sicks"))
-        assertTrue(out.contains("for-jay-oh"))
+        // "forge joe" was chosen over "for-jay-oh" because it is the only
+        // candidate that transcribes back cleanly (verified with whisper).
+        assertTrue(out, out.contains("forge joe"))
     }
 
     @Test

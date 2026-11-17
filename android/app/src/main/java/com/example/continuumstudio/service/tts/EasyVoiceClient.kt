@@ -72,7 +72,7 @@ class EasyVoiceClient(private val context: Context) {
          * invisible for any text already heard: the input string is unchanged, so
          * the stale clip was served forever. Bump this with the change, not after.
          */
-        private const val CACHE_SCHEMA_VERSION = 2
+        private const val CACHE_SCHEMA_VERSION = 3
 
         /**
          * HTTP timeouts for one segment.
