@@ -24,8 +24,40 @@ class DialogWebSocketClient(
     private val scope: CoroutineScope
 ) {
     private val client = OkHttpClient.Builder()
+        // WebSockets need an unbounded read timeout, because a quiet socket is
+        // normal and the 30s ping already detects a dead one.
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(30, TimeUnit.SECONDS)
+        .build()
+
+    /**
+     * Client for ordinary HTTP requests.
+     *
+     * Deliberately separate from [client]. Sharing the WebSocket client meant
+     * every request inherited `readTimeout(0)`, i.e. no timeout at all: an
+     * answer sent over a weak car link could hang forever, leaving the dialog on
+     * screen with no error and no way to tell whether it was sent. A quiet
+     * WebSocket is normal; a quiet POST is not.
+     */
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+
+    /**
+     * Bounded but patient client for image uploads.
+     *
+     * Separate from [httpClient] because a photo upload is legitimately slower
+     * than an answer, while still needing a ceiling - the previous behaviour used
+     * the WebSocket client, which has no timeout at all.
+     */
+    private val uploadClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     private var webSocket: WebSocket? = null
@@ -34,10 +66,19 @@ class DialogWebSocketClient(
         isLenient = true
     }
 
-    /**
-     * Get the OkHttp client for HTTP requests
-     */
+    /** Get the OkHttp client for WebSocket use. */
     fun getHttpClient(): OkHttpClient = client
+
+    /** Client with real timeouts, for ordinary HTTP requests. */
+    fun getRequestClient(): OkHttpClient = httpClient
+
+    /**
+     * Client for uploads: bounded, but with more patience than [httpClient].
+     *
+     * A multi-megabyte photo over a car link is legitimately slower than an
+     * answer, but "no timeout at all" meant a stalled upload hung forever.
+     */
+    fun getUploadClient(): OkHttpClient = uploadClient
 
     // Reconnection state
     private var reconnectAttempts = 0
@@ -374,7 +415,7 @@ class DialogWebSocketClient(
                 val httpUrl = buildHttpUrl(serverUrl)
                 val request = buildRequestWithAuth("$httpUrl/api/current").build()
                 
-                val response = client.newCall(request).execute()
+                val response = httpClient.newCall(request).execute()
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: return@withContext null
                     val apiResponse = json.decodeFromString<ApiResponse<DialogDetails>>(body)
@@ -398,16 +439,32 @@ class DialogWebSocketClient(
         dialogId: String,
         selection: Any,
         comment: String? = null
-    ): Boolean {
+    ): Boolean = submitAnswer(serverUrl, dialogId, selection, comment) is AnswerOutcome.Sent
+
+    /**
+     * Submit an answer, distinguishing the ways it can fail.
+     *
+     * The boolean return of [answerDialog] collapsed "the network died" and "the
+     * server rejected it" into one silent false, which on a car link meant a tap
+     * could disappear with no indication at all. Callers that can show feedback
+     * should use this.
+     */
+    suspend fun submitAnswer(
+        serverUrl: String,
+        dialogId: String,
+        selection: Any,
+        comment: String? = null
+    ): AnswerOutcome {
         return withContext(Dispatchers.IO) {
             try {
                 val httpUrl = buildHttpUrl(serverUrl)
-                
+
                 val selectionJson = when (selection) {
                     is String -> JsonPrimitive(selection)
                     is Boolean -> JsonPrimitive(selection)
                     is Number -> JsonPrimitive(selection)
                     is List<*> -> buildJsonArray {
+                        @Suppress("UNCHECKED_CAST")
                         (selection as List<String>).forEach { add(JsonPrimitive(it)) }
                     }
                     else -> JsonPrimitive(selection.toString())
@@ -423,22 +480,40 @@ class DialogWebSocketClient(
                     .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val body = response.body?.string() ?: return@withContext false
-                    val apiResponse = json.decodeFromString<ApiResponse<String>>(body)
-                    if (apiResponse.success) {
-                        _dialogState.update { it.copy(
-                            activeDialog = null,
-                            selectedValue = "",
-                            comment = "",
-                            selectedOptions = emptySet()
-                        ) }
-                        true
-                    } else false
-                } else false
+                httpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        // 4xx means the server refused; retrying will not help.
+                        return@withContext if (response.code in 400..499) {
+                            AnswerOutcome.Rejected("HTTP ${response.code}")
+                        } else {
+                            AnswerOutcome.Failed("HTTP ${response.code}")
+                        }
+                    }
+                    val body = response.body?.string()
+                        ?: return@withContext AnswerOutcome.Failed("empty response")
+                    val apiResponse = try {
+                        json.decodeFromString<ApiResponse<String>>(body)
+                    } catch (e: Exception) {
+                        return@withContext AnswerOutcome.Failed("unreadable response")
+                    }
+                    if (!apiResponse.success) {
+                        return@withContext AnswerOutcome.Failed(apiResponse.error ?: "server refused")
+                    }
+                    _dialogState.update { it.copy(
+                        activeDialog = null,
+                        selectedValue = "",
+                        comment = "",
+                        selectedOptions = emptySet()
+                    ) }
+                    AnswerOutcome.Sent
+                }
+            } catch (e: java.io.IOException) {
+                // Includes SocketTimeoutException and UnknownHostException, which
+                // are the common cases on a moving connection and are worth
+                // retrying.
+                AnswerOutcome.Failed(e.message ?: e.javaClass.simpleName)
             } catch (e: Exception) {
-                false
+                AnswerOutcome.Failed(e.message ?: e.javaClass.simpleName)
             }
         }
     }
@@ -454,7 +529,7 @@ class DialogWebSocketClient(
                     .post("".toRequestBody(null))
                     .build()
 
-                val response = client.newCall(request).execute()
+                val response = httpClient.newCall(request).execute()
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: return@withContext null
                     val apiResponse = json.decodeFromString<ApiResponse<Boolean>>(body)
@@ -542,7 +617,7 @@ class DialogWebSocketClient(
                 val httpUrl = buildHttpUrl(serverUrl)
                 val request = buildRequestWithAuth("$httpUrl/api/history?limit=$limit").build()
                 
-                val response = client.newCall(request).execute()
+                val response = httpClient.newCall(request).execute()
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: return@withContext emptyList()
                     val apiResponse = json.decodeFromString<ApiResponse<List<HistoryItem>>>(body)
@@ -572,7 +647,7 @@ class DialogWebSocketClient(
                 val httpUrl = buildHttpUrl(serverUrl)
                 val request = buildRequestWithAuth("$httpUrl/api/queue").build()
                 
-                val response = client.newCall(request).execute()
+                val response = httpClient.newCall(request).execute()
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: return@withContext emptyList()
                     val apiResponse = json.decodeFromString<ApiResponse<List<QueueItem>>>(body)
@@ -611,7 +686,7 @@ class DialogWebSocketClient(
                     .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
                 
-                val response = client.newCall(request).execute()
+                val response = httpClient.newCall(request).execute()
                 if (response.isSuccessful) {
                     // Refresh current dialog and queue after switch
                     fetchCurrentDialog(serverUrl)
@@ -662,7 +737,7 @@ class DialogWebSocketClient(
                     .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
                 
-                val response = client.newCall(request).execute()
+                val response = httpClient.newCall(request).execute()
                 response.isSuccessful
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -722,7 +797,7 @@ class DialogWebSocketClient(
                     .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                val response = client.newCall(request).execute()
+                val response = httpClient.newCall(request).execute()
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: return@withContext DiagramRenderResult(
                         success = false,
@@ -782,7 +857,7 @@ class DialogWebSocketClient(
                     .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
-                val response = client.newCall(request).execute()
+                val response = httpClient.newCall(request).execute()
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: return@withContext ActionResult(
                         success = false,
@@ -873,3 +948,20 @@ sealed class DialogEvent {
     data class DialogCompleted(val id: String) : DialogEvent()
 }
 
+
+/**
+ * Outcome of submitting an answer.
+ *
+ * [Rejected] is separated from [Failed] because the right response differs: a
+ * 4xx will fail identically on retry, whereas a timeout usually will not.
+ */
+sealed class AnswerOutcome {
+    /** The daemon accepted the answer. */
+    object Sent : AnswerOutcome()
+
+    /** Transport or 5xx problem; worth retrying. */
+    data class Failed(val reason: String) : AnswerOutcome()
+
+    /** The daemon refused (4xx); the dialog state is probably stale. */
+    data class Rejected(val reason: String) : AnswerOutcome()
+}

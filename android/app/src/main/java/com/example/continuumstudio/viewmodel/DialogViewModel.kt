@@ -1080,13 +1080,33 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                 "slider" -> state.sliderValue
                 else -> state.selectedValue
             }
+            val comment = state.comment.takeIf { it.isNotBlank() }
 
-            wsClient.answerDialog(
-                serverUrl = serverUrl,
-                dialogId = dialog.id,
-                selection = selection,
-                comment = state.comment.takeIf { it.isNotBlank() }
-            )
+            // One retry, because the common failure on a moving connection is a
+            // transient timeout rather than a refused answer. Reporting the
+            // failure matters more than the retry: previously the result was
+            // discarded entirely, so a tap could vanish with no indication.
+            var result = wsClient.submitAnswer(serverUrl, dialog.id, selection, comment)
+            if (result is com.example.continuumstudio.network.AnswerOutcome.Failed) {
+                SpeechTrace.warn("answer", "retrying after: ${result.reason}")
+                delay(900)
+                result = wsClient.submitAnswer(serverUrl, dialog.id, selection, comment)
+            }
+
+            when (result) {
+                is com.example.continuumstudio.network.AnswerOutcome.Sent -> {
+                    SpeechTrace.info("answer", "sent for ${dialog.id.take(8)}")
+                }
+                is com.example.continuumstudio.network.AnswerOutcome.Failed -> {
+                    SpeechTrace.error("answer", "not sent: ${result.reason}")
+                    showToast("Could not send answer: ${result.reason}")
+                }
+                is com.example.continuumstudio.network.AnswerOutcome.Rejected -> {
+                    SpeechTrace.error("answer", "rejected: ${result.reason}")
+                    showToast("Answer rejected (${result.reason}); refreshing")
+                    refreshDialog()
+                }
+            }
         }
     }
 
@@ -1162,7 +1182,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                     .build()
                 
                 val response = withContext(Dispatchers.IO) {
-                    wsClient.getHttpClient().newCall(request).execute()
+                    wsClient.getUploadClient().newCall(request).execute()
                 }
                 
                 if (response.isSuccessful) {
