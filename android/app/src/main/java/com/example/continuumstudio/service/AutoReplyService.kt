@@ -235,6 +235,17 @@ class AutoReplyService : Service() {
     private suspend fun speakConfirmationAndWait(dialogType: String, selection: Any, optionLabel: String?) {
         val text = buildConfirmationText(dialogType, selection, optionLabel)
 
+        // Apply the user's audio settings before speaking: this service can run
+        // without the app, and it previously used hardcoded defaults, so a
+        // confirmation could come out in a different voice than the dialog it was
+        // confirming.
+        ttsHelper?.let {
+            com.example.continuumstudio.service.tts.AudioPrefs.applyTo(
+                it,
+                com.example.continuumstudio.service.tts.AudioPrefs.load(this),
+            )
+        }
+
         // Speak through the shared pipeline, then wait a bounded time so the
         // reply still sends promptly if audio never finishes.
         ttsHelper?.speakDialog(

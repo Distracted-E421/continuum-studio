@@ -379,7 +379,18 @@ class DialogNotificationService : Service() {
         // The dialog id is passed through so playback can be tied to the dialog
         // rather than to its title, which is what lets the audio bar know which
         // clip it is controlling.
-        ttsHelper?.speakDialog(title, prompt, dialogType, optionsJson, priority, dialogId)
+        //
+        // Settings are re-applied first: this service can be the only thing
+        // running when a dialog arrives (app backgrounded or closed), and it used
+        // to speak with hardcoded defaults - a different voice, speed and wait
+        // than the app screen would use for the same dialog.
+        ttsHelper?.let { helper ->
+            com.example.continuumstudio.service.tts.AudioPrefs.applyTo(
+                helper,
+                com.example.continuumstudio.service.tts.AudioPrefs.load(this),
+            )
+            helper.speakDialog(title, prompt, dialogType, optionsJson, priority, dialogId)
+        }
     }
     
     /**
