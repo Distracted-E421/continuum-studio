@@ -98,12 +98,7 @@ class OfflineReplyQueue(private val context: Context) {
         priority: Int = 0
     ): Boolean {
         return try {
-            val selectionJson = when (selection) {
-                is String -> "\"$selection\""
-                is Boolean -> selection.toString()
-                is Number -> selection.toString()
-                else -> "\"${selection}\""
-            }
+            val selectionJson = encodeSelection(selection)
             
             val reply = PendingReply(
                 dialogId = dialogId,
@@ -353,4 +348,39 @@ class OfflineReplyQueue(private val context: Context) {
     companion object {
         private const val TAG = "OfflineReplyQueue"
     }
+}
+
+/**
+ * Encode a dialog selection as JSON for queueing.
+ *
+ * Extracted so it can be tested: the queued selection is replayed to the daemon
+ * hours later, against a `serde_json::Value` field, so getting the type wrong
+ * means answering with the wrong shape and no way to notice until much later.
+ *
+ * The bug this fixes: a multi-select answer is a `List`, and the previous
+ * `else` branch wrapped it in quotes - so `["a","b"]` was stored as the *string*
+ * `"[\"a\",\"b\"]"` and replayed as a single string rather than an array.
+ */
+internal fun encodeSelection(selection: Any): String = when (selection) {
+    is String -> quote(selection)
+    is Boolean, is Number -> selection.toString()
+    is List<*> -> selection.joinToString(",", "[", "]") { quote(it?.toString() ?: "") }
+    else -> quote(selection.toString())
+}
+
+/** Minimal JSON string quoting: enough for dialog values, which are plain text. */
+private fun quote(value: String): String {
+    val escaped = buildString {
+        value.forEach { c ->
+            when (c) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
+            }
+        }
+    }
+    return "\"$escaped\""
 }
