@@ -375,6 +375,7 @@ fun DialogScreen(
                                                         onMuteToggle = onMuteCurrentDialog,
                                                         onSeekAudio = onSeekAudio,
                                                         onSkipToOptions = onSkipToOptions,
+                                                        isOffline = !connectionState.isConnected,
                                                     )
                                                 }
                                             } else {
@@ -1744,6 +1745,8 @@ fun ActiveDialogCard(
     onMuteToggle: () -> Unit = {},
     onSeekAudio: (Float) -> Unit = {},
     onSkipToOptions: (() -> Unit)? = null,
+    /** True when the connection is down, so the dialog is no longer answerable. */
+    isOffline: Boolean = false,
 ) {
     // Three fixed zones: pinned options, scrolling reading pane, pinned action
     // dock. Only the middle zone moves, so the controls never leave the thumb
@@ -1798,6 +1801,32 @@ fun ActiveDialogCard(
 
         // Choice options are pinned above the prompt: the whole point is that
         // the answer is reachable without reading or scrolling.
+        if (isOffline) {
+            // The connection is down, so submitting will fail. Say so where the
+            // decision is made rather than only in the connection card above,
+            // which is easy to miss when the choices are in front of you.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF5D4037))
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.WifiOff,
+                    contentDescription = null,
+                    tint = Color(0xFFFFCC80),
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Offline - answers are queued and sent on reconnect",
+                    fontSize = 12.sp,
+                    color = Color(0xFFFFCC80),
+                )
+            }
+        }
+
         if (isChoice) {
             PinnedOptions(
                 options = options,

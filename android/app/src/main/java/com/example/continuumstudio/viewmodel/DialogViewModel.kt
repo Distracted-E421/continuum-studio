@@ -135,6 +135,15 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     )
     val voice: StateFlow<String> = _voice.asStateFlow()
 
+    /**
+     * Queue for answers that could not be delivered.
+     *
+     * Shared with AutoReplyService's design but owned here for in-app submits, so
+     * tapping Submit in an app with no signal does not silently lose the
+     * decision.
+     */
+    private val offlineQueue = com.example.continuumstudio.service.OfflineReplyQueue(application)
+
     /** Set the synthesis voice and persist it. */
     fun setVoice(id: String) {
         val valid = com.example.continuumstudio.service.tts.EasyVoiceClient.VOICES
@@ -1124,8 +1133,25 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                     SpeechTrace.info("answer", "sent for ${dialog.id.take(8)}")
                 }
                 is com.example.continuumstudio.network.AnswerOutcome.Failed -> {
-                    SpeechTrace.error("answer", "not sent: ${result.reason}")
-                    showToast("Could not send answer: ${result.reason}")
+                    // The answer could not be delivered. Queue it rather than
+                    // dropping it: the tap already happened, and losing a
+                    // deliberate decision because signal dropped is worse than
+                    // delivering it late. The queue retries on reconnect.
+                    SpeechTrace.warn("answer", "queuing after: ${result.reason}")
+                    val queued = offlineQueue.queueReply(
+                        dialogId = dialog.id,
+                        selection = selection,
+                        comment = comment ?: "Answered in app while offline",
+                    )
+                    if (queued) {
+                        showToast("Offline - answer queued")
+                        // The dialog is as good as answered from the user's
+                        // point of view; clear it so it does not look pending.
+                        wsClient.clearActiveDialogLocally()
+                    } else {
+                        SpeechTrace.error("answer", "not sent and not queued: ${result.reason}")
+                        showToast("Could not send answer: ${result.reason}")
+                    }
                 }
                 is com.example.continuumstudio.network.AnswerOutcome.Rejected -> {
                     // Not an error the user caused: the dialog expired or was

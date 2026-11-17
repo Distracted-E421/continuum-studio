@@ -763,6 +763,18 @@ class DialogWebSocketClient(
         _dialogState.update { it.copy(comment = comment) }
     }
 
+    /**
+     * Clear the active dialog locally without contacting the server.
+     *
+     * Used when an answer could not be delivered but has been queued: the user's
+     * decision is recorded, so the dialog should stop looking pending even though
+     * the daemon has not been told yet. When the queue eventually delivers it, the
+     * server's own state catches up.
+     */
+    fun clearActiveDialogLocally() {
+        _dialogState.update { DialogStateMerge.onAnswered(it) }
+    }
+
     fun toggleOption(value: String) {
         _dialogState.update { state ->
             val newOptions = if (state.selectedOptions.contains(value)) {
