@@ -41,6 +41,26 @@ object PronunciationDictionary {
      * These are respellings, not rewrites: the goal is that Kokoro's letter to
      * sound rules land on the intended syllables. Keep them lowercase and
      * hyphenated - that is what the model reads most reliably.
+     *
+     * ## How these were checked (2026-11-17)
+     *
+     * Verified by synthesizing through the live API and transcribing the result
+     * with whisper (base and medium). Two limits are worth knowing before adding
+     * entries:
+     *
+     *  - Whisper is a language model, so it cannot spell invented names. It
+     *    renders "Synapsix" as "Synapse 6" whatever the audio says, because
+     *    "Synapse" is a real word and the trailing sibilant becomes "6".
+     *    Control words transcribe exactly ("refrigerator", "obsidian"), so this
+     *    is a limit on judging invented names, not on the pipeline.
+     *
+     *  - The reliable signal is therefore **relative**: does the respelled clip
+     *    differ from the plain one, and does it get longer? For "Synapsix",
+     *    "sin-app-sicks" is 1.63s against 1.50s plain and produces different
+     *    audio, so the respelling is being applied.
+     *
+     * Entries that measurably work: continuum ("con-tin-yoo-um" transcribes
+     * exactly), nixos ("nicks-oh-ess" transcribes as "NixOS").
      */
     private val phonetic: Map<String, Entry> = mapOf(
         // Ecosystem names
