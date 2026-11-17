@@ -41,6 +41,7 @@ import java.util.UUID
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.continuumstudio.service.DialogTTSHelper
+import com.example.continuumstudio.network.composeComment
 import com.example.continuumstudio.speech.SpeechTrace
 
 // DataStore extension
@@ -1117,20 +1118,30 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
             }
             val comment = state.comment.takeIf { it.isNotBlank() }
 
+            // An attached image has no dedicated field in the daemon's answer
+            // payload (it is `{id, selection, comment}`), so the URL goes into
+            // the comment. Before this, uploadImage stored a URL that nothing
+            // ever read and nothing ever sent - the feature was dead end-to-end.
+            val imageUrl = _attachedImageUrl.value
+            val commentWithImage = composeComment(comment, imageUrl)
+
             // One retry, because the common failure on a moving connection is a
             // transient timeout rather than a refused answer. Reporting the
             // failure matters more than the retry: previously the result was
             // discarded entirely, so a tap could vanish with no indication.
-            var result = wsClient.submitAnswer(serverUrl, dialog.id, selection, comment)
+            var result = wsClient.submitAnswer(serverUrl, dialog.id, selection, commentWithImage)
             if (result is com.example.continuumstudio.network.AnswerOutcome.Failed) {
                 SpeechTrace.warn("answer", "retrying after: ${result.reason}")
                 delay(900)
-                result = wsClient.submitAnswer(serverUrl, dialog.id, selection, comment)
+                result = wsClient.submitAnswer(serverUrl, dialog.id, selection, commentWithImage)
             }
 
             when (result) {
                 is com.example.continuumstudio.network.AnswerOutcome.Sent -> {
                     SpeechTrace.info("answer", "sent for ${dialog.id.take(8)}")
+                    // The attachment belongs to this dialog; leaving it set would
+                    // silently attach it to the next answer.
+                    _attachedImageUrl.value = null
                 }
                 is com.example.continuumstudio.network.AnswerOutcome.Failed -> {
                     // The answer could not be delivered. Queue it rather than
@@ -1141,7 +1152,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                     val queued = offlineQueue.queueReply(
                         dialogId = dialog.id,
                         selection = selection,
-                        comment = comment ?: "Answered in app while offline",
+                        comment = commentWithImage ?: "Answered in app while offline",
                     )
                     if (queued) {
                         showToast("Offline - answer queued")
