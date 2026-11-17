@@ -66,6 +66,7 @@ fun SettingsScreen(
     
     var showSamsungAudioSetup by remember { mutableStateOf(false) }
     var showAudioDiagnostics by remember { mutableStateOf(false) }
+    var showSpeechSettings by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         viewModel.loadSettings()
     }
@@ -85,6 +86,29 @@ fun SettingsScreen(
     }
     if (showAudioDiagnostics) {
         AudioDiagnosticsScreen(onBack = { showAudioDiagnostics = false })
+        return
+    }
+    if (showSpeechSettings) {
+        // Reads the live audio preferences from the dialog view model, which
+        // owns them - the dialog screen and this screen must never disagree
+        // about the wait budget.
+        val audioWaitMs by dialogViewModel.audioWaitMs.collectAsState()
+        val speechRate by dialogViewModel.ttsSpeed.collectAsState()
+        val autoRead by dialogViewModel.ttsAutoRead.collectAsState()
+        val currentScript by dialogViewModel.currentScript.collectAsState()
+        SpeechSettingsScreen(
+            onBack = { showSpeechSettings = false },
+            waitMs = audioWaitMs,
+            onWaitMsChange = dialogViewModel::setAudioWaitMs,
+            speechRate = speechRate,
+            onSpeechRateChange = dialogViewModel::setTtsSpeed,
+            autoRead = autoRead,
+            onAutoReadChange = dialogViewModel::setTtsAutoRead,
+            currentScript = currentScript,
+            onSpeakPreview = { script ->
+                dialogViewModel.speakScriptPreview(script)
+            },
+        )
         return
     }
 
@@ -245,10 +269,19 @@ fun SettingsScreen(
             }
 
             item {
+                val easyVoiceConfigured = remember { BuildConfig.EASYVOICE_API_KEY.isNotBlank() }
                 SettingsInfo(
                     label = "Fallback",
-                    value = if (BuildConfig.EASYVOICE_API_KEY.isNotBlank())
-                        "Android TTS after 8s" else "Android TTS only"
+                    value = if (easyVoiceConfigured) "Android TTS if generation fails"
+                           else "Android TTS only"
+                )
+            }
+
+            item {
+                SettingsNavigationItem(
+                    label = "Speech settings",
+                    description = "Wait budget, dictionary, script preview",
+                    onClick = { showSpeechSettings = true }
                 )
             }
 

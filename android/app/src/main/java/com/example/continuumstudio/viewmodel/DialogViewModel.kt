@@ -41,6 +41,7 @@ import java.util.UUID
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.continuumstudio.service.DialogTTSHelper
+import com.example.continuumstudio.speech.SpeechTrace
 
 // DataStore extension
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -516,6 +517,18 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     fun unmuteCurrentDialog() {
         _mutedDialogId.value = null
         dialogState.value.activeDialog?.let { speakDialog(it) }
+    }
+
+    /**
+     * Speak an arbitrary compiled script, used by the script preview in
+     * settings.
+     *
+     * Goes through the shared player so pacing, pauses and the media session
+     * behave exactly as they will for a real dialog.
+     */
+    fun speakScriptPreview(script: com.example.continuumstudio.speech.SpeechScript) {
+        SpeechTrace.scriptDetail(script)
+        ttsHelper.audioPlayer.playScript(script, dialogId = null)
     }
 
     fun isCurrentDialogMuted(): Boolean {
