@@ -125,7 +125,15 @@ data class HistoryItem(
     val comment: String? = null,
     val cancelled: Boolean = false,
     @SerialName("created_at") val createdAt: String? = null,
-    @SerialName("completed_at") val completedAt: String? = null,
+    /**
+     * When the dialog was answered.
+     *
+     * The daemon's field is `answered_at`. This class previously expected
+     * `completed_at`, which the daemon never sends, so the value was always null
+     * and the History list silently showed no timestamps at all. Verified against
+     * a live daemon on 2026-11-17.
+     */
+    @SerialName("answered_at") val answeredAt: String? = null,
     val timeout: Int? = null,
     val options: List<ChoiceOption>? = null,
 )

@@ -1397,7 +1397,7 @@ fun HistoryItemCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        item.completedAt?.let { timestamp ->
+                        item.answeredAt?.let { timestamp ->
                             Text(
                                 " • ${formatTimestamp(timestamp)}",
                                 style = MaterialTheme.typography.labelSmall,
