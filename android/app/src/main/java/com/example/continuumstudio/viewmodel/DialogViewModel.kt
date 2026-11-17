@@ -332,6 +332,16 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     init {
+        // Housekeeping for the audio cache. pruneCache was defined but never
+        // called, so every dialog ever spoken stayed on disk indefinitely. Runs
+        // off the main thread because it stats every cached clip.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                com.example.continuumstudio.service.tts.EasyVoiceClient(application).pruneCache()
+            } catch (e: Exception) {
+                Log.d(TAG, "cache prune skipped: ${e.message}")
+            }
+        }
         // Load saved endpoints and TTS settings
         viewModelScope.launch {
             dataStore.data.first().let { prefs ->

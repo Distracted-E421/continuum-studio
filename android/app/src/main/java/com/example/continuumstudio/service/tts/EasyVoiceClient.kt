@@ -65,6 +65,16 @@ class EasyVoiceClient(private val context: Context) {
         private const val CACHE_DIR = "easyvoice"
 
         /**
+         * Bumped whenever the dictionary or script compiler changes in a way
+         * that alters spoken output.
+         *
+         * The cache key used to be `voice|speed|text`, so a pronunciation fix was
+         * invisible for any text already heard: the input string is unchanged, so
+         * the stale clip was served forever. Bump this with the change, not after.
+         */
+        private const val CACHE_SCHEMA_VERSION = 2
+
+        /**
          * HTTP timeouts for one segment.
          *
          * These must exceed the player's wait budget, or the socket gives up
@@ -163,20 +173,37 @@ class EasyVoiceClient(private val context: Context) {
         }
     }
 
-    /** Drop cached audio older than [maxAgeDays]. Cache is unbounded otherwise. */
-    fun pruneCache(maxAgeDays: Int = 30) {
-        val cutoff = System.currentTimeMillis() - maxAgeDays * 24L * 60L * 60L * 1000L
-        cacheDir.listFiles()?.forEach { file ->
-            if (file.isFile && file.lastModified() < cutoff) file.delete()
-        }
-    }
-
     private fun cacheFile(text: String, voice: String, speed: Float): File {
+        // text here is already the compiled *spoken* form, so a dictionary
+        // change usually changes it and busts the cache naturally. The version is
+        // the safety net for changes that do not alter this particular string but
+        // do alter pacing or pauses around it.
         val digest = MessageDigest.getInstance("SHA-256")
-            .digest("$voice|$speed|$text".toByteArray())
+            .digest("v$CACHE_SCHEMA_VERSION|$voice|$speed|$text".toByteArray())
             .joinToString("") { "%02x".format(it) }
         return File(cacheDir, "$digest.mp3")
     }
+
+    /**
+     * Drop cached audio older than [maxAgeDays].
+     *
+     * Previously defined and never called, so the cache grew without bound -
+     * every dialog ever spoken, kept forever, in internal storage.
+     */
+    fun pruneCache(maxAgeDays: Int = 30) {
+        val cutoff = System.currentTimeMillis() - maxAgeDays * 24L * 60L * 60L * 1000L
+        var removed = 0
+        cacheDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.lastModified() < cutoff) {
+                if (file.delete()) removed++
+            }
+        }
+        if (removed > 0) Log.i(TAG, "pruned $removed cached clips older than ${maxAgeDays}d")
+    }
+
+    /** Total bytes held by cached clips, for the settings screen. */
+    fun cacheSizeBytes(): Long =
+        cacheDir.listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
 }
 
 /**

@@ -69,6 +69,16 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
 
         out += "Media volume" to "${am.getStreamVolume(AudioManager.STREAM_MUSIC)} / ${am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)}"
 
+        // Cached clips. Worth surfacing: the cache is what makes a repeated
+        // dialog instant, and it is also the only thing this app accumulates on
+        // disk besides logs.
+        out += "Audio cache" to runCatching {
+            val client = com.example.continuumstudio.service.tts.EasyVoiceClient(context)
+            val bytes = client.cacheSizeBytes()
+            val files = java.io.File(context.cacheDir, "easyvoice").listFiles()?.count { it.isFile } ?: 0
+            "$files clips, ${bytes / 1024} KB"
+        }.getOrDefault("unavailable")
+
         out += "Mode" to when (am.mode) {
             AudioManager.MODE_NORMAL -> "NORMAL"
             AudioManager.MODE_IN_CALL -> "IN_CALL"
