@@ -28,9 +28,12 @@ import java.util.Locale
  * shared player.
  *
  * Android's own [TextToSpeech] remains only as a last-resort fallback for when
- * EasyVoice is unconfigured or a segment genuinely cannot be generated.
+ * EasyVoice is unconfigured or a segment genuinely cannot be generated. That
+ * engine is shared too ([FallbackTts]) - three helpers each constructing one
+ * meant three live TTS engines and three `onInit` callbacks, which is the same
+ * class of bug the shared player fixed.
  */
-class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListener {
+class DialogTTSHelper(private val context: Context) {
 
     /**
      * The shared player. Every helper in the process talks to this one, so the
@@ -39,11 +42,11 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
      */
     val audioPlayer: DialogAudioPlayer = AudioHub.player(context)
 
-    private var tts: TextToSpeech? = null
-    private var isInitialized = false
+    private var _isSpeaking = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val isSpeaking: StateFlow<Boolean> get() = _isSpeaking
 
-    private val _isSpeaking = kotlinx.coroutines.flow.MutableStateFlow(false)
-    val isSpeaking: StateFlow<Boolean> = _isSpeaking
+    /** True once the shared fallback engine is usable. */
+    private val ttsAvailable: Boolean get() = FallbackTts.isReady(context)
 
     /** Live playback state, shared across surfaces. */
     val playback: StateFlow<PlaybackState?> get() = audioPlayer.playback
@@ -54,35 +57,12 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
     var readOptionsAloud = true
 
     init {
-        tts = TextToSpeech(context, this)
         // Connect the media session up front: holding one is what keeps Android
         // Auto from dropping back to the car's own radio between dialogs.
         DialogMediaService.start(context)
         MediaSessionBridge.connect(context) { ok ->
             audioPlayer.preferMediaSession = ok
             Log.i(TAG, "media session connected=$ok")
-        }
-    }
-
-    override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            val result = tts?.setLanguage(Locale.getDefault())
-            isInitialized = when (result) {
-                TextToSpeech.LANG_MISSING_DATA, TextToSpeech.LANG_NOT_SUPPORTED -> {
-                    Log.w(TAG, "TTS language not supported, trying English")
-                    tts?.setLanguage(Locale.US)
-                    true
-                }
-                else -> true
-            }
-            if (isInitialized) {
-                tts?.setSpeechRate(speechRate)
-                setupUtteranceListener()
-                Log.i(TAG, "fallback TTS initialised")
-            }
-        } else {
-            Log.e(TAG, "TTS initialisation failed: $status")
-            isInitialized = false
         }
     }
 
@@ -252,78 +232,42 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
     /** Stop speech on this surface. */
     fun stop() {
         audioPlayer.stop()
-        tts?.stop()
+        FallbackTts.stop()
         _isSpeaking.value = false
     }
 
     /**
      * Release this surface.
      *
-     * Does NOT shut the shared player down - another surface may still need it.
+     * Does NOT shut the shared player or the shared fallback engine down -
+     * another surface may still need them.
      */
     fun shutdown() {
         stop()
-        tts?.shutdown()
-        tts = null
-        isInitialized = false
     }
 
     // --- Android TTS fallback --------------------------------------------
 
-    private fun setupUtteranceListener() {
-        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                _isSpeaking.value = true
-            }
-
-            override fun onDone(utteranceId: String?) {
-                _isSpeaking.value = false
-            }
-
-            override fun onError(utteranceId: String?) {
-                Log.e(TAG, "TTS error for utterance: $utteranceId")
-                _isSpeaking.value = false
-            }
-
-            @Deprecated("Deprecated in API 21")
-            override fun onError(utteranceId: String?, errorCode: Int) {
-                Log.e(TAG, "TTS error for utterance $utteranceId: $errorCode")
-                _isSpeaking.value = false
-            }
-        })
-    }
-
-    /** Android TTS path. Only used when EasyVoice cannot deliver at all. */
+    /**
+     * Android TTS path. Only used when EasyVoice cannot deliver at all.
+     *
+     * Delegates to [FallbackTts], which owns the one engine in the process.
+     */
     private fun speakWithSystemTts(text: String, onComplete: (() -> Unit)? = null) {
-        if (!isInitialized) {
-            Log.w(TAG, "fallback TTS not initialised; cannot speak")
-            onComplete?.invoke()
-            return
-        }
         if (text.isBlank()) {
             onComplete?.invoke()
             return
         }
-        if (onComplete != null) {
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    _isSpeaking.value = true
-                }
-
-                override fun onDone(utteranceId: String?) {
-                    _isSpeaking.value = false
-                    onComplete()
-                    setupUtteranceListener()
-                }
-
-                override fun onError(utteranceId: String?) {
-                    _isSpeaking.value = false
-                    onComplete()
-                    setupUtteranceListener()
-                }
-            })
+        if (!ttsAvailable) {
+            Log.w(TAG, "fallback TTS not initialised; cannot speak")
+            onComplete?.invoke()
+            return
         }
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "dialog-${System.currentTimeMillis()}")
+        _isSpeaking.value = true
+        FallbackTts.speak(context, text, speechRate) {
+            _isSpeaking.value = false
+            onComplete?.invoke()
+        }
     }
 
     companion object {

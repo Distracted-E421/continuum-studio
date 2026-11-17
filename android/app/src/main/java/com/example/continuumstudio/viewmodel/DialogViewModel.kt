@@ -69,6 +69,16 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     private val ttsHelper = DialogTTSHelper(application)
     private var ttsReady = true
     private var lastSpokenDialogId: String? = null
+
+    /**
+     * Dialogs already read, so a reconnect cannot restart one.
+     *
+     * A transient disconnect clears `activeDialog`, which would otherwise reset
+     * the dedupe guard and cause the same dialog to be read again from the top
+     * when the connection returns. Bounded because it only needs to cover the
+     * handful of dialogs in flight during a reconnect.
+     */
+    private val readDialogIds = ArrayDeque<String>()
     
     private val _ttsState = MutableStateFlow(TtsState())
     val ttsState: StateFlow<TtsState> = _ttsState.asStateFlow()
@@ -399,11 +409,30 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
             dialogState.collect { state ->
                 val dialog = state.activeDialog
                 if (dialog == null) {
+                    // A dialog going away must silence its audio.
+                    //
+                    // Without this, answering a dialog left it being read aloud,
+                    // and the next dialog's read then competed with the ghost of
+                    // the previous one. Submitting an answer is the clearest
+                    // possible signal that the user is done listening.
+                    if (lastSpokenDialogId != null) {
+                        SpeechTrace.info("dialog", "cleared; stopping audio")
+                        ttsHelper.stop()
+                    }
                     _currentScript.value = null
-                    lastSpokenDialogId = null
+                    // Deliberately NOT clearing lastSpokenDialogId or the read
+                    // set: a reconnect nulls the dialog for a moment, and
+                    // forgetting what was read would restart it from the top.
                     return@collect
                 }
                 if (dialog.id == lastSpokenDialogId) return@collect
+                if (dialog.id in readDialogIds) {
+                    // Reconnected to a dialog that was already read; show it but
+                    // stay quiet.
+                    SpeechTrace.info("dialog", "${dialog.id.take(8)} already read; not repeating")
+                    lastSpokenDialogId = dialog.id
+                    return@collect
+                }
                 lastSpokenDialogId = dialog.id
 
                 val script = ttsHelper.compileScript(
@@ -416,12 +445,19 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
 
                 val muted = _mutedDialogId.value == dialog.id
                 if (_ttsEnabled.value && _ttsAutoRead.value && !muted) {
+                    markRead(dialog.id)
                     speakDialog(dialog)
                 } else {
                     Log.d(TAG, "dialog ${dialog.id} arrived; not speaking (enabled=${_ttsEnabled.value} auto=${_ttsAutoRead.value} muted=$muted)")
                 }
             }
         }
+    }
+
+    private fun markRead(dialogId: String) {
+        if (dialogId in readDialogIds) return
+        readDialogIds.addLast(dialogId)
+        while (readDialogIds.size > MAX_READ_TRACKED) readDialogIds.removeFirst()
     }
 
     /**
@@ -1019,9 +1055,13 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Submit the current dialog answer
+     * Submit the current dialog answer.
      */
     fun submitAnswer() {
+        // Stop reading the moment an answer is committed rather than waiting
+        // for the server to confirm. The user has decided; continuing to talk
+        // over their decision is what made submitted dialogs feel unresponsive.
+        ttsHelper.stop()
         viewModelScope.launch {
             val state = dialogState.value
             val dialog = state.activeDialog ?: return@launch
@@ -1326,6 +1366,14 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
 
     companion object {
         private const val TAG = "DialogViewModel"
+
+        /**
+         * How many dialog ids to remember as read.
+         *
+         * Only needs to cover dialogs in flight across a reconnect, so this is
+         * small on purpose.
+         */
+        private const val MAX_READ_TRACKED = 24
     }
 }
 
