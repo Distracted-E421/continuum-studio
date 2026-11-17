@@ -93,3 +93,56 @@ cd core && mix deps.get && mix compile
 ## Learned Workspace Facts
 
 - Primary Continuum Studio Android deploy target is Samsung Galaxy S24 (Sep 2026; replaced S23 Ultra with broken display)
+
+## Android dialog + audio pipeline (2026-11-17)
+
+Hard-won knowledge from a full overhaul of the dialog page and speech pipeline.
+
+### Build
+
+- JDK is not on PATH: `export JAVA_HOME=/nix/store/1slz0vmmgsd7p6i4c0jaywkpw56wl2yg-openjdk-21.0.12+8` and put `$JAVA_HOME/bin` first. SDK is at `~/Android/Sdk` (`local.properties`).
+- `./gradlew --offline` works for `compileDebugKotlin`, `testDebugUnitTest`, `assembleDebug`. JUnit is not in the offline cache; the first test run needs network.
+- Unit tests are plain JUnit in `app/src/test`. 80 of them, all pure (no Robolectric).
+
+### Release / OTA
+
+- Releases are **debug-signed** (no signing config in `build.gradle.kts`), so installs are interchangeable but cannot be published to Play.
+- In-app OTA reads **GitHub** (`OtaUpdateManager`). The Forgejo API 404s for this repo, so the Gitea fallback never fires — GitHub is the only working path.
+- Asset must be named `continuum-<versionName>.apk`; versionCode must equal `major*10000+minor*100+patch` or every check reports an update.
+- Verify a release really contains the change by unzipping and grepping the dex (`unzip -p x.apk 'classes*.dex' | strings | grep -c <Symbol>`). A build log saying success is not proof; one release shipped a round behind.
+
+### Audio pipeline invariants
+
+- `AudioHub` owns **one** `DialogAudioPlayer`; `FallbackTts` owns **one** `TextToSpeech`. `DialogTTSHelper` is constructed by three surfaces (ViewModel, notification service, AutoReplyService) — never give it per-instance engines. A prior commit claimed one TTS engine while three existed.
+- Three OkHttp clients exist on purpose: WebSocket (`readTimeout(0)`, correct for a quiet socket), requests (15/20/20), uploads (20/120/120). Do not make HTTP calls on the WebSocket client — that inherited an infinite timeout and answers could hang forever.
+- `DialogAudioPlayer.playScript` synthesizes **segment by segment**, so playback starts before the whole dialog exists. Pauses are local `delay()` between segments.
+
+### EasyVoice API (measured against the live service)
+
+- **It does not honour SSML.** `<break time="3s"/>` returns 3.0s of the word being spoken; `<speak>` wrappers make clips *longer*. `z0` empty input is HTTP 400. Pauses must be silence between segments.
+- Text-level levers that work: punctuation (a full stop ≈ +0.3s), blank lines (≈ +1.15s), and `speed`. Ellipses and em-dashes do nothing.
+- Voices verified working: `af_heart`, `af_bella`, `af_nicole`, `am_fenrir`, `am_michael`, `bf_emma`, `bm_fable`.
+- Audio is cached on disk keyed by `v<CACHE_SCHEMA_VERSION>|voice|speed|spokenText`. **Bump `CACHE_SCHEMA_VERSION` whenever the dictionary or compiler changes**, or the fix is inaudible for anything already generated.
+
+### Judging pronunciation without a device
+
+- `tools/check-pronunciation.sh` synthesizes a phrase, transcribes it with `whisper-cli`, and compares against the plain spelling. Needs `WHISPER_CLI` (nix: `whisper-cpp`) and `~/.cache/whisper/ggml-base.en.bin`.
+- Whisper is a language model and **cannot spell invented names**: "Synapsix" always transcribes as "Synapse 6" whatever the audio says. Use the controls ("refrigerator", "obsidian" transcribe exactly) to know the tool is working, and judge project names by *relative* signals: does the respelled clip differ and get longer?
+- Entries verified this way: `continuum`→"con-tin-yoo-um", `nixos`→"nicks-oh-ess", `phosphor`→"foss for", `forgejo`→"forge joe" (plain "Forgejo" gave "ForZia"/"Furtier").
+
+### Daemon contracts (checked against a live daemon on :8080)
+
+- `/api/answer` returns **HTTP 200 with `success:false`** for logical failures, so HTTP status says nothing about retryability. Stale-dialog messages: "No active dialog", "Dialog not found or not active", "Dialog not found or already responded" — all mean "gone", not "failed" (`String.isStaleDialogError()`).
+- History uses `answered_at` (not `completed_at`); the app read the wrong name and silently showed no timestamps. `options` is never sent.
+- WebSocket frames are a flat object tagged `type`: `initial`, `NewDialog`, `DialogCompleted`, `QueueUpdate`, `HoldModeChanged`. There is **no HTTP POST that creates dialogs** — creation goes over D-Bus, so you cannot trigger one with curl.
+- `DialogContractTest` pins these using payloads captured verbatim from the daemon.
+
+### State rules that must not regress
+
+- `DialogStateMerge.onFetched` clears draft input only when the dialog *identity* changes. Otherwise a comment typed for one dialog gets submitted against the next.
+- `readDialogIds` in `DialogViewModel` survives a null `activeDialog`, so a reconnect does not restart a read from the top.
+- Answering stops playback immediately rather than waiting for server confirmation.
+
+### Dialog audio ordering (owner decision)
+
+- Prompt first, then options, even though a real dialog is ~21s and options start ~17s in. Do not reorder. The escape hatch is the "Options" button in the audio strip (`skipToOptions`), which restarts at the first OPTION segment without synthesizing the skipped ones.
