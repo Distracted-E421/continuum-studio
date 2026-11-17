@@ -119,6 +119,30 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     )
     val audioWaitMs: StateFlow<Long> = _audioWaitMs.asStateFlow()
 
+    /** Synthesis voice id, e.g. "af_heart". */
+    private val _voice = MutableStateFlow(
+        com.example.continuumstudio.service.tts.EasyVoiceClient.DEFAULT_VOICE
+    )
+    val voice: StateFlow<String> = _voice.asStateFlow()
+
+    /** Set the synthesis voice and persist it. */
+    fun setVoice(id: String) {
+        val valid = com.example.continuumstudio.service.tts.EasyVoiceClient.VOICES
+            .any { it.id == id }
+        val chosen = if (valid) id
+        else com.example.continuumstudio.service.tts.EasyVoiceClient.DEFAULT_VOICE
+        _voice.value = chosen
+        ttsHelper.audioPlayer.voice = chosen
+        viewModelScope.launch {
+            dataStore.edit { prefs -> prefs[PrefsKeys.TTS_VOICE] = chosen }
+        }
+        // Re-read the active dialog in the new voice so the change is audible
+        // immediately rather than at the next dialog.
+        if (!isCurrentDialogMuted()) {
+            dialogState.value.activeDialog?.let { speakDialog(it) }
+        }
+    }
+
     // Exposed state
     val connectionState = wsClient.connectionState
     val dialogState = wsClient.dialogState
@@ -175,6 +199,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         val TTS_AUTO_READ = booleanPreferencesKey("tts_auto_read")
         val TTS_SPEED = floatPreferencesKey("tts_speed")
         val AUDIO_WAIT_MS = androidx.datastore.preferences.core.longPreferencesKey("audio_wait_ms")
+        val TTS_VOICE = stringPreferencesKey("tts_voice")
         val USE_COORDINATOR_V2 = booleanPreferencesKey("use_coordinator_v2")
     }
     
@@ -323,6 +348,9 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                 _audioWaitMs.value = prefs[PrefsKeys.AUDIO_WAIT_MS]
                     ?: com.example.continuumstudio.service.tts.DialogAudioPlayer.DEFAULT_WAIT_MS
                 ttsHelper.setGenerationTimeout(_audioWaitMs.value)
+                _voice.value = prefs[PrefsKeys.TTS_VOICE]
+                    ?: com.example.continuumstudio.service.tts.EasyVoiceClient.DEFAULT_VOICE
+                ttsHelper.audioPlayer.voice = _voice.value
             }
         }
         
@@ -529,6 +557,28 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     fun speakScriptPreview(script: com.example.continuumstudio.speech.SpeechScript) {
         SpeechTrace.scriptDetail(script)
         ttsHelper.audioPlayer.playScript(script, dialogId = null)
+    }
+
+    /**
+     * Speak a short sample in [voiceId] without changing the saved voice.
+     *
+     * Uses the same player and dictionary as real dialogs, so the sample is a
+     * genuine preview: if a voice mispronounces "Synapsix" here, it will there.
+     */
+    fun previewVoice(voiceId: String) {
+        val script = com.example.continuumstudio.speech.SpeechScriptCompiler.compile(
+            title = "",
+            prompt = "Synapsix says: this is how Continuum Studio will read your dialogs.",
+            dialogType = "text",
+            includeInstructions = false,
+        )
+        val player = ttsHelper.audioPlayer
+        val previous = player.voice
+        player.voice = voiceId
+        player.playScript(script, dialogId = null) {
+            // Restore only if the user did not commit this voice while it played.
+            if (player.voice == voiceId && _voice.value != voiceId) player.voice = previous
+        }
     }
 
     fun isCurrentDialogMuted(): Boolean {

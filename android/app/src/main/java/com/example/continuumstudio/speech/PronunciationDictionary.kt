@@ -100,6 +100,9 @@ object PronunciationDictionary {
         "@" to Entry("at"),
 
         // File types: say the words, not the letters
+        ".gradle.kts" to Entry("Gradle Kotlin script"),
+        ".d.ts" to Entry("TypeScript type definition"),
+        ".tar.gz" to Entry("compressed archive"),
         ".kt" to Entry("Kotlin file"),
         ".kts" to Entry("Kotlin script"),
         ".rs" to Entry("Rust file"),
@@ -118,7 +121,6 @@ object PronunciationDictionary {
 
         // Common technical abbreviations
         "api" to Entry("A P I"),
-        "apis" to Entry("A P Is"),
         "url" to Entry("U R L"),
         "urls" to Entry("U R Ls"),
         "ui" to Entry("U I"),
@@ -193,6 +195,18 @@ object PronunciationDictionary {
         }
         return phoneticRows + expansionRows
     }
+
+    /**
+     * File extensions recognised in ordinary prose, longest first at use site.
+     *
+     * Compound extensions are included so "build.gradle.kts" resolves to a
+     * Kotlin script rather than to a generic ".kts".
+     */
+    val EXTENSIONS: List<String> = listOf(
+        ".gradle.kts", ".d.ts", ".tar.gz",
+        ".kt", ".kts", ".rs", ".nix", ".ncl", ".ex", ".exs", ".zig", ".md",
+        ".json", ".yaml", ".yml", ".toml", ".sh", ".apk", ".ncl",
+    )
 
     /** True when [word] has an explicit pronunciation override. */
     fun hasPronunciation(word: String): Boolean = phonetic.containsKey(word.lowercase())

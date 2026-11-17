@@ -96,6 +96,7 @@ fun SettingsScreen(
         val speechRate by dialogViewModel.ttsSpeed.collectAsState()
         val autoRead by dialogViewModel.ttsAutoRead.collectAsState()
         val currentScript by dialogViewModel.currentScript.collectAsState()
+        val voice by dialogViewModel.voice.collectAsState()
         SpeechSettingsScreen(
             onBack = { showSpeechSettings = false },
             waitMs = audioWaitMs,
@@ -108,6 +109,9 @@ fun SettingsScreen(
             onSpeakPreview = { script ->
                 dialogViewModel.speakScriptPreview(script)
             },
+            voice = voice,
+            onVoiceChange = dialogViewModel::setVoice,
+            onPreviewVoice = dialogViewModel::previewVoice,
         )
         return
     }

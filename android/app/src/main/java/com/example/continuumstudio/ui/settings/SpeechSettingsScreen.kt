@@ -50,6 +50,9 @@ fun SpeechSettingsScreen(
     onAutoReadChange: (Boolean) -> Unit,
     currentScript: SpeechScript? = null,
     onSpeakPreview: (SpeechScript) -> Unit = {},
+    voice: String = com.example.continuumstudio.service.tts.EasyVoiceClient.DEFAULT_VOICE,
+    onVoiceChange: (String) -> Unit = {},
+    onPreviewVoice: (String) -> Unit = {},
 ) {
     var showDictionary by remember { mutableStateOf(false) }
     var dictionaryQuery by remember { mutableStateOf("") }
@@ -104,6 +107,45 @@ fun SpeechSettingsScreen(
                         onClick = { onWaitMsChange(preset) },
                         label = { Text("${preset / 1000}s", fontSize = 12.sp) },
                     )
+                }
+            }
+
+            HorizontalDivider()
+
+            // --- Voice -----------------------------------------------------
+
+            Text("Voice", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Tap a voice to select it, or the sample button to hear it first. " +
+                    "Changing voice re-reads the current dialog.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            com.example.continuumstudio.service.tts.EasyVoiceClient.VOICES.forEach { option ->
+                val selected = option.id == voice
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onVoiceChange(option.id) }
+                        .padding(vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = selected, onClick = { onVoiceChange(option.id) })
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            option.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                        Text(
+                            "${option.accent} · ${option.note}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = { onPreviewVoice(option.id) }) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Hear ${option.name}")
+                    }
                 }
             }
 

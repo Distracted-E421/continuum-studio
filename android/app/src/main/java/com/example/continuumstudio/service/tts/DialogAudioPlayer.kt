@@ -61,6 +61,15 @@ class DialogAudioPlayer(private val context: Context) {
         const val EASYVOICE_WAIT_MS = DEFAULT_WAIT_MS
     }
 
+    /**
+     * Voice used for synthesis.
+     *
+     * Changing this invalidates the on-disk cache key naturally, because the
+     * cache is keyed by voice.
+     */
+    @Volatile
+    var voice: String = EasyVoiceClient.DEFAULT_VOICE
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val easyVoice = EasyVoiceClient(context)
@@ -138,7 +147,9 @@ class DialogAudioPlayer(private val context: Context) {
                 publishGenerating(index, script.segments.size, segment.kind.name.lowercase())
 
                 val startedAt = System.currentTimeMillis()
-                val file = withTimeoutOrNull(waitMs) { easyVoice.synthesize(segment.spoken) }
+                val file = withTimeoutOrNull(waitMs) {
+                    easyVoice.synthesize(segment.spoken, voice = voice)
+                }
                 val elapsed = System.currentTimeMillis() - startedAt
                 if (file == null) {
                     SpeechTrace.warn(
@@ -225,7 +236,7 @@ class DialogAudioPlayer(private val context: Context) {
         if (!easyVoice.isConfigured) return false
         if (text.isBlank()) return false
 
-        val file = withTimeoutOrNull(waitMs) { easyVoice.synthesize(text) }
+        val file = withTimeoutOrNull(waitMs) { easyVoice.synthesize(text, voice = voice) }
         if (file == null) {
             Log.d(TAG, "EasyVoice unavailable within ${waitMs}ms; caller should fall back")
             return false

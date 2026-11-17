@@ -37,6 +37,30 @@ class EasyVoiceClient(private val context: Context) {
         /** Kokoro voice. `af_heart` is the warmest general-purpose English voice. */
         const val DEFAULT_VOICE = "af_heart"
 
+        /**
+         * Voices offered in the app.
+         *
+         * All of these were verified against the live API (HTTP 200 with audio)
+         * rather than copied from documentation. Kokoro's own docs list more,
+         * but offering a voice that 400s would be worse than a shorter list.
+         *
+         * The trailing letter in Kokoro's convention is a quality grade, which is
+         * why some are marked as a secondary option rather than equal choices.
+         */
+        val VOICES: List<Voice> = listOf(
+            Voice("af_heart", "Heart", "American, female", "warmest general-purpose"),
+            Voice("af_bella", "Bella", "American, female", "brighter"),
+            Voice("af_nicole", "Nicole", "American, female", "lower, softer"),
+            Voice("am_fenrir", "Fenrir", "American, male", "deeper"),
+            Voice("am_michael", "Michael", "American, male", "neutral"),
+            Voice("bf_emma", "Emma", "British, female", "clear"),
+            Voice("bm_fable", "Fable", "British, male", "measured"),
+        )
+
+        /** Human-friendly name for a voice id, falling back to the raw id. */
+        fun voiceLabel(id: String): String =
+            VOICES.firstOrNull { it.id == id }?.name ?: id
+
         /** Fair-use characters are 10M per rolling 30 days on Pro. */
         private const val CACHE_DIR = "easyvoice"
 
@@ -154,3 +178,18 @@ class EasyVoiceClient(private val context: Context) {
         return File(cacheDir, "$digest.mp3")
     }
 }
+
+/**
+ * A selectable synthesis voice.
+ *
+ * @param id the API voice identifier, e.g. "af_heart"
+ * @param name short label for the UI
+ * @param accent language and gender summary
+ * @param note what makes this voice distinct, for choosing between them
+ */
+data class Voice(
+    val id: String,
+    val name: String,
+    val accent: String,
+    val note: String,
+)

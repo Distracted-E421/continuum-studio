@@ -376,6 +376,11 @@ object SpeechScriptCompiler {
             return "$prefix$number $unit$suffix"
         }
 
+        // Bare filenames in ordinary prose, e.g. "build.gradle.kts". Left alone
+        // this gets read as "build dot gradle dot kts", which is both long and
+        // meaningless; the extension is the part that carries information.
+        fileNameSpoken(core)?.let { return "$prefix$it$suffix" }
+
         PronunciationDictionary.lookup(core)?.let { entry ->
             return "$prefix${entry.spoken}$suffix"
         }
@@ -384,6 +389,34 @@ object SpeechScriptCompiler {
         if (THOUSANDS.matches(core)) return "$prefix${core.replace(",", "")}$suffix"
 
         return token
+    }
+
+    /**
+     * Speak a bare filename by its type rather than spelling out its dots.
+     *
+     * "build.gradle.kts" -> "build.gradle Kotlin script". The base name is kept
+     * because it is usually meaningful ("DialogScreen", "flake"), while the
+     * extension becomes words.
+     *
+     * Returns null when the token is not a recognised filename, so ordinary
+     * dotted words ("v1.2", "example.com") are left to other rules.
+     */
+    private fun fileNameSpoken(token: String): String? {
+        if (!token.contains('.')) return null
+        // Longest matching extension that the dictionary actually knows wins,
+        // so ".gradle.kts" beats ".kts". Falling through to a shorter extension
+        // matters: a recognised-but-unmapped extension must not silently drop
+        // the whole filename.
+        val candidate = PronunciationDictionary.EXTENSIONS
+            .filter { token.endsWith(it, ignoreCase = true) && token.length > it.length }
+            .sortedByDescending { it.length }
+            .firstOrNull { PronunciationDictionary.lookup(it) != null }
+            ?: return null
+        val type = PronunciationDictionary.lookup(candidate)?.spoken ?: return null
+        val base = token.dropLast(candidate.length)
+        // A name with no readable base is not a filename worth announcing.
+        if (base.isBlank() || base.none { it.isLetter() }) return null
+        return "$base $type"
     }
 
     /** A word with no markdown handling, used for fragments we already cleaned. */
