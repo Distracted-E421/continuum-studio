@@ -21,6 +21,10 @@ import java.io.File
  * car to its own tuner - the "radio static" symptom.
  *
  * Connection failures are non-fatal: callers fall back to local playback.
+ *
+ * The transport accessors below exist so [DialogAudioPlayer] can drive either
+ * backend through one interface. They all return neutral values when no
+ * controller is connected, which keeps the fallback path simple.
  */
 object MediaSessionBridge {
 
@@ -31,6 +35,9 @@ object MediaSessionBridge {
 
     @Volatile
     private var connecting: ListenableFuture<MediaController>? = null
+
+    /** True when a controller exists and its session is live. */
+    fun isConnected(): Boolean = controller?.isConnected == true
 
     /**
      * Queue [file] on the media session.
@@ -69,6 +76,43 @@ object MediaSessionBridge {
             Log.e(TAG, "play failed: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
+    }
+
+    // --- Transport (neutral when disconnected) ----------------------------
+
+    fun isPlaying(): Boolean = controller?.isPlaying == true
+
+    /** True when the current item has finished and nothing is queued. */
+    fun hasEnded(): Boolean {
+        val c = controller ?: return true
+        return c.playbackState == androidx.media3.common.Player.STATE_ENDED
+    }
+
+    fun durationMs(): Int = controller?.duration?.takeIf { it > 0 }?.toInt() ?: 0
+
+    fun positionMs(): Int = controller?.currentPosition?.toInt() ?: 0
+
+    fun seekTo(positionMs: Long) {
+        controller?.seekTo(positionMs.coerceAtLeast(0))
+    }
+
+    fun pause() {
+        controller?.pause()
+    }
+
+    fun resume() {
+        controller?.play()
+    }
+
+    /**
+     * Pause only if something is actually playing.
+     *
+     * Used by [DialogAudioPlayer.stop] so a plain stop does not tear down a
+     * session that another surface is using.
+     */
+    fun pauseSafely() {
+        val c = controller ?: return
+        if (c.isConnected && c.isPlaying) c.pause()
     }
 
     /**

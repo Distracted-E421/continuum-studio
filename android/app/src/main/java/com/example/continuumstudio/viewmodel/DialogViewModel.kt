@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -81,6 +82,42 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     private val _ttsSpeed = MutableStateFlow(1.0f)
     val ttsSpeed: StateFlow<Float> = _ttsSpeed.asStateFlow()
 
+    /**
+     * Live playback state from the shared audio engine.
+     *
+     * Exposed so the dialog screen can render transport controls. Because
+     * `AudioHub` owns a single player, this reflects audio started from anywhere
+     * - this screen, a notification, or Android Auto.
+     */
+    val playbackState: StateFlow<com.example.continuumstudio.service.tts.PlaybackState?> =
+        ttsHelper.playback
+
+    /**
+     * Compiled script for the active dialog.
+     *
+     * Built the moment a dialog arrives, before any audio is requested, so the
+     * annotated read is inspectable even when muted or offline.
+     */
+    private val _currentScript = MutableStateFlow<com.example.continuumstudio.speech.SpeechScript?>(null)
+    val currentScript: StateFlow<com.example.continuumstudio.speech.SpeechScript?> =
+        _currentScript.asStateFlow()
+
+    /**
+     * One-shot mute for the dialog that is currently showing.
+     *
+     * Distinct from [setTtsEnabled]: muting one dialog should not silently
+     * disable reading for the next, which would be a surprising state to end up
+     * in while driving.
+     */
+    private val _mutedDialogId = MutableStateFlow<String?>(null)
+    val mutedDialogId: StateFlow<String?> = _mutedDialogId.asStateFlow()
+
+    /** How long one segment may take before the voice falls back. */
+    private val _audioWaitMs = MutableStateFlow(
+        com.example.continuumstudio.service.tts.DialogAudioPlayer.DEFAULT_WAIT_MS
+    )
+    val audioWaitMs: StateFlow<Long> = _audioWaitMs.asStateFlow()
+
     // Exposed state
     val connectionState = wsClient.connectionState
     val dialogState = wsClient.dialogState
@@ -136,6 +173,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         val TTS_ENABLED = booleanPreferencesKey("tts_enabled")
         val TTS_AUTO_READ = booleanPreferencesKey("tts_auto_read")
         val TTS_SPEED = floatPreferencesKey("tts_speed")
+        val AUDIO_WAIT_MS = androidx.datastore.preferences.core.longPreferencesKey("audio_wait_ms")
         val USE_COORDINATOR_V2 = booleanPreferencesKey("use_coordinator_v2")
     }
     
@@ -281,6 +319,9 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                 _ttsEnabled.value = prefs[PrefsKeys.TTS_ENABLED] ?: false
                 _ttsAutoRead.value = prefs[PrefsKeys.TTS_AUTO_READ] ?: true
                 _ttsSpeed.value = prefs[PrefsKeys.TTS_SPEED] ?: 1.0f
+                _audioWaitMs.value = prefs[PrefsKeys.AUDIO_WAIT_MS]
+                    ?: com.example.continuumstudio.service.tts.DialogAudioPlayer.DEFAULT_WAIT_MS
+                ttsHelper.setGenerationTimeout(_audioWaitMs.value)
             }
         }
         
@@ -318,18 +359,54 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         
-        // Auto-speak new dialogs when TTS is enabled
+        // Compile the script the moment a dialog arrives, and read it aloud if
+        // reading is enabled.
+        //
+        // Compilation is separated from playback on purpose: the script is
+        // wanted even when muted (it is shown in the app), and it must exist
+        // before the first audio request so playback can start on segment one
+        // instead of waiting for the whole dialog.
         viewModelScope.launch {
             dialogState.collect { state ->
                 val dialog = state.activeDialog
-                if (dialog != null && 
-                    _ttsEnabled.value && 
-                    _ttsAutoRead.value &&
-                    dialog.id != lastSpokenDialogId) {
-                    lastSpokenDialogId = dialog.id
+                if (dialog == null) {
+                    _currentScript.value = null
+                    lastSpokenDialogId = null
+                    return@collect
+                }
+                if (dialog.id == lastSpokenDialogId) return@collect
+                lastSpokenDialogId = dialog.id
+
+                val script = ttsHelper.compileScript(
+                    title = dialog.title,
+                    prompt = dialog.prompt,
+                    dialogType = dialog.dialogType.type,
+                    optionsJson = optionsJsonOf(dialog),
+                )
+                _currentScript.value = script
+
+                val muted = _mutedDialogId.value == dialog.id
+                if (_ttsEnabled.value && _ttsAutoRead.value && !muted) {
                     speakDialog(dialog)
+                } else {
+                    Log.d(TAG, "dialog ${dialog.id} arrived; not speaking (enabled=${_ttsEnabled.value} auto=${_ttsAutoRead.value} muted=$muted)")
                 }
             }
+        }
+    }
+
+    /**
+     * Serialize a dialog's options to JSON for the speech and notification
+     * paths, which take the same shape as the daemon's WebSocket payload.
+     */
+    private fun optionsJsonOf(dialog: DialogDetails): String? {
+        val options = dialog.dialogType.options ?: return null
+        if (options.isEmpty()) return null
+        return options.joinToString(",", "[", "]") { o ->
+            org.json.JSONObject()
+                .put("value", o.value)
+                .put("label", o.label)
+                .toString()
         }
     }
     
@@ -390,22 +467,13 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun speakDialog(dialog: DialogDetails) {
         if (!_ttsEnabled.value) return
-
-        val optionsJson = dialog.dialogType.options?.let { options ->
-            options.joinToString(",", "[", "]") { o ->
-                org.json.JSONObject()
-                    .put("value", o.value)
-                    .put("label", o.label)
-                    .toString()
-            }
-        }
-
         ttsHelper.speakDialog(
             title = dialog.title,
             prompt = dialog.prompt,
             dialogType = dialog.dialogType.type,
-            optionsJson = optionsJson,
+            optionsJson = optionsJsonOf(dialog),
             priority = "normal",
+            dialogId = dialog.id,
         )
     }
 
@@ -415,6 +483,61 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     fun stopSpeaking() {
         ttsHelper.stop()
         _ttsState.value = _ttsState.value.copy(isSpeaking = false)
+    }
+
+    // --- Audio transport (used by the dialog screen's action dock) --------
+
+    fun togglePlaybackPause() = ttsHelper.togglePauseAudio()
+
+    fun pausePlayback() = ttsHelper.pauseAudio()
+
+    fun resumePlayback() = ttsHelper.resumeAudio()
+
+    fun seekPlayback(fraction: Float) = ttsHelper.seekAudio(fraction)
+
+    /**
+     * Mute just the dialog that is on screen right now.
+     *
+     * The id is remembered so a re-render or a reconnect cannot restart the
+     * read the user just silenced. Advancing to a different dialog clears it,
+     * which is what makes this "mute this one" rather than "stop reading".
+     */
+    fun muteCurrentDialog() {
+        val dialog = dialogState.value.activeDialog
+        if (dialog == null) {
+            stopSpeaking()
+            return
+        }
+        _mutedDialogId.value = dialog.id
+        stopSpeaking()
+    }
+
+    /** Undo [muteCurrentDialog] for the dialog on screen. */
+    fun unmuteCurrentDialog() {
+        _mutedDialogId.value = null
+        dialogState.value.activeDialog?.let { speakDialog(it) }
+    }
+
+    fun isCurrentDialogMuted(): Boolean {
+        val id = dialogState.value.activeDialog?.id ?: return false
+        return _mutedDialogId.value == id
+    }
+
+    /**
+     * Set how long a segment may take to generate before falling back.
+     *
+     * Exposed as a preference because the right value depends on the link: wifi
+     * at home is fast, a car on Tailscale is not.
+     */
+    fun setAudioWaitMs(ms: Long) {
+        val clamped = ms.coerceIn(5_000L, 120_000L)
+        _audioWaitMs.value = clamped
+        ttsHelper.setGenerationTimeout(clamped)
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.AUDIO_WAIT_MS] = clamped
+            }
+        }
     }
     
     /**
@@ -1132,8 +1255,14 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        // Stops this surface's speech but leaves the shared player alone: the
+        // notification service may still be speaking to the car.
         ttsHelper.shutdown()
         wsClient.disconnect()
+    }
+
+    companion object {
+        private const val TAG = "DialogViewModel"
     }
 }
 

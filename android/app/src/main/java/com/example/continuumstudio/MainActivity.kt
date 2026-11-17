@@ -217,6 +217,14 @@ class MainActivity : ComponentActivity() {
                 val snackbarMessage by dialogViewModel.snackbarMessage.collectAsState()
                 val isOnline by dialogViewModel.isOnline.collectAsState()
                 val queueItems by dialogViewModel.queueItems.collectAsState()
+                // Shared dialog audio state. One player process-wide, so these
+                // reflect audio from the car or a notification too.
+                val playbackState by dialogViewModel.playbackState.collectAsState()
+                val mutedDialogId by dialogViewModel.mutedDialogId.collectAsState()
+                // Derived once so the dialog screen stays a pure function of
+                // its inputs: muted is per dialog, not per app.
+                val isCurrentDialogMuted = dialogState.activeDialog?.id != null &&
+                    mutedDialogId == dialogState.activeDialog?.id
                 val bayConfig by widgetBayViewModel.bayConfig.collectAsState()
                 
                 // CLI Agents state
@@ -785,7 +793,16 @@ class MainActivity : ComponentActivity() {
                                 // Coordinator v2 API
                                 useCoordinatorV2 = useCoordinatorV2,
                                 onUseCoordinatorV2Change = dialogViewModel::setUseCoordinatorV2,
-                                coordinatorSurfaceId = coordinatorSurfaceId
+                                coordinatorSurfaceId = coordinatorSurfaceId,
+                                // Audio transport for the dialog page. Because AudioHub
+                                // owns one player, these controls act on audio started
+                                // from anywhere, including the car.
+                                playbackState = playbackState,
+                                isCurrentDialogMuted = isCurrentDialogMuted,
+                                onPlayPauseAudio = dialogViewModel::togglePlaybackPause,
+                                onStopAudio = dialogViewModel::stopSpeaking,
+                                onMuteCurrentDialog = dialogViewModel::muteCurrentDialog,
+                                onSeekAudio = dialogViewModel::seekPlayback,
                             )
                         }
                         

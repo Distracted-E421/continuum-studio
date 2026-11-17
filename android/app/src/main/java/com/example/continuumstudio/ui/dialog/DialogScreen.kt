@@ -124,6 +124,13 @@ fun DialogScreen(
     onXROptionIndexChange: (Int) -> Unit = {},
     onTypingStateChange: (Boolean) -> Unit = {},
     onScrollGlasses: (Int) -> Unit = {},
+    // Audio transport for the dialog page
+    playbackState: com.example.continuumstudio.service.tts.PlaybackState? = null,
+    isCurrentDialogMuted: Boolean = false,
+    onPlayPauseAudio: () -> Unit = {},
+    onStopAudio: () -> Unit = {},
+    onMuteCurrentDialog: () -> Unit = {},
+    onSeekAudio: (Float) -> Unit = {},
 ) {
     // Initialize serverUrlInput from savedServerUrl (persisted in DataStore)
     var serverUrlInput by remember { mutableStateOf(savedServerUrl) }
@@ -337,7 +344,13 @@ fun DialogScreen(
                                                         onScrollGlasses = onScrollGlasses
                                                     )
                                                 } else {
-                                                    // Standard mode: Full dialog card
+                                                    // Standard mode: full dialog card.
+                                                    // The comment field is collapsed until
+                                                    // asked for, so it cannot push the
+                                                    // action dock off screen.
+                                                    var commentVisible by remember(dialogState.activeDialog?.id) {
+                                                        mutableStateOf(false)
+                                                    }
                                                     ActiveDialogCard(
                                                         dialog = dialogState.activeDialog,
                                                         selectedValue = dialogState.selectedValue,
@@ -352,6 +365,14 @@ fun DialogScreen(
                                                         onSliderChange = onSliderChange,
                                                         onConfirm = onConfirm,
                                                         onSubmit = onSubmit,
+                                                        playback = playbackState,
+                                                        isMuted = isCurrentDialogMuted,
+                                                        commentVisible = commentVisible,
+                                                        onToggleComment = { commentVisible = !commentVisible },
+                                                        onPlayPause = onPlayPauseAudio,
+                                                        onStopAudio = onStopAudio,
+                                                        onMuteToggle = onMuteCurrentDialog,
+                                                        onSeekAudio = onSeekAudio,
                                                     )
                                                 }
                                             } else {
@@ -1711,35 +1732,32 @@ fun ActiveDialogCard(
     onSliderChange: (Float) -> Unit,
     onConfirm: (Boolean) -> Unit,
     onSubmit: () -> Unit,
+    // Audio transport. Null playback means nothing is loaded for this dialog.
+    playback: com.example.continuumstudio.service.tts.PlaybackState? = null,
+    isMuted: Boolean = false,
+    commentVisible: Boolean = false,
+    onToggleComment: () -> Unit = {},
+    onPlayPause: () -> Unit = {},
+    onStopAudio: () -> Unit = {},
+    onMuteToggle: () -> Unit = {},
+    onSeekAudio: (Float) -> Unit = {},
 ) {
-    // Radial menu removed - using regular button interaction
-    
-    Box(modifier = Modifier.fillMaxSize()) {
-        // Main card content with dark background
-        Card(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 4.dp, vertical = 8.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF1A1A1A), // High contrast dark
-            ),
-            shape = RoundedCornerShape(16.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(12.dp)
-            ) {
-                // Timer bar (if not paused)
+    // Three fixed zones: pinned options, scrolling reading pane, pinned action
+    // dock. Only the middle zone moves, so the controls never leave the thumb
+    // and the choices never scroll away.
+    val options = dialog.dialogType.options ?: emptyList()
+    val isChoice = dialog.dialogType.type == "choice" && options.isNotEmpty()
+
+    Column(modifier = Modifier.fillMaxSize()) {
+
+        // --- Zone 1: pinned header ------------------------------------------
+
+        if (holdMode || !dialog.isPaused) {
+            Column {
                 if (!dialog.isPaused && !holdMode && dialog.timeoutMs != null) {
                     LinearProgressIndicator(
                         progress = { dialog.timeRemainingRatio },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)),
+                        modifier = Modifier.fillMaxWidth().height(4.dp),
                         color = when {
                             dialog.timeRemainingRatio > 0.5f -> Color(0xFF4CAF50)
                             dialog.timeRemainingRatio > 0.2f -> Color(0xFFFF9800)
@@ -1747,139 +1765,149 @@ fun ActiveDialogCard(
                         },
                         trackColor = Color(0xFF333333),
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
                 }
-
-                // Hold mode indicator
                 if (holdMode) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFFFF9800).copy(alpha = 0.2f))
-                            .padding(8.dp),
+                            .background(Color(0xFFFF9800).copy(alpha = 0.18f))
+                            .padding(vertical = 5.dp),
                         horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFFFF9800))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("HOLD MODE ACTIVE", fontWeight = FontWeight.Bold, color = Color(0xFFFF9800))
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = Color(0xFFFF9800),
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "HOLD MODE",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFF9800),
+                        )
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
                 }
+            }
+        }
 
-                // Title - 24sp, bold, high contrast
-                Text(
-                    text = dialog.title,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    lineHeight = 30.sp,
-                )
+        // Choice options are pinned above the prompt: the whole point is that
+        // the answer is reachable without reading or scrolling.
+        if (isChoice) {
+            PinnedOptions(
+                options = options,
+                allowMultiple = dialog.dialogType.allowMultiple ?: false,
+                selectedValue = selectedValue,
+                selectedOptions = selectedOptions,
+                onSelectOption = onSelectOption,
+                onToggleOption = onToggleOption,
+            )
+            HorizontalDivider(color = Color(0xFF2E2E2E))
+        }
+
+        // --- Zone 2: the reading pane (the only scrolling part) -------------
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Text(
+                text = dialog.title,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                lineHeight = 27.sp,
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            MarkdownText(
+                text = dialog.prompt,
+                modifier = Modifier.fillMaxWidth(),
+                baseFontSize = 17.sp,
+                textColor = Color(0xFFE0E0E0),
+            )
+
+            // Context data stays available but collapsed: it is reference
+            // material, never something to read while moving.
+            if (dialog.context != null) {
+                var showContext by remember { mutableStateOf(false) }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Prompt with markdown rendering - 18sp
-                MarkdownText(
-                    text = dialog.prompt,
-                    modifier = Modifier.fillMaxWidth(),
-                    baseFontSize = 18.sp,
-                    textColor = Color(0xFFE0E0E0),
-                )
-
-                // Context data section (collapsible)
-                if (dialog.context != null) {
-                    var showContext by remember { mutableStateOf(false) }
-                    
-                    Spacer(modifier = Modifier.height(12.dp))
-                    
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFF252525))
-                            .clickable { showContext = !showContext }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (showContext) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = if (showContext) "Hide context" else "Show context",
-                            modifier = Modifier.size(20.dp),
-                            tint = Color(0xFF9E9E9E)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            "Context Data",
-                            fontSize = 14.sp,
-                            color = Color(0xFF9E9E9E)
-                        )
-                    }
-                    
-                    if (showContext) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        val contextText = dialog.context.toString()
-                            .let { if (it.startsWith("\"") && it.endsWith("\"")) it.drop(1).dropLast(1) else it }
-                        
-                        CodeBlock(
-                            code = contextText,
-                            language = "json"
-                        )
-                    }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF252525))
+                        .clickable { showContext = !showContext }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (showContext) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (showContext) "Hide context" else "Show context",
+                        modifier = Modifier.size(20.dp),
+                        tint = Color(0xFF9E9E9E),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Context data", fontSize = 14.sp, color = Color(0xFF9E9E9E))
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                if (showContext) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val contextText = dialog.context.toString()
+                        .let { if (it.startsWith("\"") && it.endsWith("\"")) it.drop(1).dropLast(1) else it }
+                    CodeBlock(code = contextText, language = "json")
+                }
+            }
 
-                // Dialog type specific content (choice/text/confirm/slider)
-                when (dialog.dialogType.type) {
-                    "choice" -> ChoiceContentRedesigned(
-                        options = dialog.dialogType.options ?: emptyList(),
-                        allowMultiple = dialog.dialogType.allowMultiple ?: false,
-                        selectedValue = selectedValue,
-                        selectedOptions = selectedOptions,
-                        onSelectOption = onSelectOption,
-                        onToggleOption = onToggleOption,
-                    )
-                    "text" -> TextInputContentRedesigned(
+            // Non-choice inputs live in the reading pane, because they are what
+            // the prompt is asking about (a value to type, a number to pick).
+            when (dialog.dialogType.type) {
+                "choice" -> Unit // already pinned above
+                "text" -> {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    TextInputContentRedesigned(
                         placeholder = dialog.dialogType.placeholder,
                         multiline = dialog.dialogType.multiline ?: false,
                         value = selectedValue,
                         onValueChange = onTextChange,
                     )
-                    "confirm" -> {
-                        // Yes/No buttons for confirm dialogs
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                }
+                "confirm" -> {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { onConfirm(false) },
+                            modifier = Modifier.weight(1f).height(58.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFBDBDBD)),
+                            border = BorderStroke(1.dp, Color(0xFF424242)),
+                            shape = RoundedCornerShape(12.dp),
                         ) {
-                            OutlinedButton(
-                                onClick = { onConfirm(false) },
-                                modifier = Modifier.weight(1f).height(56.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = Color(0xFFBDBDBD)
-                                ),
-                                border = BorderStroke(1.dp, Color(0xFF424242))
-                            ) {
-                                Text(
-                                    text = dialog.dialogType.noLabel ?: "No",
-                                    fontSize = 16.sp
-                                )
-                            }
-                            Button(
-                                onClick = { onConfirm(true) },
-                                modifier = Modifier.weight(1f).height(56.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary
-                                )
-                            ) {
-                                Text(
-                                    text = dialog.dialogType.yesLabel ?: "Yes",
-                                    fontSize = 16.sp
-                                )
-                            }
+                            Text(dialog.dialogType.noLabel ?: "No", fontSize = 17.sp)
+                        }
+                        Button(
+                            onClick = { onConfirm(true) },
+                            modifier = Modifier.weight(1f).height(58.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text(dialog.dialogType.yesLabel ?: "Yes", fontSize = 17.sp)
                         }
                     }
-                    "slider" -> SliderContentRedesigned(
+                }
+                "slider" -> {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    SliderContentRedesigned(
                         min = dialog.dialogType.min ?: 0f,
                         max = dialog.dialogType.max ?: 100f,
                         step = dialog.dialogType.step ?: 1f,
@@ -1888,14 +1916,15 @@ fun ActiveDialogCard(
                         onValueChange = onSliderChange,
                     )
                 }
+            }
 
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Comment field - redesigned
+            // Comment field, collapsed by default so it cannot push the dock.
+            if (commentVisible) {
+                Spacer(modifier = Modifier.height(14.dp))
                 OutlinedTextField(
                     value = comment,
                     onValueChange = onCommentChange,
-                    label = { Text("Comment (optional)", color = Color(0xFF757575)) },
+                    label = { Text("Comment", color = Color(0xFF757575)) },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2,
                     maxLines = 4,
@@ -1909,79 +1938,39 @@ fun ActiveDialogCard(
                         unfocusedLabelColor = Color(0xFF757575),
                     ),
                 )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Explicit Submit button for choice/text/slider dialogs
-                if (dialog.dialogType.type in listOf("choice", "text", "slider", "confirm")) {
-                    val hasSelection = when (dialog.dialogType.type) {
-                        "choice" -> {
-                            if (dialog.dialogType.allowMultiple == true) {
-                                selectedOptions.isNotEmpty()
-                            } else {
-                                selectedValue.isNotEmpty()
-                            }
-                        }
-                        "text" -> selectedValue.isNotEmpty()
-                        "slider" -> true // Sliders always have a value
-                        "confirm" -> selectedValue.isNotEmpty() // Yes/No selection made
-                        else -> false
-                    }
-                    
-                    Button(
-                        onClick = onSubmit,
-                        enabled = hasSelection,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            disabledContainerColor = Color(0xFF2A2A2A),
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (hasSelection) "Submit Response" else "Select an option first",
-                            fontSize = 16.sp,
-                        )
-                    }
-                    
-                    Spacer(modifier = Modifier.height(12.dp))
-                }
-
-                // Interaction hint
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF252525))
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Default.TouchApp,
-                        contentDescription = null,
-                        tint = Color(0xFF757575),
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Tap an option, add a comment, then submit",
-                        fontSize = 14.sp,
-                        color = Color(0xFF757575),
-                    )
-                }
             }
+
+            // Keep the last line clear of the dock.
+            Spacer(modifier = Modifier.height(8.dp))
         }
-        
-        // Radial menu overlay removed - using inline buttons instead
+
+        // --- Zone 3: pinned action dock -------------------------------------
+
+        val canSubmit = when (dialog.dialogType.type) {
+            "choice" -> if (dialog.dialogType.allowMultiple == true) {
+                selectedOptions.isNotEmpty()
+            } else {
+                selectedValue.isNotEmpty()
+            }
+            "text" -> selectedValue.isNotEmpty()
+            "slider" -> true
+            "confirm" -> selectedValue.isNotEmpty()
+            else -> false
+        }
+
+        ActionDock(
+            canSubmit = canSubmit,
+            submitEnabled = canSubmit,
+            playback = playback,
+            isMuted = isMuted,
+            commentOpen = commentVisible,
+            onToggleComment = onToggleComment,
+            onSubmit = onSubmit,
+            onPlayPause = onPlayPause,
+            onStopAudio = onStopAudio,
+            onMuteToggle = onMuteToggle,
+            onSeek = onSeekAudio,
+        )
     }
 }
 

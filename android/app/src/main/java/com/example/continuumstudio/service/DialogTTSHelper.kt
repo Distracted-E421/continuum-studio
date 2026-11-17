@@ -1,89 +1,62 @@
 package com.example.continuumstudio.service
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
-import android.os.Build
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import com.example.continuumstudio.service.tts.AudioHub
 import com.example.continuumstudio.service.tts.DialogAudioPlayer
 import com.example.continuumstudio.service.tts.MediaSessionBridge
 import com.example.continuumstudio.service.tts.PlaybackState
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
+import com.example.continuumstudio.speech.SpeechScript
+import com.example.continuumstudio.speech.SpeechScriptCompiler
+import com.example.continuumstudio.speech.SpeechTrace
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.util.Locale
-import java.util.UUID
 
 /**
- * Helper class for Text-to-Speech dialog reading.
- * Designed for Android Auto use case - reads dialog prompts aloud for hands-free interaction.
+ * Reads dialogs aloud.
  *
- * Features:
- * - Requests audio focus before speaking (respects media playback)
- * - Reads dialog title, prompt, and options for choice dialogs
- * - Supports pause/resume and cancellation
- * - Handles TTS initialization gracefully
+ * This used to own its own [DialogAudioPlayer], which meant every surface that
+ * wanted speech created a second engine with separate audio focus (see
+ * `AudioHub`). It is now a thin adapter: it holds per-surface settings and
+ * compiles the dialog into a [SpeechScript], then hands playback to the one
+ * shared player.
+ *
+ * Android's own [TextToSpeech] remains only as a last-resort fallback for when
+ * EasyVoice is unconfigured or a segment genuinely cannot be generated.
  */
 class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListener {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
     /**
-     * Plays EasyVoice (Kokoro) audio when available. Android's built-in
-     * TextToSpeech remains as the fallback for when EasyVoice is unconfigured,
-     * fails, or does not deliver within DialogAudioPlayer.EASYVOICE_WAIT_MS.
+     * The shared player. Every helper in the process talks to this one, so the
+     * dialog screen's controls always act on the clip that is actually playing,
+     * whether it was started from the screen, a notification, or the car.
      */
-    private val audioPlayer = DialogAudioPlayer(context)
+    val audioPlayer: DialogAudioPlayer = AudioHub.player(context)
 
     private var tts: TextToSpeech? = null
     private var isInitialized = false
-    
-    private val audioManager: AudioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private var audioFocusRequest: AudioFocusRequest? = null
-    private var hasAudioFocus = false
-    
-    private val _isSpeaking = MutableStateFlow(false)
+
+    private val _isSpeaking = kotlinx.coroutines.flow.MutableStateFlow(false)
     val isSpeaking: StateFlow<Boolean> = _isSpeaking
 
+    /** Live playback state, shared across surfaces. */
     val playback: StateFlow<PlaybackState?> get() = audioPlayer.playback
 
-    /** Seek to a fraction (0f..1f) of the current clip. */
-    fun seekAudio(fraction: Float) = audioPlayer.seekTo(fraction)
-
-    /** Pause the current clip without dropping the media session. */
-    fun pauseAudio() = audioPlayer.pause()
-
-    /** Resume the current clip. */
-    fun resumeAudio() = audioPlayer.resume()
-
-    /** Snapshot of live position/duration, for the UI to poll while visible. */
-    fun currentPlayback(): PlaybackState? = audioPlayer.currentPlayback()
-    
-    // Queue of utterances to speak
-    private val utteranceQueue = mutableListOf<String>()
-    private var currentUtteranceId: String? = null
-
-    // User preferences
+    // User preferences (per surface)
     var ttsEnabled = true
     var speechRate = 1.0f
     var readOptionsAloud = true
 
     init {
         tts = TextToSpeech(context, this)
-        // Connect the media session up front so dialog audio plays through it.
-        // Holding a MediaSession is what keeps Android Auto from dropping back
-        // to the car's own radio.
+        // Connect the media session up front: holding one is what keeps Android
+        // Auto from dropping back to the car's own radio between dialogs.
         DialogMediaService.start(context)
         MediaSessionBridge.connect(context) { ok ->
             audioPlayer.preferMediaSession = ok
@@ -102,99 +75,115 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
                 }
                 else -> true
             }
-            
             if (isInitialized) {
                 tts?.setSpeechRate(speechRate)
                 setupUtteranceListener()
-                Log.i(TAG, "TTS initialized successfully")
+                Log.i(TAG, "fallback TTS initialised")
             }
         } else {
-            Log.e(TAG, "TTS initialization failed: $status")
+            Log.e(TAG, "TTS initialisation failed: $status")
             isInitialized = false
         }
     }
 
-    private fun setupUtteranceListener() {
-        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                _isSpeaking.value = true
-            }
+    // --- Transport, forwarded so screens talk to one object ---------------
 
-            override fun onDone(utteranceId: String?) {
-                scope.launch {
-                    if (utteranceQueue.isNotEmpty()) {
-                        speakNext()
-                    } else {
-                        _isSpeaking.value = false
-                        abandonAudioFocus()
-                    }
-                }
-            }
+    fun seekAudio(fraction: Float) = audioPlayer.seekTo(fraction)
+    fun pauseAudio() = audioPlayer.pause()
+    fun resumeAudio() = audioPlayer.resume()
+    fun togglePauseAudio() = audioPlayer.togglePause()
+    fun currentPlayback(): PlaybackState? = audioPlayer.currentPlayback()
+    val isPaused: Boolean get() = audioPlayer.isPaused
 
-            override fun onError(utteranceId: String?) {
-                Log.e(TAG, "TTS error for utterance: $utteranceId")
-                _isSpeaking.value = false
-                abandonAudioFocus()
-            }
-            
-            @Deprecated("Deprecated in API 21")
-            override fun onError(utteranceId: String?, errorCode: Int) {
-                Log.e(TAG, "TTS error for utterance $utteranceId: $errorCode")
-                _isSpeaking.value = false
-                abandonAudioFocus()
-            }
-        })
+    /** Raise or lower how long a segment may take before falling back. */
+    fun setGenerationTimeout(ms: Long) {
+        audioPlayer.waitMs = ms.coerceIn(5_000L, 120_000L)
     }
 
+    // --- Dialog speech ----------------------------------------------------
+
     /**
-     * Read a dialog aloud including title, prompt, and options if applicable.
+     * Compile a dialog into a script and speak it.
      *
-     * @param title Dialog title (e.g., "Session Progress")
-     * @param prompt Dialog prompt text
-     * @param dialogType Type of dialog (choice, confirmation, text, slider)
-     * @param optionsJson Optional JSON array of options for choice dialogs
-     * @param priority Dialog priority (critical dialogs get immediate attention)
+     * The compile step is synchronous and cheap (no I/O); only synthesis is
+     * async. Keeping it inline is the point: the moment a dialog is written, its
+     * annotated script exists.
      */
     fun speakDialog(
         title: String,
         prompt: String,
         dialogType: String,
         optionsJson: String? = null,
-        priority: String = "normal"
+        priority: String = "normal",
+        dialogId: String? = null,
     ) {
         if (!ttsEnabled) {
+            SpeechTrace.info("speak", "skipped: reading disabled")
             Log.d(TAG, "TTS disabled")
             return
         }
 
-        scope.launch(Dispatchers.Main) {
-            stop()
-            val text = buildDialogUtterance(title, prompt, dialogType, optionsJson, priority)
+        val labels = optionLabels(optionsJson)
+        val script = buildScript(title, prompt, dialogType, labels, priority)
+        SpeechTrace.scriptCompiled(script)
 
-            // EasyVoice is the preferred path: better voice, and cached audio is
-            // instant. It returns false when unconfigured, failed, or exceeded
-            // EASYVOICE_WAIT_MS - only then do we use Android TTS.
-            if (audioPlayer.usesEasyVoice) {
-                val labels = optionLabels(optionsJson)
-                val ok = audioPlayer.speak(
-                    text = text,
-                    dialogId = title.hashCode().toString(),
-                    title = title,
-                    optionCount = labels.size,
-                    optionLabels = labels,
-                )
-                if (ok) {
-                    Log.d(TAG, "Speaking dialog via EasyVoice")
-                    return@launch
-                }
-            }
-
-            Log.d(TAG, "Falling back to Android TTS")
-            speakWithSystemTts(text)
+        if (audioPlayer.usesEasyVoice) {
+            audioPlayer.playScript(script, dialogId = dialogId)
+            return
         }
+
+        SpeechTrace.warn("speak", "EasyVoice not configured; using fallback TTS")
+        Log.d(TAG, "EasyVoice not configured; using fallback TTS")
+        speakWithSystemTts(script.flattened)
     }
 
-    /** Choice labels for a choice dialog, used as car-screen rows. */
+    /**
+     * Compile without speaking, so the UI can show the script immediately.
+     *
+     * Called when a dialog arrives regardless of whether audio is enabled - the
+     * annotated script is useful on screen even when muted.
+     */
+    fun compileScript(
+        title: String,
+        prompt: String,
+        dialogType: String,
+        optionsJson: String? = null,
+        priority: String = "normal",
+    ): SpeechScript = buildScript(title, prompt, dialogType, optionLabels(optionsJson), priority)
+
+    private fun buildScript(
+        title: String,
+        prompt: String,
+        dialogType: String,
+        labels: List<String>,
+        priority: String,
+    ): SpeechScript {
+        val base = SpeechScriptCompiler.compile(
+            title = title,
+            prompt = prompt,
+            dialogType = dialogType,
+            optionLabels = labels,
+            includeOptions = readOptionsAloud,
+        )
+
+        // Urgency is worth one short clause, and only once. Repeated "important
+        // dialog" prefixes made every dialog sound identical.
+        if (priority.lowercase() !in listOf("critical", "high")) return base
+
+        val lead = SpeechScriptCompiler.Segment(
+            kind = SpeechScriptCompiler.Kind.INSTRUCTION,
+            spoken = "Important dialog.",
+            pauseAfterMs = 420,
+            source = "[priority: $priority]",
+        )
+        val segments = listOf(lead) + base.segments
+        return base.copy(
+            segments = segments,
+            flattened = segments.joinToString(" ") { it.spoken },
+        )
+    }
+
+    /** Choice labels for a choice dialog, used for speech and car rows. */
     private fun optionLabels(optionsJson: String?): List<String> {
         if (optionsJson.isNullOrBlank()) return emptyList()
         return try {
@@ -208,299 +197,133 @@ class DialogTTSHelper(private val context: Context) : TextToSpeech.OnInitListene
     }
 
     /**
-     * Flatten a dialog into a single spoken string.
-     *
-     * Built as one utterance rather than a queue so that EasyVoice synthesizes
-     * it in one request (one round-trip, one cache entry) instead of several.
-     */
-    private fun buildDialogUtterance(
-        title: String,
-        prompt: String,
-        dialogType: String,
-        optionsJson: String?,
-        priority: String
-    ): String {
-        val parts = mutableListOf<String>()
-
-        if (priority.lowercase() in listOf("critical", "high")) {
-            parts.add("Important dialog from Synapsix.")
-        }
-        parts.add("${cleanTextForSpeech(title)}. ${cleanTextForSpeech(prompt)}")
-
-        if (dialogType.lowercase() == "choice" && readOptionsAloud && !optionsJson.isNullOrBlank()) {
-            val optionsText = formatOptionsForSpeech(optionsJson)
-            if (optionsText.isNotEmpty()) parts.add("Your options are: $optionsText")
-        }
-
-        when (dialogType.lowercase()) {
-            "choice" -> parts.add("Say the option number or name to reply.")
-            "confirm", "confirmation" -> parts.add("Say yes or no to respond.")
-            "text" -> parts.add("Speak your response.")
-            "slider" -> parts.add("Say a number to set the value.")
-        }
-
-        return parts.joinToString(" ")
-    }
-
-    /** Android TTS path. Used only when EasyVoice cannot deliver. */
-    private fun speakWithSystemTts(text: String) {
-        if (!isInitialized) {
-            Log.w(TAG, "System TTS not initialized; cannot speak dialog")
-            return
-        }
-        utteranceQueue.clear()
-        utteranceQueue.add(text)
-        if (requestAudioFocus()) {
-            speakNext()
-        }
-    }
-
-    /**
      * Speak a confirmation of the parsed response before sending.
      *
-     * @param dialogType Type of dialog (choice, confirmation, text, slider)
-     * @param parsedValue The parsed value that will be sent
-     * @param optionLabel Optional human-readable label for choice dialogs
-     * @param onComplete Callback when confirmation speech is complete
+     * Kept short and bounded: a reply must not wait on synthesis.
      */
     fun speakConfirmation(
         dialogType: String,
         parsedValue: Any,
         optionLabel: String? = null,
-        onComplete: (() -> Unit)? = null
+        onComplete: (() -> Unit)? = null,
     ) {
         if (!ttsEnabled) {
             onComplete?.invoke()
             return
         }
+        val text = buildConfirmationText(dialogType, parsedValue, optionLabel)
+        val script = SpeechScriptCompiler.compile(
+            title = "",
+            prompt = text,
+            dialogType = "text",
+            includeInstructions = false,
+        )
 
-        scope.launch(Dispatchers.Main) {
-            stop()
-            val confirmationText = buildConfirmationText(dialogType, parsedValue, optionLabel)
-
-            if (audioPlayer.usesEasyVoice) {
-                // Confirmation must be short and immediate; if EasyVoice has it
-                // cached (same reply as before) playback is instant, otherwise
-                // this still respects the wait bound before falling through.
-                if (audioPlayer.speak(confirmationText)) {
-                    _isSpeaking.value = false
-                    onComplete?.invoke()
-                    return@launch
-                }
-            }
-
-            utteranceQueue.clear()
-            utteranceQueue.add(confirmationText)
-            utteranceQueue.add(confirmationText)
-            
-            // Set up completion callback
-            if (onComplete != null) {
-                val originalListener = tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {
-                        _isSpeaking.value = true
-                    }
-                    
-                    override fun onDone(utteranceId: String?) {
-                        _isSpeaking.value = false
-                        abandonAudioFocus()
-                        scope.launch(Dispatchers.Main) {
-                            onComplete()
-                        }
-                        setupUtteranceListener() // Restore original listener
-                    }
-                    
-                    override fun onError(utteranceId: String?) {
-                        _isSpeaking.value = false
-                        abandonAudioFocus()
-                        scope.launch(Dispatchers.Main) {
-                            onComplete()
-                        }
-                        setupUtteranceListener()
-                    }
-                    
-                    @Deprecated("Deprecated in API 21")
-                    override fun onError(utteranceId: String?, errorCode: Int) {
-                        onError(utteranceId)
-                    }
-                })
-            }
-
-            if (requestAudioFocus()) {
-                speakNext()
-            } else {
-                onComplete?.invoke()
-            }
+        if (audioPlayer.usesEasyVoice) {
+            audioPlayer.playScript(script, dialogId = null) { onComplete?.invoke() }
+            return
         }
+        speakWithSystemTts(script.flattened, onComplete)
     }
 
-    private fun buildConfirmationText(dialogType: String, parsedValue: Any, optionLabel: String?): String {
-        return when (dialogType.lowercase()) {
-            "choice" -> {
-                val label = optionLabel ?: parsedValue.toString()
-                "Sending: $label"
+    private fun buildConfirmationText(
+        dialogType: String,
+        parsedValue: Any,
+        optionLabel: String?,
+    ): String = when (dialogType.lowercase()) {
+        "choice" -> "Sending ${optionLabel ?: parsedValue}."
+        "confirm", "confirmation" -> {
+            val response = when (parsedValue) {
+                true -> "yes"
+                false -> "no"
+                else -> parsedValue.toString()
             }
-            "confirm", "confirmation" -> {
-                val response = when (parsedValue) {
-                    true -> "Yes"
-                    false -> "No"
-                    else -> parsedValue.toString()
-                }
-                "Sending: $response"
-            }
-            "text" -> {
-                val text = parsedValue.toString()
-                val preview = if (text.length > 30) "${text.take(30)}..." else text
-                "Sending: $preview"
-            }
-            "slider" -> {
-                "Sending: $parsedValue"
-            }
-            else -> "Sending response"
+            "Sending $response."
         }
+        "text" -> {
+            val text = parsedValue.toString()
+            val preview = if (text.length > 30) "${text.take(30)}..." else text
+            "Sending $preview."
+        }
+        "slider" -> "Sending $parsedValue."
+        else -> "Sending response."
     }
 
-    /**
-     * Stop current speech and clear queue.
-     */
+    /** Stop speech on this surface. */
     fun stop() {
         audioPlayer.stop()
         tts?.stop()
-        utteranceQueue.clear()
         _isSpeaking.value = false
-        abandonAudioFocus()
     }
 
     /**
-     * Release TTS resources.
+     * Release this surface.
+     *
+     * Does NOT shut the shared player down - another surface may still need it.
      */
     fun shutdown() {
         stop()
-        audioPlayer.shutdown()
-        scope.cancel()
         tts?.shutdown()
         tts = null
         isInitialized = false
     }
 
-    private fun speakNext() {
-        if (utteranceQueue.isEmpty()) {
-            _isSpeaking.value = false
-            abandonAudioFocus()
+    // --- Android TTS fallback --------------------------------------------
+
+    private fun setupUtteranceListener() {
+        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                _isSpeaking.value = true
+            }
+
+            override fun onDone(utteranceId: String?) {
+                _isSpeaking.value = false
+            }
+
+            override fun onError(utteranceId: String?) {
+                Log.e(TAG, "TTS error for utterance: $utteranceId")
+                _isSpeaking.value = false
+            }
+
+            @Deprecated("Deprecated in API 21")
+            override fun onError(utteranceId: String?, errorCode: Int) {
+                Log.e(TAG, "TTS error for utterance $utteranceId: $errorCode")
+                _isSpeaking.value = false
+            }
+        })
+    }
+
+    /** Android TTS path. Only used when EasyVoice cannot deliver at all. */
+    private fun speakWithSystemTts(text: String, onComplete: (() -> Unit)? = null) {
+        if (!isInitialized) {
+            Log.w(TAG, "fallback TTS not initialised; cannot speak")
+            onComplete?.invoke()
             return
         }
-
-        val text = utteranceQueue.removeAt(0)
-        currentUtteranceId = UUID.randomUUID().toString()
-        
-        tts?.speak(
-            text,
-            TextToSpeech.QUEUE_ADD,
-            null,
-            currentUtteranceId
-        )
-    }
-
-    private fun requestAudioFocus(): Boolean {
-        if (hasAudioFocus) return true
-
-        val audioAttributes = AudioAttributes.Builder()
-            // Matches the media channel used by DialogMediaService and the
-            // local player. USAGE_ASSISTANT would tie the TTS fallback to the
-            // STT voice session too.
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                .setAudioAttributes(audioAttributes)
-                .setOnAudioFocusChangeListener { focusChange ->
-                    when (focusChange) {
-                        AudioManager.AUDIOFOCUS_LOSS,
-                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                            stop()
-                            hasAudioFocus = false
-                        }
-                        AudioManager.AUDIOFOCUS_GAIN -> {
-                            hasAudioFocus = true
-                        }
-                    }
+        if (text.isBlank()) {
+            onComplete?.invoke()
+            return
+        }
+        if (onComplete != null) {
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    _isSpeaking.value = true
                 }
-                .build()
 
-            val result = audioManager.requestAudioFocus(audioFocusRequest!!)
-            hasAudioFocus = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
-        } else {
-            @Suppress("DEPRECATION")
-            val result = audioManager.requestAudioFocus(
-                { focusChange ->
-                    if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-                        stop()
-                        hasAudioFocus = false
-                    }
-                },
-                AudioManager.STREAM_NOTIFICATION,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
-            )
-            hasAudioFocus = (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+                override fun onDone(utteranceId: String?) {
+                    _isSpeaking.value = false
+                    onComplete()
+                    setupUtteranceListener()
+                }
+
+                override fun onError(utteranceId: String?) {
+                    _isSpeaking.value = false
+                    onComplete()
+                    setupUtteranceListener()
+                }
+            })
         }
-
-        return hasAudioFocus
-    }
-
-    private fun abandonAudioFocus() {
-        if (!hasAudioFocus) return
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.abandonAudioFocus(null)
-        }
-        hasAudioFocus = false
-    }
-
-    /**
-     * Clean text for TTS by removing/replacing problematic elements.
-     */
-    private fun cleanTextForSpeech(text: String): String {
-        return text
-            // Remove markdown formatting
-            .replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
-            .replace(Regex("\\*([^*]+)\\*"), "$1")
-            .replace(Regex("`([^`]+)`"), "$1")
-            // Convert bullet points
-            .replace("•", "")
-            .replace("✅", "completed:")
-            .replace("⏳", "pending:")
-            .replace("🔴", "urgent:")
-            .replace("🚨", "critical:")
-            // Remove other emojis
-            .replace(Regex("[\\p{So}\\p{Cn}]"), "")
-            // Clean up markdown headers
-            .replace(Regex("^#+\\s*", RegexOption.MULTILINE), "")
-            // Normalize whitespace
-            .replace(Regex("\\s+"), " ")
-            .trim()
-    }
-
-    /**
-     * Format options JSON for speech output.
-     */
-    private fun formatOptionsForSpeech(optionsJson: String): String {
-        return try {
-            val jsonArray = Json.parseToJsonElement(optionsJson).jsonArray
-            jsonArray.mapIndexedNotNull { index, element ->
-                val obj = element.jsonObject
-                val label = obj["label"]?.jsonPrimitive?.content
-                    ?: obj["value"]?.jsonPrimitive?.content
-                    ?: return@mapIndexedNotNull null
-                "Option ${index + 1}: $label"
-            }.joinToString(". ")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to parse options for speech: $e")
-            ""
-        }
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "dialog-${System.currentTimeMillis()}")
     }
 
     companion object {

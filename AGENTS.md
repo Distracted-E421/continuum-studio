@@ -89,3 +89,7 @@ cd core && mix deps.get && mix compile
 
 - `~/synapsix` - Dialog daemon, terminal monitor, harnesses
 - `~/phosphor` - Screen capture service
+
+## Learned Workspace Facts
+
+- Primary Continuum Studio Android deploy target is Samsung Galaxy S24 (Sep 2026; replaced S23 Ultra with broken display)

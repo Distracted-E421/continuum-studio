@@ -3,11 +3,15 @@ package com.example.continuumstudio.ui.settings
 import android.content.Context
 import android.media.AudioManager
 import android.media.MediaCodecList
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,6 +45,12 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
     val controller = remember { MultiSoundController(context) }
 
     var lines by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    // Live speech-pipeline log. Collected as state so it updates while a dialog
+    // is being read, which is when the interesting events happen.
+    val trace by com.example.continuumstudio.speech.SpeechTrace.events.collectAsState()
+    val playback by com.example.continuumstudio.service.tts.AudioHub
+        .player(context).playback.collectAsState()
+    var showTrace by remember { mutableStateOf(true) }
 
     suspend fun collect() {
         val out = mutableListOf<Pair<String, String>>()
@@ -116,6 +126,11 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = {
+                        com.example.continuumstudio.speech.SpeechTrace.clear()
+                    }) {
+                        Icon(Icons.Default.Delete, "Clear trace")
+                    }
                     IconButton(onClick = { scope.launch { collect() } }) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }
@@ -157,6 +172,75 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
                     )
                 }
                 HorizontalDivider()
+            }
+
+            // --- Live speech pipeline ------------------------------------
+            //
+            // This is the section that makes a remote debugging session
+            // possible: it shows the compiled script, per-segment generation
+            // timings, and the reason a read was skipped.
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { showTrace = !showTrace },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Speech pipeline",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text("${trace.size} events", style = MaterialTheme.typography.labelSmall)
+                Icon(
+                    if (showTrace) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                )
+            }
+
+            playback?.let { pb ->
+                Text(
+                    "Now: ${pb.phase.name.lowercase()} " +
+                        "segment ${pb.segmentIndex + 1}/${pb.segmentCount} " +
+                        "${pb.positionLabel()}/${pb.durationLabel()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+
+            if (showTrace) {
+                // Newest last reads naturally while watching, but the visible
+                // window is capped so a long read does not bury the top of the
+                // screen under hundreds of segment lines.
+                trace.takeLast(40).forEach { event ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            event.timeLabel(),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                        Text(
+                            "${event.tag}: ${event.message}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = when (event.level) {
+                                com.example.continuumstudio.speech.SpeechTrace.Event.Level.ERROR ->
+                                    MaterialTheme.colorScheme.error
+                                com.example.continuumstudio.speech.SpeechTrace.Event.Level.WARN ->
+                                    MaterialTheme.colorScheme.tertiary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                if (trace.isEmpty()) {
+                    Text(
+                        "No speech events yet. Trigger a dialog to populate this.",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
             }
 
             Text(

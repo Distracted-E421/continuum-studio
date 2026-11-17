@@ -6,11 +6,14 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.util.Log
+import com.example.continuumstudio.speech.SpeechScript
+import com.example.continuumstudio.speech.SpeechTrace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -18,14 +21,26 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 /**
- * Plays EasyVoice-synthesized dialog audio, with a bounded wait and an explicit
- * fallback signal.
+ * Plays EasyVoice-synthesized dialog audio, one script segment at a time.
  *
- * Policy (per user preference): EasyVoice quality is the default and worth a
- * short wait. Android TTS is only used when EasyVoice genuinely cannot deliver —
- * either it failed outright, or it did not produce audio within
- * [easyVoiceWaitMs]. The caller owns the Android TTS fallback so that this class
- * stays about playback only.
+ * ## Two behaviours that were wrong before
+ *
+ * **The 8-second cutoff.** Any generation slower than [EASYVOICE_WAIT_MS] fell
+ * back to the on-device robot voice. On a car connection over Tailscale that
+ * fired constantly, which is why long dialogs were read by the bad voice. The
+ * wait is now [DEFAULT_WAIT_MS] and callers can raise it further.
+ *
+ * **One clip per dialog.** The whole dialog used to be a single synthesis
+ * request, so nothing played until every character was generated. Segments are
+ * now synthesized in order and playback starts on the first one, so a long
+ * dialog begins talking almost immediately.
+ *
+ * ## Pauses are silence, generated locally
+ *
+ * EasyVoice cannot produce silence on demand - it accepts `<break>` and then
+ * speaks the word "break" (see [SpeechScriptCompiler]). Gaps are therefore a
+ * `delay()` between segments, which is also why pause/resume is exact: there is
+ * no audio to re-align, just a paused coroutine and a paused player.
  */
 class DialogAudioPlayer(private val context: Context) {
 
@@ -33,13 +48,17 @@ class DialogAudioPlayer(private val context: Context) {
         private const val TAG = "DialogAudioPlayer"
 
         /**
-         * How long to wait for EasyVoice before falling back to Android TTS.
+         * Default patience for one segment.
          *
-         * Measured cold latency for a dialog-length prompt is ~2.5-3.4s, and a
-         * cached response is immediate. 8s leaves room for a cold TLS handshake
-         * plus server load while still being tolerable when it goes wrong.
+         * Measured cold latency for a dialog-length prompt is ~2.5-3.4s on wifi.
+         * Over a car's tailscale link, with TLS setup and a cold server, 25s is
+         * a realistic ceiling before the audio is genuinely lost - and losing it
+         * now costs voice quality, so waiting is the better trade.
          */
-        const val EASYVOICE_WAIT_MS = 8_000L
+        const val DEFAULT_WAIT_MS = 25_000L
+
+        /** Backwards-compatible alias for the constant external callers used. */
+        const val EASYVOICE_WAIT_MS = DEFAULT_WAIT_MS
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -49,82 +68,152 @@ class DialogAudioPlayer(private val context: Context) {
     private var player: MediaPlayer? = null
     private var focusRequest: AudioFocusRequest? = null
     private var hasFocus = false
-    private var playbackJob: Job? = null
+    private var scriptJob: Job? = null
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying
 
-    /**
-     * Playback position and duration for UI indicators and scrubbing.
-     * Null when nothing is loaded.
-     */
     private val _playback = MutableStateFlow<PlaybackState?>(null)
     val playback: StateFlow<PlaybackState?> = _playback
 
-    /** True when EasyVoice is configured; false means callers should go straight to TTS. */
+    /** True when EasyVoice is configured; false means callers should use TTS. */
     val usesEasyVoice: Boolean get() = easyVoice.isConfigured
 
+    /** How long to wait for one segment before giving up. Adjustable by the UI. */
+    @Volatile
+    var waitMs: Long = DEFAULT_WAIT_MS
+
     /**
-     * True when a MediaSession-owning service is responsible for playback.
+     * True when a MediaSession-owning service should carry playback.
      *
-     * When the media service is running we hand the clip to it rather than
-     * playing through a bare MediaPlayer, because only a MediaSession keeps the
-     * Android Auto audio route alive.
+     * Only a MediaSession keeps the Android Auto audio route alive, so when the
+     * service is up we hand clips to it instead of using a bare MediaPlayer.
      */
     @Volatile
     var preferMediaSession: Boolean = false
 
-    /** Seek to [fraction] (0f..1f) of the current clip. No-op when nothing is playing. */
-    fun seekTo(fraction: Float) {
-        val mp = player ?: return
-        val dur = try { mp.duration.takeIf { it > 0 } } catch (e: Exception) { null } ?: return
-        val target = (dur * fraction.coerceIn(0f, 1f)).toInt()
-        mp.seekTo(target)
-        _playback.value = _playback.value?.copy(positionMs = target)
-    }
+    @Volatile
+    private var paused = false
 
-    fun pause() {
-        player?.let { if (it.isPlaying) { it.pause(); _isPlaying.value = false } }
-    }
+    // --- Playback of a compiled script ------------------------------------
 
-    fun resume() {
-        player?.let { if (!it.isPlaying) { it.start(); _isPlaying.value = true } }
-    }
+    /**
+     * Speak a whole script.
+     *
+     * Returns immediately; progress is published through [playback]. Callers
+     * that need to know whether audio ever started should watch the flow for a
+     * non-null value, or use [speakAndWait].
+     */
+    fun playScript(
+        script: SpeechScript,
+        dialogId: String?,
+        onFinished: () -> Unit = {},
+    ) {
+        stop()
+        if (script.isEmpty) {
+            Log.d(TAG, "empty script; nothing to play")
+            onFinished()
+            return
+        }
 
-    /** Current position/duration snapshot, polled by the UI while visible. */
-    fun currentPlayback(): PlaybackState? {
-        val mp = player ?: return _playback.value?.copy(playing = false)
-        return try {
-            PlaybackState(
-                positionMs = mp.currentPosition,
-                durationMs = mp.duration.coerceAtLeast(0),
-                playing = mp.isPlaying,
+        val labels = script.optionSegments.map { it.source }
+        val title = script.title.ifBlank { "Dialog" }
+
+        scriptJob = scope.launch {
+            paused = false
+            SpeechTrace.info("play", "script: ${script.segments.size} segments, waitMs=$waitMs")
+            _playback.value = PlaybackState(
+                phase = PlaybackPhase.GENERATING,
+                segmentIndex = 0,
+                segmentCount = script.segments.size,
+                segmentLabel = script.segments.firstOrNull()?.kind?.name?.lowercase(),
+                positionMs = 0,
+                durationMs = 0,
+                playing = false,
             )
-        } catch (e: Exception) {
-            null
+
+            for ((index, segment) in script.segments.withIndex()) {
+                if (!isActive()) return@launch
+
+                publishGenerating(index, script.segments.size, segment.kind.name.lowercase())
+
+                val startedAt = System.currentTimeMillis()
+                val file = withTimeoutOrNull(waitMs) { easyVoice.synthesize(segment.spoken) }
+                val elapsed = System.currentTimeMillis() - startedAt
+                if (file == null) {
+                    SpeechTrace.warn(
+                        "synth",
+                        "segment ${index + 1}/${script.segments.size} failed after ${elapsed}ms; script stopped",
+                    )
+                    Log.d(TAG, "segment $index unavailable within ${waitMs}ms; stopping script")
+                    break
+                }
+                SpeechTrace.info(
+                    "synth",
+                    "segment ${index + 1}/${script.segments.size} in ${elapsed}ms " +
+                        "(${segment.spoken.length} chars)",
+                )
+                if (!isActive()) return@launch
+
+                val started = playSegment(
+                    file = file,
+                    dialogId = dialogId,
+                    title = title,
+                    prompt = segment.spoken,
+                    optionCount = labels.size,
+                    optionLabels = labels,
+                    segmentIndex = index,
+                    segmentCount = script.segments.size,
+                )
+                if (!started) {
+                    SpeechTrace.warn("play", "segment ${index + 1} could not start; script stopped")
+                    Log.d(TAG, "segment $index could not start; stopping script")
+                    break
+                }
+
+                awaitSegmentFinish(index, script.segments.size)
+
+                // Local silence between segments. This is the pause the API
+                // cannot give us.
+                if (segment.pauseAfterMs > 0 && isActive()) {
+                    delay(segment.pauseAfterMs.toLong())
+                }
+            }
+
+            if (isActive()) {
+                _isPlaying.value = false
+                _playback.value = null
+                abandonFocus()
+                onFinished()
+            }
         }
     }
 
     /**
-     * Speak [text] with EasyVoice.
+     * Speak [script] and suspend until playback finishes or [timeoutMs] passes.
      *
-     * @return true if audio actually started playing. false means the caller must
-     *         fall back to Android TTS — this includes the timeout case, so a
-     *         slow network degrades rather than leaving dead air indefinitely.
+     * Used by reply confirmations, which must not block the send for long.
      */
+    suspend fun speakAndWait(script: SpeechScript, timeoutMs: Long = 6_000L): Boolean {
+        var started = false
+        val job = scope.launch { playScript(script, dialogId = null) }
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (_playback.value != null) started = true
+            if (started && _playback.value == null) break
+            if (job.isCompleted && _playback.value == null) break
+            delay(100)
+        }
+        return started
+    }
+
+    // --- Simple single-clip API (kept for confirmations and notifications) --
+
     suspend fun speak(text: String): Boolean =
         speak(text, dialogId = null, title = null, optionCount = 0, optionLabels = emptyList())
 
     /**
-     * Speak [text], optionally publishing full dialog metadata to the car.
-     *
-     * @param dialogId stable id, used as the MediaItem mediaId
-     * @param title dialog title shown on the head unit
-     * @param optionCount how many choices the dialog offers
-     * @param optionLabels choice labels, rendered as tappable chapters on the car
-     * @return true if audio actually started playing. false means the caller must
-     *         fall back to Android TTS - this includes the timeout case, so a
-     *         slow network degrades rather than leaving dead air indefinitely.
+     * Speak one string, optionally publishing dialog metadata to the car.
      */
     suspend fun speak(
         text: String,
@@ -136,39 +225,82 @@ class DialogAudioPlayer(private val context: Context) {
         if (!easyVoice.isConfigured) return false
         if (text.isBlank()) return false
 
-        val file = withTimeoutOrNull(EASYVOICE_WAIT_MS) {
-            easyVoice.synthesize(text)
-        }
-
+        val file = withTimeoutOrNull(waitMs) { easyVoice.synthesize(text) }
         if (file == null) {
-            Log.d(TAG, "EasyVoice unavailable within ${EASYVOICE_WAIT_MS}ms; caller should fall back")
+            Log.d(TAG, "EasyVoice unavailable within ${waitMs}ms; caller should fall back")
             return false
         }
 
-        if (preferMediaSession && dialogId != null) {
+        // A single clip is exactly a one-segment script.
+        return playSegment(
+            file = file,
+            dialogId = dialogId,
+            title = title ?: "Dialog",
+            prompt = text,
+            optionCount = optionCount,
+            optionLabels = optionLabels,
+            segmentIndex = 0,
+            segmentCount = 1,
+        )
+    }
+
+    private fun isActive(): Boolean = scriptJob?.isActive ?: false
+
+    private fun publishGenerating(index: Int, count: Int, label: String) {
+        _playback.value = PlaybackState(
+            phase = PlaybackPhase.GENERATING,
+            segmentIndex = index,
+            segmentCount = count,
+            segmentLabel = label,
+            positionMs = 0,
+            durationMs = 0,
+            playing = false,
+        )
+    }
+
+    /** Start one clip playing. Returns false if it never started. */
+    private fun playSegment(
+        file: File,
+        dialogId: String?,
+        title: String,
+        prompt: String,
+        optionCount: Int,
+        optionLabels: List<String>,
+        segmentIndex: Int,
+        segmentCount: Int,
+    ): Boolean {
+        if (preferMediaSession) {
             val ok = MediaSessionBridge.play(
                 context = context,
-                dialogId = dialogId,
+                dialogId = dialogId ?: "segment-$segmentIndex",
                 file = file,
-                title = title ?: "Dialog",
-                prompt = text,
+                title = title,
+                prompt = prompt,
                 optionCount = optionCount,
                 optionLabels = optionLabels,
             )
             if (ok) {
                 _isPlaying.value = true
+                _playback.value = PlaybackState(
+                    phase = PlaybackPhase.PLAYING,
+                    segmentIndex = segmentIndex,
+                    segmentCount = segmentCount,
+                    segmentLabel = null,
+                    positionMs = 0,
+                    durationMs = MediaSessionBridge.durationMs().coerceAtLeast(0),
+                    playing = true,
+                )
                 return true
             }
             Log.d(TAG, "MediaSession playback unavailable; falling back to local player")
         }
-
-        return playFile(file)
+        return playFileLocally(file, segmentIndex, segmentCount)
     }
 
-    private suspend fun playFile(file: File): Boolean {
-        stop()
+    private fun playFileLocally(file: File, segmentIndex: Int, segmentCount: Int): Boolean {
+        releaseLocalPlayer()
         if (!requestFocus()) {
-            Log.d(TAG, "Audio focus refused; caller should fall back")
+            Log.d(TAG, "audio focus refused; caller should fall back")
             return false
         }
 
@@ -176,24 +308,17 @@ class DialogAudioPlayer(private val context: Context) {
             val mp = MediaPlayer()
             mp.setAudioAttributes(
                 // Must match DialogMediaService: USAGE_MEDIA keeps the Android
-                // Auto route alive, USAGE_ASSISTANT binds to the STT voice
-                // channel and dies when STT ends.
+                // Auto route alive; USAGE_ASSISTANT binds to the STT channel and
+                // dies when speech recognition ends.
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
             mp.setDataSource(file.absolutePath)
-            mp.setOnCompletionListener {
-                _isPlaying.value = false
-                _playback.value = null
-                abandonFocus()
-            }
             mp.setOnErrorListener { _, what, extra ->
                 Log.w(TAG, "MediaPlayer error what=$what extra=$extra")
                 _isPlaying.value = false
-                _playback.value = null
-                abandonFocus()
                 true
             }
             mp.prepare()
@@ -201,6 +326,10 @@ class DialogAudioPlayer(private val context: Context) {
             player = mp
             _isPlaying.value = true
             _playback.value = PlaybackState(
+                phase = PlaybackPhase.PLAYING,
+                segmentIndex = segmentIndex,
+                segmentCount = segmentCount,
+                segmentLabel = null,
                 positionMs = 0,
                 durationMs = mp.duration.coerceAtLeast(0),
                 playing = true,
@@ -214,19 +343,122 @@ class DialogAudioPlayer(private val context: Context) {
         }
     }
 
-    /** Stop playback and release resources. Safe to call when nothing is playing. */
-    fun stop() {
-        playbackJob?.cancel()
-        playbackJob = null
-        // Only tear down the local MediaPlayer. When playback is going through
-        // the MediaSession the clip is owned by the service, and releasing it
-        // here would drop the session - which is what made Android Auto revert
-        // to the car's own radio the moment a dialog finished speaking.
-        player?.runCatching {
-            if (isPlaying) stop()
-            release()
+    /**
+     * Wait for the current segment to finish, honouring pause.
+     *
+     * Polling keeps this engine-agnostic: the local MediaPlayer and the
+     * ExoPlayer inside the media session are both just "something with a
+     * position that ends".
+     */
+    private suspend fun awaitSegmentFinish(segmentIndex: Int, segmentCount: Int) {
+        while (isActive()) {
+            val snapshot = currentPlayback()
+            if (snapshot != null) {
+                _playback.value = snapshot.copy(
+                    segmentIndex = segmentIndex,
+                    segmentCount = segmentCount,
+                )
+            }
+            if (paused) {
+                delay(120)
+                continue
+            }
+            val finished = when {
+                preferMediaSession && MediaSessionBridge.isConnected() ->
+                    MediaSessionBridge.hasEnded() || !MediaSessionBridge.isPlaying()
+                player != null -> player?.let { !it.isPlaying && it.currentPosition > 0 } ?: true
+                else -> true
+            }
+            if (finished) return
+            delay(120)
         }
-        player = null
+    }
+
+    // --- Transport --------------------------------------------------------
+
+    /** Seek within the current segment to [fraction] (0f..1f). */
+    fun seekTo(fraction: Float) {
+        val clamped = fraction.coerceIn(0f, 1f)
+        if (preferMediaSession && MediaSessionBridge.isConnected()) {
+            val dur = MediaSessionBridge.durationMs()
+            if (dur > 0) MediaSessionBridge.seekTo((dur * clamped).toLong())
+            return
+        }
+        val mp = player ?: return
+        val dur = try { mp.duration.takeIf { it > 0 } } catch (e: Exception) { null } ?: return
+        mp.seekTo((dur * clamped).toInt())
+    }
+
+    fun pause() {
+        paused = true
+        if (preferMediaSession && MediaSessionBridge.isConnected()) {
+            MediaSessionBridge.pause()
+        } else {
+            player?.let { if (it.isPlaying) it.pause() }
+        }
+        _isPlaying.value = false
+        _playback.value = _playback.value?.copy(phase = PlaybackPhase.PAUSED, playing = false)
+    }
+
+    fun resume() {
+        paused = false
+        if (preferMediaSession && MediaSessionBridge.isConnected()) {
+            MediaSessionBridge.resume()
+        } else {
+            player?.let { if (!it.isPlaying) it.start() }
+        }
+        _isPlaying.value = true
+        _playback.value = _playback.value?.copy(phase = PlaybackPhase.PLAYING, playing = true)
+    }
+
+    fun togglePause() {
+        if (paused) resume() else pause()
+    }
+
+    val isPaused: Boolean get() = paused
+
+    /** Snapshot of live position/duration, for the UI to poll while visible. */
+    fun currentPlayback(): PlaybackState? {
+        if (preferMediaSession && MediaSessionBridge.isConnected()) {
+            val dur = MediaSessionBridge.durationMs()
+            return PlaybackState(
+                phase = if (paused) PlaybackPhase.PAUSED else PlaybackPhase.PLAYING,
+                segmentIndex = _playback.value?.segmentIndex ?: 0,
+                segmentCount = _playback.value?.segmentCount ?: 1,
+                segmentLabel = _playback.value?.segmentLabel,
+                positionMs = MediaSessionBridge.positionMs().coerceAtLeast(0),
+                durationMs = dur.coerceAtLeast(0),
+                playing = MediaSessionBridge.isPlaying(),
+            )
+        }
+        val mp = player ?: return _playback.value?.copy(playing = false)
+        return try {
+            PlaybackState(
+                phase = if (paused) PlaybackPhase.PAUSED else PlaybackPhase.PLAYING,
+                segmentIndex = _playback.value?.segmentIndex ?: 0,
+                segmentCount = _playback.value?.segmentCount ?: 1,
+                segmentLabel = _playback.value?.segmentLabel,
+                positionMs = mp.currentPosition,
+                durationMs = mp.duration.coerceAtLeast(0),
+                playing = mp.isPlaying,
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Stop playback and cancel any script in progress. */
+    fun stop() {
+        scriptJob?.cancel()
+        scriptJob = null
+        paused = false
+        releaseLocalPlayer()
+        // Only tear down our own player. When playback is owned by the media
+        // session, releasing here would drop the session - which is what made
+        // Android Auto revert to the car's own radio after a dialog finished.
+        if (!(preferMediaSession && MediaSessionBridge.isConnected())) {
+            MediaSessionBridge.pauseSafely()
+        }
         _isPlaying.value = false
         _playback.value = null
         abandonFocus()
@@ -236,6 +468,16 @@ class DialogAudioPlayer(private val context: Context) {
         stop()
         scope.cancel()
     }
+
+    private fun releaseLocalPlayer() {
+        player?.runCatching {
+            if (isPlaying) stop()
+            release()
+        }
+        player = null
+    }
+
+    // --- Audio focus ------------------------------------------------------
 
     private fun requestFocus(): Boolean {
         if (hasFocus) return true
@@ -250,7 +492,7 @@ class DialogAudioPlayer(private val context: Context) {
             .setOnAudioFocusChangeListener { change ->
                 when (change) {
                     AudioManager.AUDIOFOCUS_LOSS,
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> stop()
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> pause()
                 }
             }
             .build()
@@ -268,20 +510,50 @@ class DialogAudioPlayer(private val context: Context) {
     }
 }
 
+/** What the audio engine is currently doing, for the on-screen controls. */
+enum class PlaybackPhase {
+    /** Synthesizing; nothing audible yet this segment. */
+    GENERATING,
+    /** Audible. */
+    PLAYING,
+    /** Held by the user. */
+    PAUSED,
+}
+
 /** Snapshot of dialog audio progress, for the player indicator and scrubber. */
 data class PlaybackState(
     val positionMs: Int,
     val durationMs: Int,
     val playing: Boolean,
+    val phase: PlaybackPhase = if (playing) PlaybackPhase.PLAYING else PlaybackPhase.PAUSED,
+    val segmentIndex: Int = 0,
+    val segmentCount: Int = 1,
+    /** Kind of the segment being spoken, e.g. "paragraph" or "option". */
+    val segmentLabel: String? = null,
 ) {
     val progress: Float
         get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
 
+    /** Overall progress across the whole script, by segment. */
+    val scriptProgress: Float
+        get() {
+            if (segmentCount <= 0) return 0f
+            val within = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+            return ((segmentIndex + within) / segmentCount).coerceIn(0f, 1f)
+        }
+
+    val isGenerating: Boolean get() = phase == PlaybackPhase.GENERATING
+
     fun positionLabel(): String = formatMs(positionMs)
     fun durationLabel(): String = formatMs(durationMs)
 
-    private fun formatMs(ms: Int): String {
-        val total = (ms / 1000).coerceAtLeast(0)
-        return "%d:%02d".format(total / 60, total % 60)
+    /** "2 of 7" style indicator. */
+    fun segmentLabelText(): String = "${segmentIndex + 1} of $segmentCount"
+
+    companion object {
+        fun formatMs(ms: Int): String {
+            val total = (ms / 1000).coerceAtLeast(0)
+            return "%d:%02d".format(total / 60, total % 60)
+        }
     }
 }

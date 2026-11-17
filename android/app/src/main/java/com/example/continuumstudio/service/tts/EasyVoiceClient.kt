@@ -40,16 +40,28 @@ class EasyVoiceClient(private val context: Context) {
         /** Fair-use characters are 10M per rolling 30 days on Pro. */
         private const val CACHE_DIR = "easyvoice"
 
-        /** Generation is ~2-3s; leave headroom for a cold TLS handshake. */
-        private const val TIMEOUT_SECONDS = 20L
+        /**
+         * HTTP timeouts for one segment.
+         *
+         * These must exceed the player's wait budget, or the socket gives up
+         * first and the caller sees a failure it could have waited out. A long
+         * dialog segment on a poor mobile link is the case that matters, so this
+         * is deliberately generous - the player still applies its own, shorter,
+         * deadline and can move on.
+         */
+        private const val CONNECT_TIMEOUT_SECONDS = 15L
+        private const val READ_TIMEOUT_SECONDS = 60L
     }
 
     private val apiKey: String = BuildConfig.EASYVOICE_API_KEY
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .writeTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        // A dead mobile link otherwise hangs until the read timeout on every
+        // retry, which is what made a stalled generation feel like a freeze.
+        .retryOnConnectionFailure(true)
         .build()
 
     val isConfigured: Boolean get() = apiKey.isNotBlank()

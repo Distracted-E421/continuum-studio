@@ -375,8 +375,11 @@ class DialogNotificationService : Service() {
         
         notificationManager.notify(DIALOG_NOTIFICATION_ID, notification)
         
-        // Read dialog aloud using TTS (for Android Auto hands-free use)
-        ttsHelper?.speakDialog(title, prompt, dialogType, optionsJson, priority)
+        // Read dialog aloud using TTS (for Android Auto hands-free use).
+        // The dialog id is passed through so playback can be tied to the dialog
+        // rather than to its title, which is what lets the audio bar know which
+        // clip it is controlling.
+        ttsHelper?.speakDialog(title, prompt, dialogType, optionsJson, priority, dialogId)
     }
     
     /**
