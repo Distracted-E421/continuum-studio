@@ -421,7 +421,9 @@ class DialogWebSocketClient(
                     val apiResponse = json.decodeFromString<ApiResponse<DialogDetails>>(body)
                     if (apiResponse.success) {
                         apiResponse.data?.also { dialog ->
-                            _dialogState.update { it.copy(activeDialog = dialog) }
+                            _dialogState.update { current ->
+                                DialogStateMerge.onFetched(current, dialog)
+                            }
                         }
                     } else null
                 } else null
@@ -499,12 +501,7 @@ class DialogWebSocketClient(
                     if (!apiResponse.success) {
                         return@withContext AnswerOutcome.Failed(apiResponse.error ?: "server refused")
                     }
-                    _dialogState.update { it.copy(
-                        activeDialog = null,
-                        selectedValue = "",
-                        comment = "",
-                        selectedOptions = emptySet()
-                    ) }
+                    _dialogState.update { DialogStateMerge.onAnswered(it) }
                     AnswerOutcome.Sent
                 }
             } catch (e: java.io.IOException) {
