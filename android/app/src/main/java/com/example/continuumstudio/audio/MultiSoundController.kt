@@ -53,6 +53,35 @@ class MultiSoundController(private val context: Context) {
             "com.amazon.avod.thirdpartyclient" to "Prime Video",
             "com.vivaldi.browser" to "Vivaldi",
         )
+
+        /** AppOps modes we care about for TAKE_AUDIO_FOCUS. */
+        enum class FocusMode { ALLOW, DEFAULT, IGNORE, UNSET }
+
+        /**
+         * Parse `cmd appops get` output for TAKE_AUDIO_FOCUS.
+         *
+         * Pure, so it is testable without a device. The previous check was
+         * `!output.contains("ignore")`, which gave the right answer for the shapes
+         * seen on one device but reported "allowed" for any unrecognised format -
+         * and "allowed" is exactly the state that breaks car playback.
+         *
+         * Returns null when the output is unrecognisable, so callers treat it as
+         * unknown rather than guessing.
+         */
+        fun parseFocusMode(output: String): FocusMode? {
+            val text = output.trim()
+            if (text.isEmpty()) return null
+            if (text.startsWith("No operations", ignoreCase = true)) return FocusMode.UNSET
+            // Only the first line describes the op; anything after is context.
+            val firstLine = text.lineSequence().firstOrNull()?.trim().orEmpty()
+            val mode = firstLine.substringAfterLast(':', "").trim().lowercase()
+            return when (mode) {
+                "allow" -> FocusMode.ALLOW
+                "default" -> FocusMode.DEFAULT
+                "ignore" -> FocusMode.IGNORE
+                else -> null
+            }
+        }
     }
 
     fun isSupportedDevice(): Boolean =
@@ -103,10 +132,24 @@ class MultiSoundController(private val context: Context) {
     suspend fun setFocusStealingAllowed(pkg: String, allowed: Boolean): Result<Unit> =
         shell("cmd appops set $pkg TAKE_AUDIO_FOCUS ${if (allowed) "default" else "ignore"}")
 
-    /** Whether [pkg] is currently allowed to steal focus. */
+    /**
+     * Whether [pkg] is currently allowed to steal audio focus.
+     *
+     * `cmd appops get` has three shapes worth knowing, and the old
+     * `!out.contains("ignore")` only got them right by accident:
+     *
+     *   "No operations."                        -> the op is not set at all
+     *   "TAKE_AUDIO_FOCUS: default"             -> explicitly default
+     *   "TAKE_AUDIO_FOCUS: ignore"              -> suppressed by us
+     *
+     * Anything other than an explicit `ignore` counts as allowed, but the modes are
+     * matched exactly rather than by substring, because a locale or an Android
+     * version formatting this differently would have silently reported the wrong
+     * state - and for this op the wrong state is what makes car audio drop out.
+     */
     suspend fun isFocusStealingAllowed(pkg: String): Boolean? {
         val out = readSettingRaw("cmd appops get $pkg TAKE_AUDIO_FOCUS") ?: return null
-        return !out.contains("ignore")
+        return parseFocusMode(out)?.let { it != FocusMode.IGNORE }
     }
 
     /**
