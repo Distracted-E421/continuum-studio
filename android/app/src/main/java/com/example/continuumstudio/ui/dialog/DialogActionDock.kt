@@ -272,7 +272,7 @@ fun ActionDock(
             ) {
                 OutlinedButton(
                     onClick = onToggleComment,
-                    modifier = Modifier.weight(1f).height(46.dp),
+                    modifier = Modifier.weight(1f).height(48.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFBDBDBD)),
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3A3A3A)),
                     shape = RoundedCornerShape(10.dp),
@@ -290,7 +290,7 @@ fun ActionDock(
                 // muted-state indicator so the reason for silence is visible.
                 OutlinedButton(
                     onClick = onMuteToggle,
-                    modifier = Modifier.height(46.dp),
+                    modifier = Modifier.height(48.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = if (isMuted) Color(0xFFFFB74D) else Color(0xFFBDBDBD)
                     ),
@@ -404,17 +404,22 @@ private fun LiveAudioStrip(
                     }
                 }
 
-                IconButton(onClick = onPlayPause, modifier = Modifier.size(38.dp)) {
+                // 44dp targets: the accessibility minimum is 48dp, and these are
+                // the controls reached while driving, so being undersized here was
+                // the worst possible place for it. 44 keeps three controls plus
+                // the status text on one row at 412dp width; the tappable box is
+                // the full IconButton bounds, not the 20dp icon inside it.
+                IconButton(onClick = onPlayPause, modifier = Modifier.size(44.dp)) {
                     Icon(
                         if (playback.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (playback.playing) "Pause" else "Play",
                         tint = Color(0xFFE0E0E0),
                     )
                 }
-                IconButton(onClick = onStop, modifier = Modifier.size(38.dp)) {
+                IconButton(onClick = onStop, modifier = Modifier.size(44.dp)) {
                     Icon(Icons.Default.Stop, contentDescription = "Stop", tint = Color(0xFFE0E0E0))
                 }
-                IconButton(onClick = onMuteToggle, modifier = Modifier.size(38.dp)) {
+                IconButton(onClick = onMuteToggle, modifier = Modifier.size(44.dp)) {
                     Icon(
                         if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
                         contentDescription = "Mute this dialog",
