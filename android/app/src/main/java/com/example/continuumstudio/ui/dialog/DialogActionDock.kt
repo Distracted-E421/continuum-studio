@@ -4,6 +4,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -72,16 +75,32 @@ fun PinnedOptions(
     if (options.isEmpty()) return
     val haptics = LocalHapticFeedback.current
 
+    // Cap the pinned area at a share of the screen rather than a fixed height.
+    //
+    // A fixed 260dp was still too much on a small phone: with eight options, the
+    // audio strip visible and the app's own bars, the reading pane was left 46dp -
+    // enough for one line. A fraction of available height adapts to the device.
+    val maxPinnedHeight = with(LocalConfiguration.current) {
+        // 30%: enough for four options in two columns, while leaving the reading
+        // pane usable even at 640dp height with the audio strip showing.
+        (screenHeightDp.dp * 0.30f)
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(max = maxPinnedHeight)
+            .verticalScroll(rememberScrollState())
             .background(CardColor)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // Two columns for up to four options keeps every target large; beyond
-        // that a single column is more predictable to hit while moving.
-        val columns = if (options.size <= 4) 2 else 1
+        // Two columns always. A single column was used beyond four options, but
+        // that doubled the height exactly when space was tightest - 8 options is
+        // 4 rows in two columns (264dp) versus 8 rows in one (528dp). Labels
+        // truncate at two lines, which is acceptable for a choice; being off
+        // screen is not.
+        val columns = 2
         val rows = options.chunked(columns)
 
         rows.forEach { row ->
