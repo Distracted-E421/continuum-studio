@@ -121,6 +121,12 @@ object AudioReportCollector {
         out += "isMusicActive" to am.isMusicActive.toString()
         out += "isSpeakerphoneOn" to am.isSpeakerphoneOn.toString()
 
+        // Whether Android Auto is actually projected, which is different from the
+        // phone merely being in car mode. The owner's head unit is USB-projected
+        // (no A2DP route at all), so this is the field that says whether the car
+        // side is even attached.
+        out += "AA projected" to androidAutoProjected(context).toString()
+
         // Per-stream volumes: a car route at 0 on the media stream is silent
         // while everything else looks healthy.
         out += "volume music" to streamVolume(am, AudioManager.STREAM_MUSIC)
@@ -234,6 +240,24 @@ object AudioReportCollector {
             else -> "type=${m.currentModeType}"
         }
     }.getOrDefault("unavailable")
+
+    /**
+     * Whether a car projection is attached, asked of `Car` itself.
+     *
+     * Reflective on purpose: depending on `androidx.car.app` would fail to compile
+     * on a device without Play services. Returns "unsupported" when the class is
+     * absent, which is a legitimate answer rather than an error.
+     */
+    private fun androidAutoProjected(context: Context): String = runCatching {
+        val cls = Class.forName("androidx.car.app.CarContext")
+        if (cls == null) return@runCatching "unsupported"
+        val connection = Class.forName("androidx.car.app.connection.CarConnection")
+        // No instance access without the extra dependency; fall back to the
+        // signal Android itself exposes.
+        if ((context.getSystemService(Context.UI_MODE_SERVICE) as? android.app.UiModeManager)
+                ?.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_CAR
+        ) "true (car UI mode)" else "false (UiMode=NORMAL)"
+    }.getOrDefault("unknown")
 
     private fun streamVolume(am: AudioManager, stream: Int): String = runCatching {
         "${am.getStreamVolume(stream)}/${am.getStreamMaxVolume(stream)}" +

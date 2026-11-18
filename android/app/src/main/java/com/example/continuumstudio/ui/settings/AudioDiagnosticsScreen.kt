@@ -126,6 +126,16 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
                 com.example.continuumstudio.audio.AudioReport.describeDifferences(car, phone)
             )
             appendLine()
+            // Findings for the CURRENT state, printed before the raw dump so the
+            // reader does not have to know what a healthy value looks like.
+            val findings = com.example.continuumstudio.audio.AudioFindings.inspect(car)
+            if (findings.isEmpty()) {
+                appendLine("FINDINGS: nothing suspicious in the current audio state.")
+            } else {
+                appendLine("FINDINGS:")
+                findings.forEach { appendLine("- $it") }
+            }
+            appendLine()
             appendLine("=== CAR ===")
             appendLine(car.render())
             appendLine("=== PHONE ===")
