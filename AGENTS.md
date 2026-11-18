@@ -206,6 +206,24 @@ exactly; an `UNSET` op is `cmd appops reset`, not set to default. `applyCarProfi
 `DIALOG_COMPETITORS` (Spotify, Audible) rather than every media app, and the UI labels Vivaldi as
 deliberately untouched.
 
+**A focus hold is NOT a finished segment** (this was a bug the focus change itself introduced,
+found by self-review the same session). While held, `playingNow` is false and the position is
+frozen - exactly the shape of the pre-existing "unknown duration and it stopped, so it ended"
+rule. The first phone call mid-dialog would have ended the read. Three consequences, all now
+encoded in pure `SegmentEnd` (12 tests) + `MAX_HOLD_MS`:
+
+- `SegmentEnd.isFinished` returns **false** whenever `heldByFocus`, *including* when the position
+  has reached the duration, because the position is stale during a hold and advancing the script
+  then drops audio. On resume the position is re-read and the normal check fires. An explicit
+  `STATE_ENDED` still wins, being the player's own assertion rather than an inference.
+- The per-segment deadline is **suspended** while held (otherwise a call longer than
+  `MAX_SEGMENT_PLAY_MS` logs "moving on" and starts the next segment over a merely-paused clip),
+  and the hold gets its own `MAX_HOLD_MS` (5 min) so an unrecoverable loss cannot hang the read
+  silently.
+- Do not put "has this finished" back inline in the polling loop. It has now been wrong three
+  times (during start-up, during buffering, during a hold) and the previous two were only
+  findable by ear in a car.
+
 **Three engines, three attribute sites** - keep them all `USAGE_MEDIA` +
 `CONTENT_TYPE_SPEECH`: `DialogAudioPlayer.playFileLocally`, `DialogMediaService.audioAttributes()`,
 and `FallbackTts` (which had *none*, so the on-device voice used the TextToSpeech default of
