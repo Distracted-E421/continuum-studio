@@ -62,19 +62,26 @@ class DialogAudioPlayer(private val context: Context) {
         const val EASYVOICE_WAIT_MS = DEFAULT_WAIT_MS
 
         /**
-         * How many segments may be synthesized ahead of playback.
+         * Segments to synthesize ahead of playback.
          *
-         * Measured against the live API on 2026-11-17: a typical dialog segment
-         * generates in ~1.6s and plays for ~3.7s. Generation is therefore faster
-         * than playback, so one segment of lookahead is enough to keep audio
-         * continuous; two gives margin for a slow segment (and a second segment
-         * costs one cached request, not one per playback).
+         * Measured 2026-11-17 against the live API: generation ~1.6s, playback
+         * ~3.7s for a typical chunk. Generation being faster means the buffer
+         * grows ~2.1s per segment, so two is ample for normal operation.
          *
-         * The point is that this must be greater than zero. With no lookahead the
-         * player generated and played strictly in turn, which - at these numbers -
-         * put a 1.6s silence at every 3.7s boundary.
+         * It is not enough for a *slow* segment: two segments of runway is ~7.4s,
+         * so a 20s generation still leaves an audible gap. Raising this
+         * unconditionally would spend requests on segments nobody reaches (stop,
+         * skip, answer all end playback early), so instead the player watches its
+         * own timing and deepens the lookahead only when it sees generation
+         * running behind playback.
          */
         private const val PREFETCH_AHEAD = 2
+
+        /** Deepened lookahead once generation is observed to be slow. */
+        private const val PREFETCH_AHEAD_SLOW = 4
+
+        /** A segment slower than this (vs playback) counts as slow. */
+        private const val SLOW_GENERATION_FACTOR = 1.2
     }
 
     /**
@@ -217,10 +224,21 @@ class DialogAudioPlayer(private val context: Context) {
                     break
                 }
 
-                // With lookahead, the next segment is usually already waiting. If
-                // it is not, the channel suspends above and the listener is hearing
-                // the gap - so surface the generating state rather than pretending
-                // playback is continuous.
+                // Detect the case prefetch cannot cover: generation slower than
+                // this segment will take to play. Recording it makes the gap
+                // attributable instead of mysterious, which is the difference
+                // between "audio is broken" and "the service was slow on that one".
+                val wasStarved = item.generationMs > 0 &&
+                    item.generationMs > lastPlaybackMs * SLOW_GENERATION_FACTOR &&
+                    lastPlaybackMs > 0
+                if (wasStarved) {
+                    SpeechTrace.warn(
+                        "play",
+                        "segment ${item.index + 1} generated in ${item.generationMs}ms vs " +
+                            "${lastPlaybackMs}ms of playback - a gap is likely here",
+                    )
+                }
+
                 _playback.value = _playback.value?.copy(
                     phase = PlaybackPhase.PLAYING,
                     segmentIndex = item.index,
@@ -244,6 +262,10 @@ class DialogAudioPlayer(private val context: Context) {
 
                 awaitSegmentFinish(item.index, script.segments.size)
 
+                // Remember how long this one played, so the next segment's
+                // generation time can be judged against it.
+                currentPlayback()?.durationMs?.takeIf { it > 0 }?.let { lastPlaybackMs = it }
+
                 if (item.segment.pauseAfterMs > 0 && isActive()) {
                     delay(item.segment.pauseAfterMs.toLong())
                 }
@@ -260,6 +282,9 @@ class DialogAudioPlayer(private val context: Context) {
             }
         }
     }
+
+    /** Duration of the last segment played, used to judge generation speed. */
+    private var lastPlaybackMs: Int = 0
 
     /** A segment that has finished synthesizing, ready to play. */
     private data class PreparedSegment(
