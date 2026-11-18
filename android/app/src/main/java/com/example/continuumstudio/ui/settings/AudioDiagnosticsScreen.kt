@@ -65,10 +65,11 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
         val out = mutableListOf<Pair<String, String>>()
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-        out += "MediaSession" to runCatching {
-            // Reflect the bridge state without exposing internals.
-            if (MediaSessionBridge.toString().isNotEmpty()) "see logcat tag MediaSessionBridge" else "?"
-        }.getOrDefault("?")
+        out += "MediaSession" to if (MediaSessionBridge.isConnected()) {
+            "CONNECTED - holding the car's media channel"
+        } else {
+            "released (nothing to play)"
+        }
 
         out += "Shizuku available" to runCatching { ShizukuBridge.isAvailable() }.getOrDefault(false).toString()
 

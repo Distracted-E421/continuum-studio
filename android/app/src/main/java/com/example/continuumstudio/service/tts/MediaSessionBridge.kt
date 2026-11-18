@@ -191,4 +191,22 @@ object MediaSessionBridge {
         }
         controller = null
     }
+
+    /**
+     * Release the controller and forget any pending connection.
+     *
+     * Needed because the session is now torn down between reads (see
+     * DialogTTSHelper.releaseSessionIfIdle), and a stale `controller` pointing at
+     * a dead session makes `isConnected` false forever while `connecting` being
+     * non-null blocks every later reconnect.
+     */
+    fun disconnect() {
+        try {
+            connecting?.cancel(true)
+        } catch (e: Exception) {
+            Log.d(TAG, "cancel of pending connection failed: ${e.message}")
+        }
+        connecting = null
+        release()
+    }
 }

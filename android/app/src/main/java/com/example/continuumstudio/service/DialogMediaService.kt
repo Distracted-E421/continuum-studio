@@ -106,7 +106,36 @@ class DialogMediaService : MediaLibraryService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
             .build()
 
-        /** Start the media service. Safe to call repeatedly. */
+        /**
+         * Tear the session down once there is nothing to play.
+         *
+         * This service used to be resident for the whole uptime: it started from
+         * a BOOT_COMPLETED receiver and called `startForeground` in `onCreate`.
+         * Because it declares `<uses name="media"/>` to Android Auto, that made
+         * Continuum a permanently-registered media source. Observed in a Subaru
+         * head unit (2026-11-18): Continuum Studio appeared highlighted in the
+         * Android Auto app bar with no dialog present at all, i.e. it held the
+         * media channel while completely idle.
+         *
+         * A phone media app that keeps the channel and never plays anything can
+         * leave the head unit routed to it with silence - which looks
+         * indistinguishable from "the car has no audio at all". Since dialog
+         * reading is normally off, this session was holding the route for a
+         * feature the user had not enabled.
+         */
+        fun stop(context: android.content.Context) {
+            try {
+                context.stopService(Intent(context, DialogMediaService::class.java))
+            } catch (e: Exception) {
+                Log.w(TAG, "could not stop media service: ${e.message}")
+            }
+        }
+
+        /**
+         * Start the media service so a dialog can be played through it.
+         *
+         * Safe to call repeatedly.
+         */
         fun start(context: android.content.Context) {
             val intent = Intent(context, DialogMediaService::class.java)
             try {
@@ -279,7 +308,24 @@ class DialogMediaService : MediaLibraryService() {
         //
         // The session is released in onDestroy when the service is genuinely
         // torn down (by the system or explicitly), not on task removal.
+        //
+        // Note: liveness is now bounded by the *read* rather than by the
+        // process. AudioPrefs/dialog completion calls [stop] when playback ends,
+        // so the session is not held while idle - see [stop] for why that
+        // matters in a car.
         Log.i(TAG, "task removed; keeping session alive so AA retains the audio route")
+    }
+
+    /**
+     * Called when the last segment of a read has finished.
+     *
+     * Hands the audio route back to whatever the user was listening to. The
+     * delay lets the final clip finish audibly before the session disappears;
+     * tearing it down at once made the car cut the last word.
+     */
+    fun scheduleStopWhenIdle(reason: String) {
+        Log.i(TAG, "stop scheduled when idle: $reason")
+        stopSelf()
     }
 
     override fun onDestroy() {

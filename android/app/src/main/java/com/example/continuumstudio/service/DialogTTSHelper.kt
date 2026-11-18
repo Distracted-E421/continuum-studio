@@ -58,18 +58,64 @@ class DialogTTSHelper(private val context: Context) {
     var readOptionsAloud = true
 
     init {
-        // Connect the media session up front: holding one is what keeps Android
-        // Auto from dropping back to the car's own radio between dialogs.
-        DialogMediaService.start(context)
+        // NOTE: deliberately no DialogMediaService.start / MediaSessionBridge.connect
+        // here any more (1.19.49).
+        //
+        // This constructor runs on app launch from the ViewModel, and connecting
+        // the media session there made the app a registered Android Auto media
+        // source from the moment it started - holding the car's audio channel
+        // while playing nothing. That is the likely cause of "no audio in the
+        // car from any app". The session is now connected in ensureSessionForRead
+        // when a dialog is actually about to be spoken.
+    }
+
+    /**
+     * Bring up the media session for an imminent read.
+     *
+     * Kept separate from [ensureSessionForRead]'s callers so that merely opening
+     * the app - or receiving a dialog while reading is switched off - never
+     * registers us with the car.
+     *
+     * @param beforePlay runs once the session is actually usable, so the first
+     *        segment goes to the car rather than to the phone speaker. Connecting
+     *        is asynchronous, and previously it was already connected by the time
+     *        anything played; now it has to be awaited.
+     */
+    private fun ensureSessionForRead(beforePlay: () -> Unit) {
+        if (!session.shouldRequestSession(aboutToSpeak = true)) {
+            beforePlay()
+            return
+        }
+        session.markRequested()
+        try {
+            DialogMediaService.start(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not start media service: ${e.message}")
+            session.markConnectFailed()
+            beforePlay()
+            return
+        }
         MediaSessionBridge.connect(context) { ok ->
             audioPlayer.preferMediaSession = ok
             Log.i(TAG, "media session connected=$ok")
+            if (ok) {
+                session.markConnected()
+            } else {
+                session.markConnectFailed()
+            }
+            beforePlay()
         }
-        // Deliberately no AudioPrefs.load here. That read blocks (see AudioPrefs),
-        // and this class is constructed on the main thread by the ViewModel. The
-        // service surfaces that actually need persisted settings already call
-        // AudioPrefs.applyTo(AudioPrefs.load(...)), which now carries the focus
-        // policy as well.
+    }
+
+    /** Session lifetime rules, kept in a separately tested unit. */
+    private val session = SessionLifetime()
+
+    /** True once we have asked for the session, so it is not started per segment. */
+    fun releaseSessionIfIdle() {
+        if (!session.shouldReleaseWhenIdle()) return
+        session.markReleased()
+        MediaSessionBridge.disconnect()
+        DialogMediaService.stop(context)
     }
 
     // --- Transport, forwarded so screens talk to one object ---------------
@@ -114,7 +160,18 @@ class DialogTTSHelper(private val context: Context) {
         SpeechTrace.scriptCompiled(script)
 
         if (audioPlayer.usesEasyVoice) {
-            audioPlayer.playScript(script, dialogId = dialogId)
+            // Only now, with something to actually say, do we register with the
+            // car. Doing it at launch held the head unit's media channel while
+            // idle (see the class comment). Playback waits for the connection so
+            // the first segment does not leak out of the phone speaker.
+            ensureSessionForRead {
+                audioPlayer.playScript(script, dialogId = dialogId) {
+                    // Hand the car's audio route back once the last word is
+                    // spoken. Leaving it up is the same failure as starting it at
+                    // launch, just delayed until after the dialog.
+                    releaseSessionIfIdle()
+                }
+            }
             return
         }
 
