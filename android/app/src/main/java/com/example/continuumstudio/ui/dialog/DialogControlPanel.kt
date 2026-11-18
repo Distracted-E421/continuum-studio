@@ -14,6 +14,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -101,6 +102,13 @@ fun DialogControlPanel(
     
     var isListening by remember { mutableStateOf(false) }
     var voiceError by remember { mutableStateOf<String?>(null) }
+
+    // Scroll state for the options area. Keyed to the dialog: a new dialog must
+    // start at the top, but the position must survive recomposition while the
+    // clock ticks and playback state updates.
+    val optionsScroll = remember(dialog?.id) {
+        androidx.compose.foundation.ScrollState(0)
+    }
     
     val effectiveButtonSize = if (config.xrMode) ButtonSize.XR_LARGE else config.buttonSize
     val effectiveColumns = if (config.xrMode && options.size <= 4) 1 else config.buttonColumns
@@ -132,8 +140,17 @@ fun DialogControlPanel(
 
             Spacer(Modifier.height(if (config.xrMode) 20.dp else 16.dp))
 
+            // Scrollable, not just weighted.
+            //
+            // With `weight(1f)` alone this Column clipped its content: enough
+            // options (or one long label) and the last rows could not be reached
+            // at all, because there was nothing to scroll. In car mode the whole
+            // point is choosing an option, so unreachable options are a dead end.
             Column(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(optionsScroll),
                 verticalArrangement = Arrangement.spacedBy(if (config.xrMode) 16.dp else 12.dp)
             ) {
                 val chunkedOptions = options.chunked(effectiveColumns)

@@ -122,6 +122,16 @@ fun DialogScreen(
     onToggleQueueDrawer: () -> Unit = {},
     // XR Mode (Phone as input device)
     isXRMode: Boolean = false,
+    /**
+     * Driving/Android Auto mode.
+     *
+     * Reuses the XR control panel (large targets, explicit comment field) because
+     * that layout is genuinely better in a car: it was built for a phone held in
+     * one hand. It is a separate flag from [isXRMode] because the reason differs -
+     * glasses connected versus driving - and a user can be in either without the
+     * other.
+     */
+    isDrivingMode: Boolean = false,
     onXROptionIndexChange: (Int) -> Unit = {},
     onTypingStateChange: (Boolean) -> Unit = {},
     onScrollGlasses: (Int) -> Unit = {},
@@ -379,8 +389,12 @@ fun DialogScreen(
                                     // should cover, not push.
                                     Box(modifier = Modifier.fillMaxSize()) {
                                             if (dialogState.activeDialog != null) {
-                                                if (isXRMode) {
-                                                    // XR Mode: Show simplified control panel for phone input
+                                                if (isXRMode || isDrivingMode) {
+                                                    // XR or driving: the control panel
+                                                    // with large targets and an explicit
+                                                    // comment field. In a car the standard
+                                                    // card hides comments behind a toggle
+                                                    // that is easy to miss.
                                                     val options = dialogState.activeDialog.dialogType.options ?: emptyList()
                                                     val selectedIndex = options.indexOfFirst { it.value == dialogState.selectedValue }
                                                     

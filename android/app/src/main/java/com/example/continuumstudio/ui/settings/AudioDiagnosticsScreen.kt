@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,6 +28,30 @@ import com.example.continuumstudio.service.tts.MediaSessionBridge
 import kotlinx.coroutines.launch
 
 /**
+ * Send a report somewhere the user can pick.
+ *
+ * Deliberately a share sheet rather than an upload: it needs no server, no
+ * token and no new endpoint, and it works with whatever the user already has
+ * (email to self, a chat, a notes app). A diagnostics feature that depends on
+ * being online is useless in exactly the situation it is needed for.
+ */
+private fun shareReport(context: Context, text: String) {
+    try {
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_SUBJECT, "Continuum audio report")
+            putExtra(android.content.Intent.EXTRA_TEXT, text)
+        }
+        context.startActivity(
+            android.content.Intent.createChooser(intent, "Share audio report")
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (e: Exception) {
+        android.util.Log.w("AudioDiagnostics", "could not share report: ${e.message}")
+    }
+}
+
+/**
  * On-device audio diagnostics.
  *
  * The Android Auto audio-route problem is invisible from the phone, so this
@@ -35,7 +60,9 @@ import kotlinx.coroutines.launch
  * active output is, and whether MultiSound is engaged.
  *
  * Read-only by design - it changes nothing, so it is safe to open while driving
- * (passenger) or debugging.
+ * (passenger) or debugging. It reports the live MediaSession state rather than
+ * "see logcat" because a session left connected while idle is precisely the
+ * failure that silences a head unit.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -168,6 +195,29 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    // Share a full audio report. This is the mechanism for
+                    // comparing the car's behaviour with the phone's: collect one
+                    // in each situation and the difference is the answer.
+                    IconButton(onClick = {
+                        scope.launch {
+                            val car = com.example.continuumstudio.audio.AudioReportCollector
+                                .collect(context, "car / Android Auto")
+                            val phone = com.example.continuumstudio.audio.AudioReportCollector
+                                .collect(context, "phone / Bluetooth")
+                            val text = buildString {
+                                appendLine(com.example.continuumstudio.audio.AudioReport
+                                    .describeDifferences(car, phone))
+                                appendLine()
+                                appendLine("=== CAR ===")
+                                appendLine(car.render())
+                                appendLine("=== PHONE ===")
+                                appendLine(phone.render())
+                            }
+                            shareReport(context, text)
+                        }
+                    }) {
+                        Icon(Icons.Default.Share, "Share audio report")
+                    }
                     IconButton(onClick = {
                         com.example.continuumstudio.speech.SpeechTrace.clear()
                     }) {
@@ -215,6 +265,71 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
                 }
                 HorizontalDivider()
             }
+
+            // --- Report ---------------------------------------------------
+            //
+            // The share action above is the only thing that gets information off
+            // the phone while driving, so it is explained here rather than being
+            // a bare icon.
+            Text(
+                "Tap the share icon to send a full audio report. It collects the same " +
+                    "fields twice and diffs them, so the useful part is which values " +
+                    "moved between car and phone.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = {
+                    scope.launch {
+                        val car = com.example.continuumstudio.audio.AudioReportCollector
+                            .collect(context, "car / Android Auto")
+                        val phone = com.example.continuumstudio.audio.AudioReportCollector
+                            .collect(context, "phone / Bluetooth")
+                        shareReport(
+                            context,
+                            buildString {
+                                appendLine(com.example.continuumstudio.audio.AudioReport
+                                    .describeDifferences(car, phone))
+                                appendLine()
+                                appendLine("=== CAR ===")
+                                appendLine(car.render())
+                                appendLine("=== PHONE ===")
+                                appendLine(phone.render())
+                            },
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Share audio report")
+            }
+
+            // Audible probe, opt-in. A silent probe cannot tell "routed but quiet"
+            // from "not routed at all", and that distinction is the whole
+            // question in a car. Kept behind a button because it makes noise.
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        val probe = com.example.continuumstudio.audio.AudioReportCollector
+                            .probePlayback(context, audible = true)
+                        shareReport(
+                            context,
+                            buildString {
+                                appendLine("Audible probe (should have been a 1s beep)")
+                                probe.forEach { (k, v) -> appendLine("$k: $v") }
+                                appendLine()
+                                appendLine(
+                                    com.example.continuumstudio.audio.AudioReportCollector
+                                        .collect(context, "after audible probe").render()
+                                )
+                            },
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Play a test beep and share the result") }
 
             // --- Live speech pipeline ------------------------------------
             //

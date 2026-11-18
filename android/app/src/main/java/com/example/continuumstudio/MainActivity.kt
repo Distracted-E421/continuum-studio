@@ -255,6 +255,15 @@ class MainActivity : ComponentActivity() {
                 
                 // XR/Glasses state
                 val isGlassesConnected by xrViewModel.isGlassesConnected.collectAsState()
+                // Android Auto / car mode. Re-evaluated on configuration change,
+                // which is what happens when the phone projects to a head unit.
+                val isDrivingMode = remember(displayInfo) {
+                    runCatching {
+                        val um = getSystemService(android.app.UiModeManager::class.java)
+                        um?.currentModeType ==
+                            android.content.res.Configuration.UI_MODE_TYPE_CAR
+                    }.getOrDefault(false)
+                }
                 val glassesDisplayState by xrViewModel.glassesDisplayState.collectAsState()
                 val xrLayoutMode by xrViewModel.layoutMode.collectAsState()
                 val currentDisplayMode by xrViewModel.currentDisplayMode.collectAsState()
@@ -783,6 +792,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleQueueDrawer = dialogViewModel::toggleQueueDrawer,
                                 // XR Mode (phone as input device when glasses connected)
                                 isXRMode = isGlassesConnected,
+                                isDrivingMode = isDrivingMode,
                                 onXROptionIndexChange = { index ->
                                     xrViewModel.updateSelectedOption(index)
                                 },
