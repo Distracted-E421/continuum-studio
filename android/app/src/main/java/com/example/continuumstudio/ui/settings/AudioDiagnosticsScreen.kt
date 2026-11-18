@@ -48,8 +48,17 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
     // Live speech-pipeline log. Collected as state so it updates while a dialog
     // is being read, which is when the interesting events happen.
     val trace by com.example.continuumstudio.speech.SpeechTrace.events.collectAsState()
-    val playback by com.example.continuumstudio.service.tts.AudioHub
-        .player(context).playback.collectAsState()
+    // Read-only: use existing() so merely opening this screen never creates a
+    // player as a side effect of drawing (see AudioHub). The remembered flow is
+    // a stable stand-in when no player exists yet.
+    val emptyPlayback = remember {
+        kotlinx.coroutines.flow.MutableStateFlow(
+            null as com.example.continuumstudio.service.tts.PlaybackState?
+        )
+    }
+    val playbackFlow = com.example.continuumstudio.service.tts.AudioHub.existing()?.playback
+        ?: emptyPlayback
+    val playback by playbackFlow.collectAsState()
     var showTrace by remember { mutableStateOf(true) }
 
     suspend fun collect() {
@@ -112,14 +121,36 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
                 ?.toString() ?: "?"
             )
 
-        val hasAssistantDucking = runCatching {
-            am.requestAudioFocus(
-                null,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
-            ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        // A real AudioFocusRequest is used deliberately. The old code called the
+        // deprecated requestAudioFocus(null, stream, gain) overload, which on
+        // modern Android returns FAILED because a null listener cannot receive
+        // callbacks - so this probe reported "not grantable" on a perfectly
+        // healthy device. It also abandoned focus straight away so the probe
+        // itself does not hold anything.
+        val focusRequest = android.media.AudioFocusRequest.Builder(
+            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+        )
+            .setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .build()
+        val focusGranted = runCatching {
+            val granted = am.requestAudioFocus(focusRequest) ==
+                AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            if (granted) am.abandonAudioFocusRequest(focusRequest)
+            granted
         }.getOrDefault(false)
-        out += "Focus grantable" to hasAssistantDucking.toString()
+        out += "Focus grantable" to focusGranted.toString()
+
+        // The active policy matters more than grantability now: under overlap we
+        // never ask, which is the point.
+        val activePolicy = com.example.continuumstudio.service.tts.AudioHub.existing()
+            ?.focusPolicy?.storedValue
+            ?: "not created yet"
+        out += ("Dialog audio policy" to activePolicy)
 
         lines = out
     }

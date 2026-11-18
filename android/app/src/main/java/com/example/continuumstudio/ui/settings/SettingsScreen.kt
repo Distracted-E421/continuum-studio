@@ -98,6 +98,7 @@ fun SettingsScreen(
         val ttsEnabled by dialogViewModel.ttsEnabled.collectAsState()
         val currentScript by dialogViewModel.currentScript.collectAsState()
         val voice by dialogViewModel.voice.collectAsState()
+        val focusPolicy by dialogViewModel.focusPolicy.collectAsState()
         SpeechSettingsScreen(
             onBack = { showSpeechSettings = false },
             waitMs = audioWaitMs,
@@ -115,6 +116,8 @@ fun SettingsScreen(
             voice = voice,
             onVoiceChange = dialogViewModel::setVoice,
             onPreviewVoice = dialogViewModel::previewVoice,
+            focusPolicy = focusPolicy,
+            onFocusPolicyChange = dialogViewModel::setFocusPolicy,
         )
         return
     }

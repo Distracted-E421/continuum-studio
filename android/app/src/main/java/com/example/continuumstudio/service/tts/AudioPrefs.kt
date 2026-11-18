@@ -40,6 +40,14 @@ object AudioPrefs {
         val TTS_SPEED = floatPreferencesKey("tts_speed")
         val TTS_ENABLED = booleanPreferencesKey("tts_enabled")
         val AUDIO_WAIT_MS = longPreferencesKey("audio_wait_ms")
+
+        /**
+         * How speech relates to other apps' audio.
+         *
+         * Stored as the policy's own string rather than an enum ordinal, so a
+         * reorder of the enum cannot silently change what a user chose.
+         */
+        val FOCUS_POLICY = stringPreferencesKey("audio_focus_policy")
     }
 
     /** Snapshot of the user's audio settings. */
@@ -48,6 +56,7 @@ object AudioPrefs {
         val speed: Float = 1.0f,
         val waitMs: Long = DialogAudioPlayer.DEFAULT_WAIT_MS,
         val enabled: Boolean = false,
+        val focusPolicy: FocusPolicy = FocusPolicy.DEFAULT,
     )
 
     /**
@@ -72,6 +81,7 @@ object AudioPrefs {
                 speed = prefs[Keys.TTS_SPEED] ?: 1.0f,
                 waitMs = prefs[Keys.AUDIO_WAIT_MS] ?: DialogAudioPlayer.DEFAULT_WAIT_MS,
                 enabled = prefs[Keys.TTS_ENABLED] ?: false,
+                focusPolicy = FocusPolicy.parse(prefs[Keys.FOCUS_POLICY]),
             )
         } catch (e: Exception) {
             Log.d(TAG, "could not read audio prefs: ${e.message}")
@@ -92,10 +102,18 @@ object AudioPrefs {
         // Voice lives on the shared player, so setting it here also covers the
         // case where the service initialised before the app's view model.
         helper.audioPlayer.voice = snapshot.voice
+        // Focus policy also lives on the shared player: it decides whether the
+        // other app is told anything at all, so the notification path and the
+        // in-app path must not disagree about it.
+        helper.audioPlayer.focusPolicy = snapshot.focusPolicy
+        // The session player is a separate engine from the local one, so it needs
+        // the policy too or the car path would keep its own default.
+        com.example.continuumstudio.service.tts.MediaSessionBridge.applyFocusPolicy(snapshot.focusPolicy)
         Log.d(
             TAG,
             "applied: enabled=${snapshot.enabled} rate=${snapshot.speed} " +
-                "wait=${snapshot.waitMs}ms voice=${snapshot.voice}",
+                "wait=${snapshot.waitMs}ms voice=${snapshot.voice} " +
+                "focus=${snapshot.focusPolicy.storedValue}",
         )
     }
 }

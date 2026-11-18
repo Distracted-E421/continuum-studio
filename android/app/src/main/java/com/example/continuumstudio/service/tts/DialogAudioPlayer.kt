@@ -122,7 +122,6 @@ class DialogAudioPlayer(private val context: Context) {
 
     private var player: MediaPlayer? = null
     private var focusRequest: AudioFocusRequest? = null
-    private var hasFocus = false
     private var scriptJob: Job? = null
 
     private val _isPlaying = MutableStateFlow(false)
@@ -405,6 +404,10 @@ class DialogAudioPlayer(private val context: Context) {
         segmentCount: Int,
     ): Boolean {
         if (preferMediaSession) {
+            // The session owns its own audio attributes, so it has to be told
+            // the same policy the local player uses. Without this the setting
+            // would work on the phone and be ignored in the car.
+            MediaSessionBridge.applyFocusPolicy(focusPolicy)
             val ok = MediaSessionBridge.play(
                 context = context,
                 dialogId = dialogId ?: "segment-$segmentIndex",
@@ -686,7 +689,49 @@ class DialogAudioPlayer(private val context: Context) {
 
     // --- Audio focus ------------------------------------------------------
 
+    /**
+     * How speech relates to other apps' audio.
+     *
+     * Defaults to [FocusPolicy.DEFAULT] (overlap) and is overridden from
+     * [AudioPrefs] by every surface. The value is read at each focus decision
+     * rather than cached, so changing it takes effect on the next segment.
+     */
+    @Volatile
+    var focusPolicy: FocusPolicy = FocusPolicy.DEFAULT
+
+    /**
+     * True while we hold focus that we requested ourselves.
+     *
+     * Reset in [abandonFocus] as well as on [FocusResponse.HOLD_FOR_FOCUS].
+     * Leaving it `true` after a loss meant later segments skipped `requestFocus`
+     * entirely and played unfocused - the dialog quietly degraded to competing
+     * with music at full volume halfway through, with no error anywhere.
+     */
+    @Volatile
+    private var hasFocus = false
+
+    /**
+     * True when speech was held back by another app, so it may be resumed
+     * automatically.
+     *
+     * Distinct from [paused], which is the user's own choice. Conflating them was
+     * the bug that let a navigation prompt permanently end a dialog's read.
+     */
+    @Volatile
+    private var heldByFocusLoss = false
+
+    /**
+     * Acquire focus if the policy needs it.
+     *
+     * @return true when speech may proceed. Under [FocusPolicy.OVERLAP] this is
+     *         always true and nothing is requested - which is the point: the
+     *         other app is never asked to react, so it cannot be left paused.
+     */
     private fun requestFocus(): Boolean {
+        if (!focusPolicy.requestsFocus) {
+            Log.d(TAG, "focus: policy=${focusPolicy.storedValue}, none requested")
+            return true
+        }
         if (hasFocus) return true
 
         val attrs = AudioAttributes.Builder()
@@ -694,22 +739,72 @@ class DialogAudioPlayer(private val context: Context) {
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 
-        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        // DUCK asks other audio to keep playing more quietly; PAUSE asks for it
+        // outright. TRANSIENT (not MAY_DUCK) for PAUSE so a music app stops
+        // rather than ducking, which is what the user chose there.
+        val gainType = when (focusPolicy) {
+            FocusPolicy.PAUSE -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+            else -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+        }
+
+        val request = AudioFocusRequest.Builder(gainType)
             .setAudioAttributes(attrs)
-            .setOnAudioFocusChangeListener { change ->
-                when (change) {
-                    AudioManager.AUDIOFOCUS_LOSS,
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> pause()
-                }
-            }
+            .setOnAudioFocusChangeListener { change -> onFocusChange(change) }
             .build()
 
         focusRequest = request
         hasFocus = audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        if (!hasFocus) {
+            SpeechTrace.warn("focus", "request denied under ${focusPolicy.storedValue}")
+        }
         return hasFocus
     }
 
+    /**
+     * Map an `AudioManager` change onto the pure [FocusResponder] decision.
+     *
+     * The mapping is the only Android-specific part; what to *do* is tested
+     * without a device.
+     */
+    private fun onFocusChange(change: Int) {
+        val mapped = when (change) {
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> FocusChange.LOSS_TRANSIENT
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> FocusChange.LOSS_TRANSIENT_CAN_DUCK
+            AudioManager.AUDIOFOCUS_LOSS -> FocusChange.LOSS
+            AudioManager.AUDIOFOCUS_GAIN -> FocusChange.GAIN
+            else -> return
+        }
+        when (FocusResponder.respond(focusPolicy, mapped)) {
+            FocusResponse.IGNORE ->
+                Log.d(TAG, "focus: $mapped ignored under ${focusPolicy.storedValue}")
+
+            FocusResponse.HOLD_FOR_FOCUS -> {
+                // A permanent LOSS is not returning on its own; drop our claim so
+                // the next segment re-requests instead of assuming it still holds
+                // something the system already took away.
+                if (mapped == FocusChange.LOSS) hasFocus = false
+                heldByFocusLoss = true
+                SpeechTrace.warn("focus", "held: $mapped")
+                if (player?.isPlaying == true) player?.pause()
+                if (preferMediaSession && MediaSessionBridge.isConnected()) {
+                    MediaSessionBridge.pause()
+                }
+                _isPlaying.value = false
+                _playback.value = _playback.value?.copy(phase = PlaybackPhase.PAUSED, playing = false)
+            }
+
+            FocusResponse.RESUME_AFTER_HOLD -> {
+                if (heldByFocusLoss) {
+                    heldByFocusLoss = false
+                    SpeechTrace.info("focus", "resumed after hold")
+                    resume()
+                }
+            }
+        }
+    }
+
     private fun abandonFocus() {
+        heldByFocusLoss = false
         if (!hasFocus) return
         focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         focusRequest = null

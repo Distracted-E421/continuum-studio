@@ -80,6 +80,24 @@ object MediaSessionBridge {
 
     // --- Transport (neutral when disconnected) ----------------------------
 
+    /**
+     * Tell the session whether it may request audio focus for itself.
+     *
+     * ExoPlayer was built with `handleAudioFocus = false`, which was correct
+     * when overlap was the only behaviour (and is why the car path never
+     * interrupted anything). Under [FocusPolicy.DUCK] or [FocusPolicy.PAUSE]
+     * the session must request focus instead, otherwise the setting would be
+     * honoured on the phone and silently ignored in the car.
+     *
+     * Applied on the service's own player rather than through the controller:
+     * `setAudioAttributes` is an unstable remote command, and the service lives
+     * in this process anyway, so there is no reason to round-trip it.
+     */
+    fun applyFocusPolicy(policy: FocusPolicy) {
+        DialogMediaService.setHandleAudioFocus(policy.requestsFocus)
+        Log.i(TAG, "focus policy sent to session: ${policy.storedValue}")
+    }
+
     fun isPlaying(): Boolean = controller?.isPlaying == true
 
     /** True when the current item has finished and nothing is queued. */

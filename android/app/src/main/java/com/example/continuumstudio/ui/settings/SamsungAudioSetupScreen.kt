@@ -198,19 +198,30 @@ fun SamsungAudioSetupScreen(onBack: () -> Unit) {
                 ) {
                     Text("Stop apps taking over audio", fontWeight = FontWeight.Bold)
                     Text(
-                        "Android Auto re-checks audio focus on every route change, so an app " +
-                            "that grabs focus will interrupt playback regardless of the setting above. " +
-                            "Suppressing focus here is the fix that survives the car.",
+                        "Suppressing an app here records its current setting first, so " +
+                            "Clear restores exactly what was there rather than guessing. " +
+                            "Browsers are left alone: making your music keep playing is " +
+                            "handled by the dialog audio setting, not by changing Vivaldi.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     MultiSoundController.COMMON_MEDIA_APPS.forEach { (pkg, label) ->
                         val isSuppressed = pkg in suppressed
+                        val isBrowser = pkg == "com.vivaldi.browser"
                         Row(
                             Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                            Column(Modifier.weight(1f)) {
+                                Text(label, style = MaterialTheme.typography.bodyMedium)
+                                if (isBrowser) {
+                                    Text(
+                                        "Left as-is: dialog audio already avoids interrupting it",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                             Switch(
                                 checked = isSuppressed,
                                 enabled = shizukuReady && !busy,
@@ -236,8 +247,9 @@ fun SamsungAudioSetupScreen(onBack: () -> Unit) {
                 onClick = {
                     scope.launch {
                         busy = true
-                        val pkgs = MultiSoundController.COMMON_MEDIA_APPS.map { it.first }
-                        controller.applyCarProfile(pkgs)
+                        // Only the apps that actually compete with a dialog, not
+                        // every media app on the phone.
+                        controller.applyCarProfile(MultiSoundController.DIALOG_COMPETITORS.map { it.first })
                             .onSuccess {
                                 status = "Car profile applied ($it settings)"
                                 refresh()
@@ -257,7 +269,14 @@ fun SamsungAudioSetupScreen(onBack: () -> Unit) {
                         controller.clearFocusOverrides(
                             MultiSoundController.COMMON_MEDIA_APPS.map { it.first }
                         )
-                        status = "Focus overrides cleared"
+                            .onSuccess { restored ->
+                                status = if (restored == 0) {
+                                    "Nothing to restore - no app was changed by this screen"
+                                } else {
+                                    "Restored $restored app(s) to their previous setting"
+                                }
+                            }
+                            .onFailure { status = it.message }
                         refresh()
                         busy = false
                     }

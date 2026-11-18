@@ -6,7 +6,9 @@ import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Controls Samsung MultiSound (multi-app audio) without root.
@@ -39,6 +41,9 @@ class MultiSoundController(private val context: Context) {
         const val SOUND_ASSISTANT_PKG = "com.samsung.android.soundassistant"
         const val SETTINGS_NS = "system"
 
+        /** Where pre-change focus modes are remembered so they can be restored. */
+        const val PRIOR_MODES_PREFS = "multisound_prior_modes"
+
         // Keys verified present on One UI 9.
         const val KEY_MULTI_AUDIO_FOCUS = "multi_audio_focus_enabled"
         const val KEY_MULTI_CONTROL = "multi_control_enabled"
@@ -56,6 +61,20 @@ class MultiSoundController(private val context: Context) {
 
         /** AppOps modes we care about for TAKE_AUDIO_FOCUS. */
         enum class FocusMode { ALLOW, DEFAULT, IGNORE, UNSET }
+
+        /**
+         * Apps whose focus-stealing we actually care about, i.e. the ones that
+         * would interrupt a dialog.
+         *
+         * Vivaldi is deliberately **not** included: the owner's requirement is
+         * that our audio work must not disturb browser playback, and blanket
+         * suppressing a browser's focus is exactly the kind of change that
+         * breaks someone else's app.
+         */
+        val DIALOG_COMPETITORS = listOf(
+            "com.spotify.music" to "Spotify",
+            "com.audible.application" to "Audible",
+        )
 
         /**
          * Parse `cmd appops get` output for TAKE_AUDIO_FOCUS.
@@ -125,12 +144,46 @@ class MultiSoundController(private val context: Context) {
     /**
      * Stop [pkg] from stealing audio focus.
      *
-     * Android Auto re-evaluates focus on every audio-route change, so an app
-     * that grabs focus will interrupt playback no matter what MultiSound does.
-     * Marking it `ignore` is the durable fix for that specific failure.
+     * Before the first change to a package, its current mode is recorded so
+     * [clearFocusOverrides] can put back exactly what was there. The earlier
+     * version always wrote `default`, which silently overwrote a deliberate
+     * `allow` or `ignore` the user had set elsewhere - i.e. it broke apps in the
+     * name of un-breaking them.
      */
-    suspend fun setFocusStealingAllowed(pkg: String, allowed: Boolean): Result<Unit> =
-        shell("cmd appops set $pkg TAKE_AUDIO_FOCUS ${if (allowed) "default" else "ignore"}")
+    suspend fun setFocusStealingAllowed(pkg: String, allowed: Boolean): Result<Unit> {
+        rememberPriorMode(pkg)
+        val mode = if (allowed) FocusMode.DEFAULT else FocusMode.IGNORE
+        return shell("cmd appops set $pkg TAKE_AUDIO_FOCUS ${mode.name.lowercase()}")
+    }
+
+    /**
+     * Record [pkg]'s focus mode the first time we change it.
+     *
+     * Only the first observation is kept: once we have written `ignore`, reading
+     * it back would record our own change and make the restore a no-op.
+     */
+    private fun rememberPriorMode(pkg: String) {
+        val store = priorModes()
+        if (store.contains(pkg)) return
+        val current = runCatching {
+            runBlocking {
+                withTimeoutOrNull(2_000L) {
+                    readSettingRaw("cmd appops get $pkg TAKE_AUDIO_FOCUS")
+                }
+            }
+        }.getOrNull()?.let { parseFocusMode(it) } ?: return
+        store.edit().putString(pkg, current.name).apply()
+        Log.d(TAG, "recorded prior focus mode for $pkg: ${current.name}")
+    }
+
+    private fun priorModes(): android.content.SharedPreferences =
+        context.getSharedPreferences(PRIOR_MODES_PREFS, Context.MODE_PRIVATE)
+
+    /** The mode recorded before we first changed [pkg], if any. */
+    fun priorModeFor(pkg: String): FocusMode? =
+        priorModes().getString(pkg, null)?.let { name ->
+            FocusMode.entries.firstOrNull { it.name == name }
+        }
 
     /**
      * Whether [pkg] is currently allowed to steal audio focus.
@@ -155,10 +208,14 @@ class MultiSoundController(private val context: Context) {
     /**
      * Apply the recommended profile for car use.
      *
-     * Enables multi-audio focus and suppresses focus-stealing for the given
-     * packages. Deliberately does not touch per-app volume values - those are
-     * not writable from shell, and silently failing at that would be worse than
+     * Enables multi-audio focus and suppresses focus-stealing for [packages].
+     * Deliberately does not touch per-app volume values - those are not
+     * writable from shell, and silently failing at that would be worse than
      * not offering it.
+     *
+     * Pass [DIALOG_COMPETITORS] rather than every media app: suppressing a
+     * browser's focus is a change to someone else's app, and the default should
+     * be the smallest set that solves the dialog problem.
      */
     suspend fun applyCarProfile(packages: List<String>): Result<Int> = withContext(Dispatchers.IO) {
         if (!isReady()) return@withContext Result.failure(
@@ -174,11 +231,28 @@ class MultiSoundController(private val context: Context) {
         Result.success(applied)
     }
 
-    /** Restore every app in [packages] to default focus behaviour. */
+    /** Restore every app in [packages] to the mode it had before we changed it. */
     suspend fun clearFocusOverrides(packages: List<String>): Result<Int> = withContext(Dispatchers.IO) {
         var restored = 0
         packages.forEach { pkg ->
-            setFocusStealingAllowed(pkg, allowed = true).onSuccess { restored++ }
+            val recorded = priorModeFor(pkg)
+            if (recorded == null) {
+                // We never changed this one, so there is nothing of ours to undo.
+                // Writing "default" here is what clobbered settings the user had
+                // made deliberately in Sound Assistant.
+                Log.d(TAG, "no recorded mode for $pkg; leaving untouched")
+                return@forEach
+            }
+            val target = when (recorded) {
+                // An unset op is cleared rather than set to `default`, so the app
+                // returns to inheriting the platform default.
+                FocusMode.UNSET -> "cmd appops reset $pkg TAKE_AUDIO_FOCUS"
+                else -> "cmd appops set $pkg TAKE_AUDIO_FOCUS ${recorded.name.lowercase()}"
+            }
+            shell(target).onSuccess {
+                restored++
+                priorModes().edit().remove(pkg).apply()
+            }
         }
         Result.success(restored)
     }

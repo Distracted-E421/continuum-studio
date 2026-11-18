@@ -56,6 +56,56 @@ class DialogMediaService : MediaLibraryService() {
         const val FOREGROUND_ID = 7301
         const val CHANNEL_ID = "continuum_media"
 
+        /**
+         * Whether the shared ExoPlayer should manage audio focus itself.
+         *
+         * Static because the player is owned by this process's service instance
+         * while the policy is chosen in the app; the flag is read when the
+         * player is built and re-applied whenever the policy changes.
+         *
+         * Default false = the "overlap" behaviour: the service says nothing to
+         * other apps, so music cannot be paused or left stuck by us.
+         */
+        @Volatile
+        private var handleAudioFocus = false
+
+        /** The live player, so a policy change can reach it. */
+        @Volatile
+        private var activePlayer: ExoPlayer? = null
+
+        /**
+         * Apply the user's audio-focus policy to the session player.
+         *
+         * Rebuilding the attributes on the live player is what makes the setting
+         * take effect immediately rather than at the next service start.
+         */
+        fun setHandleAudioFocus(handle: Boolean) {
+            handleAudioFocus = handle
+            val p = activePlayer ?: return
+            try {
+                p.setAudioAttributes(audioAttributes(), handle)
+                Log.i(TAG, "exo handleAudioFocus=$handle")
+            } catch (e: Exception) {
+                Log.w(TAG, "could not update audio focus handling: ${e.message}")
+            }
+        }
+
+        /**
+         * Player audio attributes.
+         *
+         * USAGE_MEDIA, not USAGE_ASSISTANT.
+         *
+         * ASSISTANT routes through Android Auto's voice channel, which is opened
+         * by speech-to-text and closed the moment STT ends. That made playback
+         * survive only while the mic was active and revert to the car's tuner
+         * otherwise. MEDIA is the normal music/audiobook channel, which AA keeps
+         * alive for as long as the session exists.
+         */
+        private fun audioAttributes() = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+            .build()
+
         /** Start the media service. Safe to call repeatedly. */
         fun start(context: android.content.Context) {
             val intent = Intent(context, DialogMediaService::class.java)
@@ -119,21 +169,16 @@ class DialogMediaService : MediaLibraryService() {
 
         player = ExoPlayer.Builder(this)
             .setAudioAttributes(
-                // USAGE_MEDIA, not USAGE_ASSISTANT.
-                //
-                // ASSISTANT routes through Android Auto's voice channel, which is
-                // opened by speech-to-text and closed the moment STT ends. That
-                // made playback survive only while the mic was active and revert
-                // to the car's tuner otherwise. MEDIA is the normal music/audiobook
-                // channel, which AA keeps alive for as long as the session exists.
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
-                    .build(),
-                /* handleAudioFocus = */ false
+                // USAGE_MEDIA, not USAGE_ASSISTANT - see audioAttributes().
+                // handleAudioFocus follows the user's policy; false (overlap) is
+                // the default because it is the setting that cannot pause
+                // someone else's music.
+                audioAttributes(),
+                handleAudioFocus
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+        activePlayer = player
 
         val sessionActivity = packageManager.getLaunchIntentForPackage(packageName)?.let {
             PendingIntent.getActivity(
@@ -243,6 +288,7 @@ class DialogMediaService : MediaLibraryService() {
             release()
         }
         mediaSession = null
+        activePlayer = null
         super.onDestroy()
     }
 }

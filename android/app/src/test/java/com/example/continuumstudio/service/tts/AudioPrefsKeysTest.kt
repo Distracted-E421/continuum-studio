@@ -29,6 +29,22 @@ class AudioPrefsKeysTest {
         assertEquals("tts_speed", AudioPrefs.Keys.TTS_SPEED.name)
         assertEquals("tts_enabled", AudioPrefs.Keys.TTS_ENABLED.name)
         assertEquals("audio_wait_ms", AudioPrefs.Keys.AUDIO_WAIT_MS.name)
+        assertEquals("audio_focus_policy", AudioPrefs.Keys.FOCUS_POLICY.name)
+    }
+
+    @Test
+    fun `focus policy key matches the name the view model writes`() {
+        // DialogViewModel.PrefsKeys.AUDIO_FOCUS_POLICY. If these drift, the
+        // service path reads no policy and silently falls back to overlap while
+        // the app shows the user's choice - the same class of split that made
+        // the notification service ignore every audio setting.
+        assertEquals("audio_focus_policy", AudioPrefs.Keys.FOCUS_POLICY.name)
+    }
+
+    @Test
+    fun `snapshot defaults to overlap so nothing else is interrupted`() {
+        assertEquals(FocusPolicy.OVERLAP, AudioPrefs.Snapshot().focusPolicy)
+        assertEquals(FocusPolicy.OVERLAP, FocusPolicy.DEFAULT)
     }
 
     @Test

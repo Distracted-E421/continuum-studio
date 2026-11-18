@@ -66,6 +66,20 @@ object FallbackTts {
                 initialized = ok
                 if (ok) {
                     engine?.setOnUtteranceProgressListener(listener)
+                    // USAGE_MEDIA to match DialogAudioPlayer and
+                    // DialogMediaService. The default for a TextToSpeech engine
+                    // is USAGE_ASSISTANT, which routes to the assistant/voice
+                    // channel and is cut off when speech recognition ends - so
+                    // the fallback voice could be inaudible in exactly the
+                    // situation it is meant to rescue.
+                    runCatching {
+                        engine?.setAudioAttributes(
+                            android.media.AudioAttributes.Builder()
+                                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build()
+                        )
+                    }.onFailure { Log.w(TAG, "could not set audio attributes: ${it.message}") }
                     Log.i(TAG, "fallback engine ready")
                 } else {
                     Log.e(TAG, "no usable language for fallback TTS")

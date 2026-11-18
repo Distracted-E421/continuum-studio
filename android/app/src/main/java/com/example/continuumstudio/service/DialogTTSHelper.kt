@@ -5,6 +5,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import com.example.continuumstudio.service.tts.AudioHub
+import com.example.continuumstudio.service.tts.AudioPrefs
 import com.example.continuumstudio.service.tts.DialogAudioPlayer
 import com.example.continuumstudio.service.tts.MediaSessionBridge
 import com.example.continuumstudio.service.tts.PlaybackState
@@ -64,6 +65,11 @@ class DialogTTSHelper(private val context: Context) {
             audioPlayer.preferMediaSession = ok
             Log.i(TAG, "media session connected=$ok")
         }
+        // Deliberately no AudioPrefs.load here. That read blocks (see AudioPrefs),
+        // and this class is constructed on the main thread by the ViewModel. The
+        // service surfaces that actually need persisted settings already call
+        // AudioPrefs.applyTo(AudioPrefs.load(...)), which now carries the focus
+        // policy as well.
     }
 
     // --- Transport, forwarded so screens talk to one object ---------------

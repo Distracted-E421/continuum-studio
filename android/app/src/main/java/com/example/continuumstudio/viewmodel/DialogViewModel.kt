@@ -137,6 +137,18 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
     val voice: StateFlow<String> = _voice.asStateFlow()
 
     /**
+     * How dialog speech relates to other apps' audio.
+     *
+     * Owned by the ViewModel (like the other audio settings) but applied to the
+     * shared player, so the notification and car paths obey the same choice.
+     */
+    private val _focusPolicy = MutableStateFlow(
+        com.example.continuumstudio.service.tts.FocusPolicy.DEFAULT
+    )
+    val focusPolicy: StateFlow<com.example.continuumstudio.service.tts.FocusPolicy> =
+        _focusPolicy.asStateFlow()
+
+    /**
      * Queue for answers that could not be delivered.
      *
      * Shared with AutoReplyService's design but owned here for in-app submits, so
@@ -220,6 +232,7 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         val TTS_SPEED = floatPreferencesKey("tts_speed")
         val AUDIO_WAIT_MS = androidx.datastore.preferences.core.longPreferencesKey("audio_wait_ms")
         val TTS_VOICE = stringPreferencesKey("tts_voice")
+        val AUDIO_FOCUS_POLICY = stringPreferencesKey("audio_focus_policy")
         val USE_COORDINATOR_V2 = booleanPreferencesKey("use_coordinator_v2")
     }
     
@@ -381,6 +394,11 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
                 _voice.value = prefs[PrefsKeys.TTS_VOICE]
                     ?: com.example.continuumstudio.service.tts.EasyVoiceClient.DEFAULT_VOICE
                 ttsHelper.audioPlayer.voice = _voice.value
+                _focusPolicy.value =
+                    com.example.continuumstudio.service.tts.FocusPolicy.parse(
+                        prefs[PrefsKeys.AUDIO_FOCUS_POLICY]
+                    )
+                applyFocusPolicy(_focusPolicy.value)
             }
         }
         
@@ -675,6 +693,27 @@ class DialogViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
     
+    /**
+     * Set how speech relates to other apps' audio.
+     *
+     * Applies immediately to the shared player and to the media session, so
+     * changing it mid-dialog takes effect on the next segment.
+     */
+    fun setFocusPolicy(policy: com.example.continuumstudio.service.tts.FocusPolicy) {
+        _focusPolicy.value = policy
+        applyFocusPolicy(policy)
+        viewModelScope.launch {
+            dataStore.edit { prefs ->
+                prefs[PrefsKeys.AUDIO_FOCUS_POLICY] = policy.storedValue
+            }
+        }
+    }
+
+    private fun applyFocusPolicy(policy: com.example.continuumstudio.service.tts.FocusPolicy) {
+        ttsHelper.audioPlayer.focusPolicy = policy
+        com.example.continuumstudio.service.tts.MediaSessionBridge.applyFocusPolicy(policy)
+    }
+
     /**
      * Set TTS enabled state
      */

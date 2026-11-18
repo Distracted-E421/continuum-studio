@@ -56,6 +56,9 @@ fun SpeechSettingsScreen(
     voice: String = com.example.continuumstudio.service.tts.EasyVoiceClient.DEFAULT_VOICE,
     onVoiceChange: (String) -> Unit = {},
     onPreviewVoice: (String) -> Unit = {},
+    focusPolicy: com.example.continuumstudio.service.tts.FocusPolicy =
+        com.example.continuumstudio.service.tts.FocusPolicy.DEFAULT,
+    onFocusPolicyChange: (com.example.continuumstudio.service.tts.FocusPolicy) -> Unit = {},
 ) {
     var showDictionary by remember { mutableStateOf(false) }
     var dictionaryQuery by remember { mutableStateOf("") }
@@ -198,6 +201,59 @@ fun SpeechSettingsScreen(
                 onValueChange = onSpeechRateChange,
                 valueRange = 0.6f..1.8f,
             )
+
+            HorizontalDivider()
+
+            // --- Other apps' audio ----------------------------------------
+
+            //
+            // This is the setting that decides whether Vivaldi keeps playing
+            // while a dialog is read. Overlap is the default because it is the
+            // only option that cannot leave another app paused or quietened.
+            Text(
+                "While a dialog is playing",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "What happens to music in another app. Overlap never asks for " +
+                    "audio focus, so nothing else is interrupted and nothing can get " +
+                    "stuck. Ducking and pausing ask the other app to react.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            com.example.continuumstudio.service.tts.FocusPolicy.entries.forEach { policy ->
+                val selected = policy == focusPolicy
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onFocusPolicyChange(policy) }
+                        .padding(vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = selected, onClick = { onFocusPolicyChange(policy) })
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            focusPolicyLabel(policy),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                        Text(
+                            focusPolicyNote(policy),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            if (focusPolicy != com.example.continuumstudio.service.tts.FocusPolicy.OVERLAP) {
+                Text(
+                    "Heads up: on this phone a paused app often does not resume by " +
+                        "itself. Overlap is the setting that cannot interrupt it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
 
             HorizontalDivider()
 
@@ -387,3 +443,22 @@ private fun waitVerdict(ms: Long): String = when {
     ms <= 60_000L -> "patient; good on Tailscale while driving"
     else -> "very patient; audio may feel late but keeps the good voice"
 }
+
+/** Short name for each focus policy. */
+private fun focusPolicyLabel(policy: com.example.continuumstudio.service.tts.FocusPolicy): String =
+    when (policy) {
+        com.example.continuumstudio.service.tts.FocusPolicy.OVERLAP -> "Play over the top"
+        com.example.continuumstudio.service.tts.FocusPolicy.DUCK -> "Lower the other app"
+        com.example.continuumstudio.service.tts.FocusPolicy.PAUSE -> "Pause the other app"
+    }
+
+/** What each focus policy actually does to the other app. */
+private fun focusPolicyNote(policy: com.example.continuumstudio.service.tts.FocusPolicy): String =
+    when (policy) {
+        com.example.continuumstudio.service.tts.FocusPolicy.OVERLAP ->
+            "Music keeps its volume. Nothing else is told the dialog started."
+        com.example.continuumstudio.service.tts.FocusPolicy.DUCK ->
+            "The other app is asked to quieten down and is expected to come back up."
+        com.example.continuumstudio.service.tts.FocusPolicy.PAUSE ->
+            "The other app stops for the dialog and may need restarting by hand."
+    }
