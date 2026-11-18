@@ -206,6 +206,33 @@ exactly; an `UNSET` op is `cmd appops reset`, not set to default. `applyCarProfi
 `DIALOG_COMPETITORS` (Spotify, Audible) rather than every media app, and the UI labels Vivaldi as
 deliberately untouched.
 
+**The media session must not outlive a read (found 2026-11-18 in a Subaru).** Reported symptom
+was "no audio in the car from *any* app". Continuum Studio was observed highlighted in the Android
+Auto app bar with no dialog present. Cause: `DialogMediaService` started from `BOOT_COMPLETED` and
+called `startForeground` in `onCreate`, and `DialogTTSHelper` connected the session in its
+`init` - so the app was a registered AA media source for the whole uptime, holding the head
+unit's channel while playing nothing, and usually with dialog reading switched off. A head unit
+routed to a silent source is indistinguishable from "the car has no audio".
+
+Rules, encoded in tested `SessionLifetime` (7 tests) - none of this is observable without a car:
+
+- nothing starts at boot; the boot receiver is kept as the documented owner of the intent and
+  does nothing
+- connecting is **not** done in the helper's `init`; it happens in `ensureSessionForRead`, when a
+  dialog is about to be spoken
+- `playScript` is called from the connect callback, so the first segment does not leak out of the
+  phone speaker while the handshake is in flight
+- `releaseSessionIfIdle` disconnects and stops the service when the read finishes
+- `SessionLifetime` tracks **"we asked for it"**, not "it connected". A handshake that never
+  resolves must still be releasable, or the service keeps running and holds the channel.
+
+**Do not put a focus probe in a diagnostics screen without abandoning it.** The shipped
+1.19.45 `AudioDiagnosticsScreen` called `requestAudioFocus(...)` and `abandonAudioFocus` **zero
+times** (verified with `git show 37e3741:...`), so opening the screen - the natural thing to do
+when car audio misbehaves - made Continuum hold focus for the rest of the process, silencing
+other apps. It now uses a real `AudioFocusRequest`, abandons it immediately, and reports whether
+the media session is connected or released.
+
 **A focus hold is NOT a finished segment** (this was a bug the focus change itself introduced,
 found by self-review the same session). While held, `playingNow` is false and the position is
 frozen - exactly the shape of the pre-existing "unknown duration and it stopped, so it ended"
