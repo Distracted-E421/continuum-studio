@@ -48,6 +48,9 @@ fun SpeechSettingsScreen(
     onSpeechRateChange: (Float) -> Unit,
     autoRead: Boolean,
     onAutoReadChange: (Boolean) -> Unit,
+    /** Master switch for reading dialogs aloud. Defaults to off. */
+    enabled: Boolean = false,
+    onEnabledChange: (Boolean) -> Unit = {},
     currentScript: SpeechScript? = null,
     onSpeakPreview: (SpeechScript) -> Unit = {},
     voice: String = com.example.continuumstudio.service.tts.EasyVoiceClient.DEFAULT_VOICE,
@@ -153,10 +156,30 @@ fun SpeechSettingsScreen(
 
             // --- Reading ---------------------------------------------------
 
+            // Master switch. This is the only place it can be turned on: the
+            // setting defaults to off, and until now nothing in the UI called
+            // setTtsEnabled, so dialog reading was permanently silent with no
+            // way to enable it.
             Text("Reading", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Read new dialogs aloud", style = MaterialTheme.typography.bodyMedium)
+                    Text("Read dialogs aloud", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (enabled) "New dialogs will be spoken."
+                        else "Dialog reading is OFF - nothing will be spoken.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (enabled) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
+                Switch(checked = enabled, onCheckedChange = onEnabledChange)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Read new dialogs automatically", style = MaterialTheme.typography.bodyMedium)
                     Text(
                         "Mute on the dialog page silences only that dialog.",
                         style = MaterialTheme.typography.bodySmall,
