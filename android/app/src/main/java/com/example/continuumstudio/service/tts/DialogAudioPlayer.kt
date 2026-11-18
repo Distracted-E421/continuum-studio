@@ -62,6 +62,29 @@ class DialogAudioPlayer(private val context: Context) {
         const val EASYVOICE_WAIT_MS = DEFAULT_WAIT_MS
 
         /**
+         * Grace window after playback has started before "not playing" is
+         * believable.
+         *
+         * `MediaPlayer.isPlaying` is false in the window between `start()` and
+         * audio actually beginning, and again while buffering. Treating that as
+         * "finished" cut segments off mid-word - the "jumps over itself" symptom.
+         */
+        private const val START_GRACE_MS = 700L
+
+        /** Hard ceiling so a stuck player cannot hang the rest of the script. */
+        private const val MAX_SEGMENT_PLAY_MS = 180_000L
+
+        /**
+         * How long a media session may take to load a segment before its
+         * not-playing state is treated as an ending.
+         *
+         * `setMediaItem` + `prepare()` + `play()` is asynchronous, so the session
+         * reports not-playing while it buffers. Without this window every segment
+         * handed to the session was skipped immediately.
+         */
+        private const val LOAD_GRACE_MS = 3_000L
+
+        /**
          * Segments to synthesize ahead of playback.
          *
          * Measured 2026-11-17 against the live API: generation ~1.6s, playback
@@ -463,7 +486,32 @@ class DialogAudioPlayer(private val context: Context) {
      * position that ends".
      */
     private suspend fun awaitSegmentFinish(segmentIndex: Int, segmentCount: Int) {
+        // Wait for the clip to actually *complete*, not merely to stop reporting
+        // isPlaying.
+        //
+        // The previous check was `!isPlaying && currentPosition > 0` (and
+        // `!MediaSessionBridge.isPlaying()`), which raced in two ways:
+        //  - `MediaPlayer.isPlaying` is false during the window between start()
+        //    and actual playback, and again while buffering, so the segment was
+        //    declared finished almost immediately and got cut off mid-word.
+        //  - `currentPosition > 0` only saved the very first poll, not later ones.
+        //
+        // That is the "jumps over itself too fast, cutting each section" symptom.
+        // Now we require either an explicit completion callback or the position to
+        // have reached the clip duration.
+        val deadline = System.currentTimeMillis() + MAX_SEGMENT_PLAY_MS
+
+        // Give playback a moment to actually begin before trusting any "stopped"
+        // observation, so the start-up window cannot end a segment.
+        var sawPlaying = false
+        var startedAt = 0L
+
         while (isActive()) {
+            if (System.currentTimeMillis() > deadline) {
+                SpeechTrace.warn("play", "segment ${segmentIndex + 1} exceeded max play time; moving on")
+                return
+            }
+
             val snapshot = currentPlayback()
             if (snapshot != null) {
                 _playback.value = snapshot.copy(
@@ -475,13 +523,60 @@ class DialogAudioPlayer(private val context: Context) {
                 delay(120)
                 continue
             }
-            val finished = when {
-                preferMediaSession && MediaSessionBridge.isConnected() ->
-                    MediaSessionBridge.hasEnded() || !MediaSessionBridge.isPlaying()
-                player != null -> player?.let { !it.isPlaying && it.currentPosition > 0 } ?: true
-                else -> true
+
+            val playingNow = when {
+                preferMediaSession && MediaSessionBridge.isConnected() -> MediaSessionBridge.isPlaying()
+                else -> player?.isPlaying == true
             }
-            if (finished) return
+            val position = when {
+                preferMediaSession && MediaSessionBridge.isConnected() -> MediaSessionBridge.positionMs()
+                else -> player?.let { runCatching { it.currentPosition }.getOrDefault(0) } ?: 0
+            }
+            val duration = when {
+                preferMediaSession && MediaSessionBridge.isConnected() -> MediaSessionBridge.durationMs()
+                else -> player?.let { runCatching { it.duration }.getOrDefault(0) } ?: 0
+            }
+
+            if (playingNow) {
+                sawPlaying = true
+                startedAt = System.currentTimeMillis()
+            }
+
+            // Genuinely finished: the clip reached its end, or the media session
+            // reports ENDED. Only trust "not playing" *after* we have seen it play
+            // and given it a grace window.
+            val reachedEnd = duration > 0 && position >= duration - 80
+            val endedBySession = preferMediaSession &&
+                MediaSessionBridge.isConnected() &&
+                MediaSessionBridge.hasEnded()
+
+            if (reachedEnd || endedBySession) return
+
+            // A media session that has been asked to play but has not started yet
+            // is not "finished". `setMediaItem` + `prepare()` + `play()` is
+            // asynchronous, so for a moment after each segment the session reports
+            // not-playing while it loads the next file. Without this guard the
+            // player skipped straight past every segment it handed to the session -
+            // the car path cut audio off even more aggressively than the local one.
+            val sessionLoading = preferMediaSession &&
+                MediaSessionBridge.isConnected() &&
+                !playingNow &&
+                !MediaSessionBridge.hasEnded()
+
+            if (sessionLoading && System.currentTimeMillis() - startedAt < LOAD_GRACE_MS) {
+                delay(120)
+                continue
+            }
+
+            if (sawPlaying && !playingNow &&
+                System.currentTimeMillis() - startedAt > START_GRACE_MS &&
+                duration <= 0
+            ) {
+                // Unknown duration and it stopped after having played: the only
+                // safe interpretation is that it ended.
+                return
+            }
+
             delay(120)
         }
     }
