@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.util.Log
 import com.example.continuumstudio.speech.SpeechScript
+import com.example.continuumstudio.speech.SpeechScriptCompiler
 import com.example.continuumstudio.speech.SpeechTrace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +60,21 @@ class DialogAudioPlayer(private val context: Context) {
 
         /** Backwards-compatible alias for the constant external callers used. */
         const val EASYVOICE_WAIT_MS = DEFAULT_WAIT_MS
+
+        /**
+         * How many segments may be synthesized ahead of playback.
+         *
+         * Measured against the live API on 2026-11-17: a typical dialog segment
+         * generates in ~1.6s and plays for ~3.7s. Generation is therefore faster
+         * than playback, so one segment of lookahead is enough to keep audio
+         * continuous; two gives margin for a slow segment (and a second segment
+         * costs one cached request, not one per playback).
+         *
+         * The point is that this must be greater than zero. With no lookahead the
+         * player generated and played strictly in turn, which - at these numbers -
+         * put a 1.6s silence at every 3.7s boundary.
+         */
+        private const val PREFETCH_AHEAD = 2
     }
 
     /**
@@ -136,69 +152,105 @@ class DialogAudioPlayer(private val context: Context) {
         scriptJob = scope.launch {
             paused = false
             SpeechTrace.info("play", "script: ${script.segments.size} segments, waitMs=$waitMs")
+
+            // Producer/consumer with lookahead.
+            //
+            // The first version of this was strictly sequential: generate segment
+            // N, play it, wait for it to finish, then start generating N+1. Since
+            // generation (~2.4s) and playback (~2.4s) are comparable, that put a
+            // full generation stall at every segment boundary - the audio was
+            // segmented and halting rather than flowing.
+            //
+            // Now a producer generates ahead into a small channel while the
+            // consumer plays whatever is ready, so synthesis overlaps playback.
+            val prepared = kotlinx.coroutines.channels.Channel<PreparedSegment>(
+                capacity = PREFETCH_AHEAD
+            )
+
+            val producer = launch {
+                try {
+                    for ((index, segment) in script.segments.withIndex()) {
+                        if (index < from) continue
+                        if (!isActive()) break
+                        // Reflect progress before the request, so the strip shows
+                        // "generating segment N" during the first segment's wait.
+                        publishGenerating(index, script.segments.size, segment.kind.name.lowercase())
+                        val startedAt = System.currentTimeMillis()
+                        val file = withTimeoutOrNull(waitMs) {
+                            easyVoice.synthesize(segment.spoken, voice = voice)
+                        }
+                        val elapsed = System.currentTimeMillis() - startedAt
+                        if (file == null) {
+                            SpeechTrace.warn(
+                                "synth",
+                                "segment ${index + 1}/${script.segments.size} failed after ${elapsed}ms",
+                            )
+                            prepared.send(PreparedSegment(index, segment, null, elapsed))
+                            break
+                        }
+                        SpeechTrace.info(
+                            "synth",
+                            "segment ${index + 1}/${script.segments.size} in ${elapsed}ms " +
+                                "(${segment.spoken.length} chars)",
+                        )
+                        prepared.send(PreparedSegment(index, segment, file, elapsed))
+                    }
+                } finally {
+                    prepared.close()
+                }
+            }
+
             _playback.value = PlaybackState(
                 phase = PlaybackPhase.GENERATING,
-                segmentIndex = 0,
+                segmentIndex = from,
                 segmentCount = script.segments.size,
-                segmentLabel = script.segments.firstOrNull()?.kind?.name?.lowercase(),
+                segmentLabel = script.segments.getOrNull(from)?.kind?.name?.lowercase(),
                 positionMs = 0,
                 durationMs = 0,
                 playing = false,
             )
 
-            for ((index, segment) in script.segments.withIndex()) {
-                // Skip straight to the requested segment. Anything skipped has
-                // already been heard (or the listener chose to skip it), so it is
-                // not synthesized at all - which also saves the request.
-                if (index < from) continue
-                if (!isActive()) return@launch
-
-                publishGenerating(index, script.segments.size, segment.kind.name.lowercase())
-
-                val startedAt = System.currentTimeMillis()
-                val file = withTimeoutOrNull(waitMs) {
-                    easyVoice.synthesize(segment.spoken, voice = voice)
-                }
-                val elapsed = System.currentTimeMillis() - startedAt
-                if (file == null) {
-                    SpeechTrace.warn(
-                        "synth",
-                        "segment ${index + 1}/${script.segments.size} failed after ${elapsed}ms; script stopped",
-                    )
-                    Log.d(TAG, "segment $index unavailable within ${waitMs}ms; stopping script")
+            for (item in prepared) {
+                if (!isActive()) break
+                if (item.file == null) {
+                    SpeechTrace.warn("play", "segment ${item.index + 1} unavailable; stopping")
                     break
                 }
-                SpeechTrace.info(
-                    "synth",
-                    "segment ${index + 1}/${script.segments.size} in ${elapsed}ms " +
-                        "(${segment.spoken.length} chars)",
+
+                // With lookahead, the next segment is usually already waiting. If
+                // it is not, the channel suspends above and the listener is hearing
+                // the gap - so surface the generating state rather than pretending
+                // playback is continuous.
+                _playback.value = _playback.value?.copy(
+                    phase = PlaybackPhase.PLAYING,
+                    segmentIndex = item.index,
+                    segmentCount = script.segments.size,
                 )
-                if (!isActive()) return@launch
 
                 val started = playSegment(
-                    file = file,
+                    file = item.file,
                     dialogId = dialogId,
                     title = title,
-                    prompt = segment.spoken,
+                    prompt = item.segment.spoken,
                     optionCount = labels.size,
                     optionLabels = labels,
-                    segmentIndex = index,
+                    segmentIndex = item.index,
                     segmentCount = script.segments.size,
                 )
                 if (!started) {
-                    SpeechTrace.warn("play", "segment ${index + 1} could not start; script stopped")
-                    Log.d(TAG, "segment $index could not start; stopping script")
+                    SpeechTrace.warn("play", "segment ${item.index + 1} could not start; stopping")
                     break
                 }
 
-                awaitSegmentFinish(index, script.segments.size)
+                awaitSegmentFinish(item.index, script.segments.size)
 
-                // Local silence between segments. This is the pause the API
-                // cannot give us.
-                if (segment.pauseAfterMs > 0 && isActive()) {
-                    delay(segment.pauseAfterMs.toLong())
+                if (item.segment.pauseAfterMs > 0 && isActive()) {
+                    delay(item.segment.pauseAfterMs.toLong())
                 }
             }
+
+            producer.cancel()
+            prepared.cancel()
 
             if (isActive()) {
                 _isPlaying.value = false
@@ -208,6 +260,15 @@ class DialogAudioPlayer(private val context: Context) {
             }
         }
     }
+
+    /** A segment that has finished synthesizing, ready to play. */
+    private data class PreparedSegment(
+        val index: Int,
+        val segment: SpeechScriptCompiler.Segment,
+        /** Null when synthesis failed, which ends the script. */
+        val file: File?,
+        val generationMs: Long,
+    )
 
     /**
      * Speak [script] and suspend until playback finishes or [timeoutMs] passes.
@@ -267,6 +328,12 @@ class DialogAudioPlayer(private val context: Context) {
     private fun isActive(): Boolean = scriptJob?.isActive ?: false
 
     private fun publishGenerating(index: Int, count: Int, label: String) {
+        // Only overwrite the playback state if nothing is audible right now.
+        // Overwriting during playback made the audio strip flicker back to a
+        // "generating" bar while a different segment was playing - which is what
+        // made the prefetch look broken even when it was working.
+        val current = _playback.value
+        if (current != null && current.playing) return
         _playback.value = PlaybackState(
             phase = PlaybackPhase.GENERATING,
             segmentIndex = index,
