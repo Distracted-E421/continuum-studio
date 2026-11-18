@@ -242,7 +242,10 @@ fun ActionDock(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
+                // No navigationBarsPadding here: the dialog screen lives inside the
+                // app Scaffold, which already applies that inset via its bottomBar
+                // and hands it to us as `padding`. Adding it again wasted 24-48dp
+                // at exactly the place space is tightest - directly under Submit.
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
