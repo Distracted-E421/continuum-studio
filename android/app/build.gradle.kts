@@ -41,8 +41,8 @@ android {
         targetSdk = 36
         // versionCode must match OtaUpdateManager.extractVersionCode(tag):
         // major*10000 + minor*100 + patch, or every check reports an "update".
-        versionCode = 11940
-        versionName = "1.19.40"
+        versionCode = 11941
+        versionName = "1.19.41"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         

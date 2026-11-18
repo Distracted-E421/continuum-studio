@@ -369,18 +369,14 @@ fun DialogScreen(
                             MainTab.DIALOG -> {
                                 // Wrap content with QueueDrawer on left
                                 Box(modifier = Modifier.fillMaxSize()) {
-                                    Row(modifier = Modifier.fillMaxSize()) {
-                                        // Queue drawer (left side)
-                                        QueueDrawer(
-                                            queueItems = queueItems,
-                                            activeDialogId = dialogState.activeDialog?.id,
-                                            isOpen = dialogState.isQueueDrawerOpen,
-                                            onToggle = onToggleQueueDrawer,
-                                            onSelectDialog = onSwitchToQueuedDialog,
-                                        )
-                                        
-                                        // Main content (right side)
-                                        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                                    // Content fills the width; the queue overlays it.
+                                    //
+                                    // This used to be a Row, so opening the drawer
+                                    // narrowed the dialog and re-wrapped every line
+                                    // of the prompt - the content visibly shifted
+                                    // sideways and text reflowed mid-read. A drawer
+                                    // should cover, not push.
+                                    Box(modifier = Modifier.fillMaxSize()) {
                                             if (dialogState.activeDialog != null) {
                                                 if (isXRMode) {
                                                     // XR Mode: Show simplified control panel for phone input
@@ -457,8 +453,17 @@ fun DialogScreen(
                                                 )
                                             }
                                         }
+
+                                        // The queue overlays the content, so opening it
+                                        // never re-wraps the dialog text underneath.
+                                        QueueDrawer(
+                                            queueItems = queueItems,
+                                            activeDialogId = dialogState.activeDialog?.id,
+                                            isOpen = dialogState.isQueueDrawerOpen,
+                                            onToggle = onToggleQueueDrawer,
+                                            onSelectDialog = onSwitchToQueuedDialog,
+                                        )
                                     }
-                                }
                             }
                             MainTab.HISTORY -> {
                                 HistoryView(
