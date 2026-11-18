@@ -40,6 +40,23 @@ enum class FocusResponse {
 }
 
 /**
+ * Whether a focus GAIN should actually restart speech.
+ *
+ * Kept separate and pure because the obvious implementation is wrong: resuming
+ * on any GAIN undoes a pause the user pressed *during* the hold, which then
+ * starts talking again while they have deliberately silenced it.
+ */
+object HoldResume {
+
+    /**
+     * @param heldByFocus true when the current pause was imposed by another app
+     * @param userPaused true when the user has paused since (their choice wins)
+     */
+    fun shouldResume(heldByFocus: Boolean, userPaused: Boolean): Boolean =
+        heldByFocus && !userPaused
+}
+
+/**
  * Decides how speech reacts to other apps' audio-focus behaviour.
  *
  * Kept pure and separate from the player because this is the part that decides

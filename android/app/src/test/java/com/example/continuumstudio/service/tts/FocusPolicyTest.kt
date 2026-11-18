@@ -108,4 +108,24 @@ class FocusPolicyTest {
             FocusResponder.respond(FocusPolicy.PAUSE, FocusChange.LOSS_TRANSIENT_CAN_DUCK),
         )
     }
+
+    // --- Resuming after a hold -------------------------------------------
+
+    @Test
+    fun `a hold resumes when focus comes back and the user has not paused`() {
+        assertTrue(HoldResume.shouldResume(heldByFocus = true, userPaused = false))
+    }
+
+    @Test
+    fun `a pause pressed during the hold is not undone by focus returning`() {
+        // The user silencing the dialog mid-call must survive the call ending.
+        // Resuming on any GAIN was the obvious implementation and it is wrong.
+        assertFalse(HoldResume.shouldResume(heldByFocus = true, userPaused = true))
+    }
+
+    @Test
+    fun `a plain user pause is never resumed by a stray gain`() {
+        assertFalse(HoldResume.shouldResume(heldByFocus = false, userPaused = true))
+        assertFalse(HoldResume.shouldResume(heldByFocus = false, userPaused = false))
+    }
 }

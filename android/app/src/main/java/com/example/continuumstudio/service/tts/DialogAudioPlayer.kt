@@ -843,10 +843,15 @@ class DialogAudioPlayer(private val context: Context) {
             }
 
             FocusResponse.RESUME_AFTER_HOLD -> {
-                if (heldByFocusLoss) {
+                // A pause the user pressed during the hold outranks our wish to
+                // resume: restarting speech then would talk over their choice.
+                if (HoldResume.shouldResume(heldByFocusLoss, paused)) {
                     heldByFocusLoss = false
                     SpeechTrace.info("focus", "resumed after hold")
                     resume()
+                } else if (heldByFocusLoss) {
+                    heldByFocusLoss = false
+                    SpeechTrace.info("focus", "focus returned but user paused; staying paused")
                 }
             }
         }
