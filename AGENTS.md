@@ -206,6 +206,23 @@ exactly; an `UNSET` op is `cmd appops reset`, not set to default. `applyCarProfi
 `DIALOG_COMPETITORS` (Spotify, Audible) rather than every media app, and the UI labels Vivaldi as
 deliberately untouched.
 
+**Do not block the main thread in the diagnostics path** (2026-11-18). `probePlayback` did
+`MediaPlayer.prepare()` + `CountDownLatch.await(6s)` on whichever thread called it, and the caller
+was `rememberCoroutineScope().launch` - i.e. Main. The screen froze for up to six seconds and felt
+laggy afterwards. It is `suspend` and moves itself to `Dispatchers.IO`, so a caller cannot get it
+wrong; the report file write went there too. Anything that touches disk, a `MediaPlayer`, or
+blocks must not run on a Compose scope's default dispatcher.
+
+**A share sheet is not delivery.** 1.19.50 described its report as a way to send diagnostics; there
+was no upload and no endpoint, and `shareReport` returned `Unit`, so a chooser with no suitable
+target failed completely silently. Reports are now shown in-app, written to a file, and the status
+line states which happened. There is a direct **Copy to clipboard** button because selecting text
+one-handed in a car is unreasonable.
+
+Do **not** route free text through Synapsix `/api/action` with `action: "shell"` - it is the only
+daemon endpoint that could carry a payload and it executes arbitrary host commands. Automatic
+report upload needs a real endpoint, designed deliberately.
+
 **The media session must not outlive a read (found 2026-11-18 in a Subaru).** Reported symptom
 was "no audio in the car from *any* app". Continuum Studio was observed highlighted in the Android
 Auto app bar with no dialog present. Cause: `DialogMediaService` started from `BOOT_COMPLETED` and
