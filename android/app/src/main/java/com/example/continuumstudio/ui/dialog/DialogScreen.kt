@@ -2,6 +2,7 @@ package com.example.continuumstudio.ui.dialog
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -1914,11 +1915,16 @@ fun ActiveDialogCard(
 
         // --- Zone 2: the reading pane (the only scrolling part) -------------
 
+        // Keyed to the dialog id: a new dialog must start at the top, but the
+        // position must survive the constant recomposition caused by playback
+        // state updating every ~120ms. An unkeyed rememberScrollState did the
+        // second part by luck and the first not at all.
+        val readingScroll = remember(dialog.id) { ScrollState(0) }
         Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(readingScroll)
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Text(
