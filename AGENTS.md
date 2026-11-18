@@ -150,3 +150,51 @@ Hard-won knowledge from a full overhaul of the dialog page and speech pipeline.
 ### Dialog audio ordering (owner decision)
 
 - Prompt first, then options, even though a real dialog is ~21s and options start ~17s in. Do not reorder. The escape hatch is the "Options" button in the audio strip (`skipToOptions`), which restarts at the first OPTION segment without synthesizing the skipped ones.
+
+### Audio focus: OVERLAP is the owner's decision (2026-11-18)
+
+**Owner requirement: dialog audio must not break playback in another app** (Vivaldi named
+explicitly). The chosen behaviour is **OVERLAP** - request *no* audio focus at all, so the other
+app is never told the dialog started and cannot be left paused, ducked or broken. `DUCK` and
+`PAUSE` exist in `FocusPolicy` but are opt-in with their cost stated in the UI; overlapped is the
+fail-safe default and what an unreadable preference parses to.
+
+Three real bugs were behind "audio breaks other apps", all now fixed and pinned by
+`FocusPolicyTest` (9 tests) + `AudioPrefsKeysTest`:
+
+- **The two engines disagreed.** Local `MediaPlayer` asked `GAIN_TRANSIENT_MAY_DUCK` for
+  `FocusPolicy.DUCK`/`PAUSE`; `DialogMediaService`'s ExoPlayer was hardcoded
+  `handleAudioFocus = false`, so the car path played at full volume over music while the phone
+  path ducked. Both now derive from `FocusPolicy` (`DialogMediaService.setHandleAudioFocus`,
+  reachable via `MediaSessionBridge.applyFocusPolicy`).
+- **`hasFocus` was never reset on loss**, so after any loss every later segment skipped
+  `requestFocus()` and played unfocused - a silent mid-dialog degradation with no log line.
+- **Every loss called `pause()`**, the same call as the user's own pause, so one nav prompt ended
+  the read permanently. Loss is now a *hold* (`heldByFocusLoss`, resumed on GAIN); a user pause is
+  never auto-undone.
+
+Under OVERLAP `FocusResponder` returns `IGNORE` for every change - acting on an event we never
+participated in would be the bug.
+
+**Do not reintroduce blanket appop writes.** `clearFocusOverrides` used to write `default` to six
+packages including Vivaldi, clobbering whatever Sound Assistant had set. Prior modes are now
+recorded in SharedPreferences (`multisound_prior_modes`) before the first change and restored
+exactly; an `UNSET` op is `cmd appops reset`, not set to default. `applyCarProfile` defaults to
+`DIALOG_COMPETITORS` (Spotify, Audible) rather than every media app, and the UI labels Vivaldi as
+deliberately untouched.
+
+**Three engines, three attribute sites** - keep them all `USAGE_MEDIA` +
+`CONTENT_TYPE_SPEECH`: `DialogAudioPlayer.playFileLocally`, `DialogMediaService.audioAttributes()`,
+and `FallbackTts` (which had *none*, so the on-device voice used the TextToSpeech default of
+`USAGE_ASSISTANT` - the channel AA closes when STT ends, i.e. inaudible exactly when the fallback
+is needed).
+
+`AudioDiagnosticsScreen`'s `requestAudioFocus(null, stream, gain)` probe returned FAILED on modern
+Android (null listener), reporting "not grantable" on healthy devices. Use a real
+`AudioFocusRequest` and abandon it, as it now does.
+
+**Not verified on a device.** No wireless ADB to the S24 was available; everything above is
+verified by compile + unit test + dex inspection (`strings` on `classes*.dex` for
+`audio_focus_policy`, `DIALOG_COMPETITORS`, `multisound_prior_modes`, `HOLD_FOR_FOCUS`). Whether
+Samsung's framework MultiSound setting is *also* required for true simultaneous mixing is
+unverified - OVERLAP plus `multi_audio_focus_enabled` is the intended combination.
