@@ -585,8 +585,31 @@ class DialogWebSocketClient(
                 "NewDialog" -> {
                     val newDialog = json.decodeFromString<ServerMessage.NewDialog>(text)
                     _events.send(DialogEvent.NewDialog(newDialog.id, newDialog.title, newDialog.prompt, newDialog.dialogType))
-                    // Fetch full dialog details
-                    fetchCurrentDialog(_connectionState.value.serverUrl)
+                    // Fetch full dialog details. This is where the options live:
+                    // the NewDialog frame carries only id/title/prompt/type, so a
+                    // notification built from the frame alone has no choices and
+                    // the car shows a dialog with no buttons.
+                    val details = fetchCurrentDialog(_connectionState.value.serverUrl)
+                    if (details != null) {
+                        // Full details are now in state; let surfaces build the
+                        // notification with options and speak the option labels.
+                        _events.send(
+                            DialogEvent.DialogReady(
+                                id = details.id,
+                                title = details.title,
+                                prompt = details.prompt,
+                                dialogType = details.dialogType.type,
+                                optionsJson = details.dialogType.options?.let { opts ->
+                                    opts.joinToString(",", "[", "]") { o ->
+                                        org.json.JSONObject()
+                                            .put("value", o.value)
+                                            .put("label", o.label)
+                                            .toString()
+                                    }
+                                },
+                            )
+                        )
+                    }
                 }
                 "DialogCompleted" -> {
                     val completed = json.decodeFromString<ServerMessage.DialogCompleted>(text)
@@ -965,6 +988,21 @@ sealed class DialogEvent {
     data class Reconnecting(val attempt: Int, val delayMs: Long) : DialogEvent()
     data class Error(val message: String) : DialogEvent()
     data class NewDialog(val id: String, val title: String, val prompt: String = "", val dialogType: String = "choice") : DialogEvent()
+
+    /**
+     * The dialog's full details are known, including its options.
+     *
+     * Emitted after the follow-up fetch, because the NewDialog frame carries no
+     * options - a notification built from it has no choice buttons, which is
+     * exactly what the car was showing.
+     */
+    data class DialogReady(
+        val id: String,
+        val title: String,
+        val prompt: String,
+        val dialogType: String,
+        val optionsJson: String? = null,
+    ) : DialogEvent()
     data class DialogCompleted(val id: String) : DialogEvent()
 }
 

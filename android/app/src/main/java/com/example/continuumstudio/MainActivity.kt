@@ -396,31 +396,33 @@ class MainActivity : ComponentActivity() {
                             is DialogEvent.NewDialog -> {
                                 // Show toast
                                 dialogViewModel.showToast("New dialog: ${event.title}")
-                                
-                                // Mode-aware dialog routing:
-                                // - Android Auto: Always notify (car display handles it)
-                                // - Background: Notify (standard behavior)
-                                // - Foreground + glasses: Glasses handle it (notified via XRViewModel)
+
+                                // Auto-navigate to dialog screen (unless in Android Auto)
+                                if (currentDisplayMode != GlassesDisplayService.DisplayMode.ANDROID_AUTO) {
+                                    navController.navigate(Screen.Dialog.route) {
+                                        launchSingleTop = true
+                                    }
+                                }
+                            }
+                            is DialogEvent.DialogReady -> {
+                                // Notification is built here rather than on NewDialog,
+                                // because the NewDialog frame carries no options and a
+                                // notification without them gives the car no buttons.
                                 val shouldShowNotification = when (currentDisplayMode) {
                                     GlassesDisplayService.DisplayMode.ANDROID_AUTO -> true // Always notify for car
                                     else -> !isInForeground // Standard: notify when in background
                                 }
-                                
+
                                 if (shouldShowNotification) {
                                     DialogNotificationService.notifyNewDialog(
                                         this@MainActivity,
                                         event.id,
                                         event.title,
                                         event.prompt,
-                                        event.dialogType
+                                        event.dialogType,
+                                        priority = "normal",
+                                        optionsJson = event.optionsJson,
                                     )
-                                }
-                                
-                                // Auto-navigate to dialog screen (unless in Android Auto)
-                                if (currentDisplayMode != GlassesDisplayService.DisplayMode.ANDROID_AUTO) {
-                                    navController.navigate(Screen.Dialog.route) {
-                                        launchSingleTop = true
-                                    }
                                 }
                             }
                             is DialogEvent.DialogCompleted -> {
@@ -976,10 +978,15 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isInForeground = true
+        // Tell the background watcher to stay quiet: this Activity has its own
+        // connection and shows its own notifications, so both firing would notify
+        // every dialog twice.
+        DialogNotificationService.setAppInForeground(true)
     }
-    
+
     override fun onPause() {
         super.onPause()
         isInForeground = false
+        DialogNotificationService.setAppInForeground(false)
     }
 }

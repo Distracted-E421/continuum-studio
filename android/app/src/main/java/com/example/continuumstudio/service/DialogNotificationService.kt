@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import kotlinx.coroutines.cancelChildren
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
@@ -183,11 +184,28 @@ class DialogNotificationService : Service() {
             }
             context.startService(intent)
         }
+
+        /**
+         * Tell the background watcher whether a UI is on screen.
+         *
+         * When it is, the Activity's own connection notifies; the watcher must stay
+         * quiet or every dialog would be announced twice.
+         */
+        fun setAppInForeground(foreground: Boolean) {
+            BackgroundDialogWatcher.setAppInForeground(foreground)
+        }
     }
     
     private lateinit var notificationManager: NotificationManager
     private var ttsHelper: DialogTTSHelper? = null
     private var historyManager: DialogHistoryManager? = null
+
+    /** Own socket, so dialogs arrive even when the app UI is not running. */
+    private var watcher: BackgroundDialogWatcher? = null
+
+    private val serviceScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main
+    )
     
     override fun onCreate() {
         super.onCreate()
@@ -199,10 +217,37 @@ class DialogNotificationService : Service() {
         
         // Initialize history manager for conversation context
         historyManager = DialogHistoryManager(this)
+
+        // Connect our own socket. The app's connection lives in its view model and
+        // dies with the UI, so without this a dialog arriving while the phone is
+        // locked in a cradle produced nothing at all.
+        startWatcher()
+    }
+
+    private fun startWatcher() {
+        if (watcher != null) return
+        watcher = BackgroundDialogWatcher(
+            context = this,
+            scope = serviceScope,
+            onDialogReady = { dialog ->
+                // Build and show the notification, and let TTS read it.
+                showDialogNotification(
+                    dialogId = dialog.id,
+                    title = dialog.title,
+                    prompt = dialog.prompt,
+                    dialogType = dialog.dialogType,
+                    priority = "normal",
+                    optionsJson = dialog.optionsJson,
+                )
+            },
+        ).also { it.start() }
     }
     
     override fun onDestroy() {
         super.onDestroy()
+        watcher?.stop()
+        watcher = null
+        serviceScope.coroutineContext.cancelChildren()
         ttsHelper?.shutdown()
         ttsHelper = null
         historyManager = null
