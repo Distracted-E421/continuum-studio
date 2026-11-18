@@ -187,7 +187,10 @@ class SpeechScriptCompilerTest {
     // --- Pauses and segmentation -----------------------------------------
 
     @Test
-    fun `long prose is split into sentences so playback can start early`() {
+    fun `short sentences are merged into one chunk, not one request each`() {
+        // One request per sentence produced 12 segments (and 12 requests) for a
+        // realistic dialog, with a synthesis seam at every sentence. Short
+        // sentences now merge up to the target chunk length.
         val script = SpeechScriptCompiler.compile(
             title = "T",
             prompt = "First sentence here. Second sentence here. Third one.",
@@ -196,7 +199,54 @@ class SpeechScriptCompilerTest {
         val paragraphs = script.segments.filter {
             it.kind == SpeechScriptCompiler.Kind.PARAGRAPH
         }
-        assertEquals(3, paragraphs.size)
+        assertEquals(1, paragraphs.size)
+        assertTrue(paragraphs.first().spoken.contains("First"))
+        assertTrue(paragraphs.first().spoken.contains("Third"))
+    }
+
+    @Test
+    fun `long prose still splits so the first word arrives promptly`() {
+        // The opposite guarantee: a long body must not become one giant clip.
+        val long = (1..12).joinToString(" ") {
+            "This is sentence number $it and it has a reasonable number of words in it."
+        }
+        val script = SpeechScriptCompiler.compile("T", long, "text")
+        val paragraphs = script.segments.filter {
+            it.kind == SpeechScriptCompiler.Kind.PARAGRAPH
+        }
+        assertTrue("expected several chunks, got ${paragraphs.size}", paragraphs.size > 1)
+        paragraphs.forEach {
+            assertTrue("chunk too long: ${it.spoken.length}", it.spoken.length <= 400)
+        }
+    }
+
+    @Test
+    fun `chunking never loses text`() {
+        val prompt = "Alpha beta. Gamma delta. Epsilon zeta."
+        val script = SpeechScriptCompiler.compile("T", prompt, "text")
+        val body = script.segments
+            .filter { it.kind == SpeechScriptCompiler.Kind.PARAGRAPH }
+            .joinToString(" ") { it.spoken }
+        listOf("Alpha", "Gamma", "Epsilon").forEach {
+            assertTrue("lost '$it'", body.contains(it))
+        }
+    }
+
+    @Test
+    fun `a single enormous sentence is broken at word boundaries`() {
+        val huge = "word ".repeat(200).trim()
+        val chunks = SpeechScriptCompiler.chunkSentences(listOf(huge))
+        assertTrue("should split", chunks.size > 1)
+        chunks.forEach {
+            assertTrue("chunk exceeded max: ${it.length}", it.length <= 400)
+            // Splitting mid-word would be audible as a stutter.
+            assertTrue("chunk ends mid-word: ...${it.takeLast(12)}", it.endsWith("word"))
+        }
+    }
+
+    @Test
+    fun `empty input yields no chunks`() {
+        assertEquals(emptyList<String>(), SpeechScriptCompiler.chunkSentences(emptyList()))
     }
 
     @Test
@@ -220,14 +270,36 @@ class SpeechScriptCompilerTest {
     }
 
     @Test
-    fun `headings and list items become their own segments`() {
+    fun `list items stay audibly separate even when grouped`() {
         val script = SpeechScriptCompiler.compile(
             title = "T",
             prompt = "## Status\n\n- built\n- tests pass\n",
             dialogType = "text",
         )
         assertTrue(script.segments.any { it.kind == SpeechScriptCompiler.Kind.HEADING })
-        assertEquals(2, script.segments.count { it.kind == SpeechScriptCompiler.Kind.LIST_ITEM })
+
+        // Short items are grouped into fewer requests, but must read as separate
+        // items - a run-on "built tests pass" would be unintelligible.
+        val listText = script.segments
+            .filter { it.kind == SpeechScriptCompiler.Kind.LIST_ITEM }
+            .joinToString(" ") { it.spoken }
+        assertTrue("items ran together: $listText", listText.contains("built. "))
+        assertTrue(listText.contains("tests pass"))
+    }
+
+    @Test
+    fun `grouping list items keeps sentence boundaries`() {
+        val grouped = SpeechScriptCompiler.groupListItems(listOf("built", "tests pass", "shipped"))
+        assertEquals(1, grouped.size)
+        assertEquals("built. tests pass. shipped.", grouped.first())
+    }
+
+    @Test
+    fun `long lists are split across chunks`() {
+        val items = (1..12).map { "Item number $it has a fair number of words in it" }
+        val grouped = SpeechScriptCompiler.groupListItems(items)
+        assertTrue("expected multiple chunks, got ${grouped.size}", grouped.size > 1)
+        grouped.forEach { assertTrue(it.length <= 400) }
     }
 
     @Test

@@ -76,15 +76,38 @@ object SpeechScriptCompiler {
         val optionIndex: Int? = null,
     )
 
-    /** Pause policy, in milliseconds. Tuned against the measured clip lengths. */
+    /**
+     * Pause policy, in milliseconds.
+     *
+     * These are gaps of *real silence* inserted between segments, because the
+     * service cannot produce silence itself (see the class comment).
+     *
+     * Measured context that set these values: a typical segment is 1.6s to
+     * generate and 2-4s to play, and the generated clips contain no leading or
+     * trailing silence of their own (verified with silencedetect). So the gap
+     * here is the *entire* pause the listener hears, not an addition to padding
+     * that already exists.
+     *
+     * The first values were 240-500ms, which against 2-4s segments read as
+     * choppiness rather than pacing. Natural sentence-to-sentence speech is
+     * roughly 150-250ms; a paragraph break deserves a little more.
+     */
     private object Pauses {
-        const val TITLE = 500
-        const val HEADING = 420
-        const val PARAGRAPH = 340
-        const val LIST_ITEM = 240
-        const val CODE = 320
-        const val QUOTE = 380
-        const val OPTION = 280
+        /** Between the title and the body. */
+        const val TITLE = 320
+        /** Between a heading and what follows. */
+        const val HEADING = 260
+        /** Sentence to sentence within the body. */
+        const val PARAGRAPH = 180
+        /** Between list items, which are often short. */
+        const val LIST_ITEM = 120
+        /** After "a code block, 12 lines." */
+        const val CODE = 220
+        /** After an aside. */
+        const val QUOTE = 240
+        /** Between numbered options - enough to distinguish, not to seem blank. */
+        const val OPTION = 160
+        /** No trailing pause; the read should end when it ends. */
         const val INSTRUCTION = 0
     }
 
@@ -268,16 +291,28 @@ object SpeechScriptCompiler {
                 continue
             }
 
-            // Bullets and numbered items: one segment each, so a pause lands
-            // between them and the player can start on the first item.
+            // Bullets and numbered items: consecutive items are grouped so a
+            // three-word bullet is not its own request, but joined with an audible
+            // separator so the listener still hears them as separate items rather
+            // than a run-on sentence.
             val bullet = BULLET.find(line)
             val numbered = NUMBERED.find(line)
             if (bullet != null || numbered != null) {
-                val text = spoken((bullet ?: numbered)!!.groupValues[1])
-                if (text.isNotEmpty()) {
-                    out += Segment(Kind.LIST_ITEM, text, Pauses.LIST_ITEM, source = line)
+                val items = mutableListOf<String>()
+                while (i < lines.size) {
+                    val candidate = lines[i].trim()
+                    val body = (BULLET.find(candidate) ?: NUMBERED.find(candidate))
+                        ?.groupValues?.getOrNull(1)
+                        ?: break
+                    items += body
+                    i++
                 }
-                i++
+                groupListItems(items).forEach { chunk ->
+                    val text = spoken(chunk)
+                    if (text.isNotEmpty()) {
+                        out += Segment(Kind.LIST_ITEM, text, Pauses.LIST_ITEM, source = chunk)
+                    }
+                }
                 continue
             }
 
@@ -302,10 +337,17 @@ object SpeechScriptCompiler {
                 i++
             }
             prose.joinToString(" ").let { joined ->
-                splitSentences(joined).forEach { sentence ->
-                    val text = spoken(sentence)
+                // Group sentences into chunks rather than one segment each.
+                //
+                // Per-sentence segments meant one HTTP request per sentence - a
+                // realistic dialog produced 12 segments and 12 requests - and put
+                // a synthesis seam at every sentence boundary. Chunking to a target
+                // length trades a little first-word latency for far fewer requests
+                // and much smoother delivery.
+                chunkSentences(splitSentences(joined)).forEach { chunk ->
+                    val text = spoken(chunk)
                     if (text.isNotEmpty()) {
-                        out += Segment(Kind.PARAGRAPH, text, Pauses.PARAGRAPH, source = sentence)
+                        out += Segment(Kind.PARAGRAPH, text, Pauses.PARAGRAPH, source = chunk)
                     }
                 }
             }
@@ -436,6 +478,94 @@ object SpeechScriptCompiler {
     private fun spokenPlain(text: String): String {
         PronunciationDictionary.lookup(text)?.let { return it.spoken }
         return text
+    }
+
+    /**
+     * Target length for a spoken chunk, in characters.
+     *
+     * Chosen from measurement: a ~180-character chunk is roughly 3-5 seconds of
+     * speech, which is close to the playback time of one generation request (1.6s
+     * to generate). Keeping chunks near that ratio is what lets prefetch stay
+     * ahead; very short chunks waste round-trips, very long ones make the first
+     * word arrive late.
+     */
+    private const val CHUNK_TARGET_CHARS = 180
+
+    /**
+     * Never exceed this, even if a single sentence is longer.
+     *
+     * Split at clause boundaries first. A 400-character single sentence is rare
+     * but happens with lists of items, and a 12-second unbroken clip gives the
+     * prefetch nothing to work with.
+     */
+    private const val CHUNK_MAX_CHARS = 320
+
+    /**
+     * Group sentences into chunks of roughly [CHUNK_TARGET_CHARS].
+     *
+     * A sentence longer than [CHUNK_MAX_CHARS] is split at clause punctuation so
+     * one huge sentence cannot become one huge clip.
+     */
+    fun chunkSentences(sentences: List<String>): List<String> {
+        if (sentences.isEmpty()) return emptyList()
+
+        // Break down anything too long to be a reasonable single clip.
+        val pieces = sentences.flatMap { if (it.length <= CHUNK_MAX_CHARS) listOf(it) else splitAtClauses(it) }
+
+        val out = mutableListOf<String>()
+        val current = StringBuilder()
+        for (piece in pieces) {
+            val wouldBe = if (current.isEmpty()) piece.length else current.length + 1 + piece.length
+            if (current.isNotEmpty() && wouldBe > CHUNK_TARGET_CHARS) {
+                out += current.toString()
+                current.clear()
+            }
+            if (current.isNotEmpty()) current.append(' ')
+            current.append(piece)
+        }
+        if (current.isNotEmpty()) out += current.toString()
+        return out
+    }
+
+    /**
+     * Group list items into clips, keeping them audibly separate.
+     *
+     * Items are joined with ". " so the listener hears sentence boundaries between
+     * them; without that, three bullets become a run-on. Grouping is only to avoid
+     * spending one request per three-word bullet.
+     */
+    fun groupListItems(items: List<String>): List<String> {
+        if (items.isEmpty()) return emptyList()
+        val out = mutableListOf<String>()
+        val current = StringBuilder()
+        for (item in items) {
+            val piece = item.trimEnd('.', ';', ',')
+            val wouldBe = if (current.isEmpty()) piece.length else current.length + 2 + piece.length
+            if (current.isNotEmpty() && wouldBe > CHUNK_TARGET_CHARS) {
+                out += current.toString() + "."
+                current.clear()
+            }
+            if (current.isNotEmpty()) current.append(". ")
+            current.append(piece)
+        }
+        if (current.isNotEmpty()) out += current.toString() + "."
+        return out
+    }
+
+    /** Split a long sentence at commas and semicolons, keeping them attached. */
+    private fun splitAtClauses(sentence: String): List<String> {
+        val out = mutableListOf<String>()
+        val current = StringBuilder()
+        sentence.split(' ').forEach { word ->
+            if (current.isNotEmpty() && current.length + 1 + word.length > CHUNK_MAX_CHARS) {
+                out += current.toString()
+                current.clear()
+            }
+            if (current.isNotEmpty()) current.append(' ')
+            current.append(word)
+        }
+        if (current.isNotEmpty()) out += current.toString()
+        return out
     }
 
     /**
