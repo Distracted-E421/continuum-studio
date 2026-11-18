@@ -6,10 +6,12 @@ import android.media.MediaCodecList
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
@@ -34,9 +36,14 @@ import kotlinx.coroutines.launch
  * token and no new endpoint, and it works with whatever the user already has
  * (email to self, a chat, a notes app). A diagnostics feature that depends on
  * being online is useless in exactly the situation it is needed for.
+ *
+ * **Must be called on the main thread** - `startActivity` needs it - but it does
+ * no work beyond handing over an intent, so it cannot freeze the UI. The first
+ * version of this was fine as an intent but the blocking probe that ran before it
+ * was not (see AudioReportCollector.probePlayback).
  */
-private fun shareReport(context: Context, text: String) {
-    try {
+private fun shareReport(context: Context, text: String): Boolean {
+    return try {
         val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(android.content.Intent.EXTRA_SUBJECT, "Continuum audio report")
@@ -46,9 +53,31 @@ private fun shareReport(context: Context, text: String) {
             android.content.Intent.createChooser(intent, "Share audio report")
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+        true
     } catch (e: Exception) {
         android.util.Log.w("AudioDiagnostics", "could not share report: ${e.message}")
+        false
     }
+}
+
+/**
+ * Write the report to a file the user can retrieve, and return its path.
+ *
+ * Second delivery path on purpose. A share sheet needs some app to receive the
+ * intent; if the user has nothing suitable installed, the report went nowhere and
+ * there was no way to tell. The file always works, and `adb pull` can fetch it
+ * later without the app being open.
+ */
+private fun writeReportFile(context: Context, text: String): String = try {
+    val dir = java.io.File(context.getExternalFilesDir(null) ?: context.filesDir, "reports")
+        .apply { mkdirs() }
+    val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+        .format(java.util.Date())
+    val file = java.io.File(dir, "audio-$stamp.txt")
+    file.writeText(text)
+    file.absolutePath
+} catch (e: Exception) {
+    "could not write report file: ${e.message}"
 }
 
 /**
@@ -72,6 +101,53 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
     val controller = remember { MultiSoundController(context) }
 
     var lines by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    // The most recent report text, shown in-app as well as shared. This exists
+    // because the share sheet is not a reliable delivery path: with no suitable
+    // target the intent goes nowhere, and the first version gave no feedback at
+    // all, so a report could be "sent" into nothing.
+    var reportText by remember { mutableStateOf<String?>(null) }
+    var reportStatus by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    /** Everything that touches disk or the audio service, off the main thread. */
+    suspend fun buildReport(append: String = ""): String = kotlinx.coroutines.withContext(
+        kotlinx.coroutines.Dispatchers.IO
+    ) {
+        val car = com.example.continuumstudio.audio.AudioReportCollector
+            .collect(context, "car / Android Auto")
+        val phone = com.example.continuumstudio.audio.AudioReportCollector
+            .collect(context, "phone / Bluetooth")
+        buildString {
+            if (append.isNotBlank()) {
+                appendLine(append)
+                appendLine()
+            }
+            appendLine(
+                com.example.continuumstudio.audio.AudioReport.describeDifferences(car, phone)
+            )
+            appendLine()
+            appendLine("=== CAR ===")
+            appendLine(car.render())
+            appendLine("=== PHONE ===")
+            appendLine(phone.render())
+        }
+    }
+
+    /**
+     * Build the report, persist it, and share it.
+     *
+     * The disk write is inside the IO block: writing to external storage on the
+     * main thread is what made the screen stutter after sharing. Only
+     * `startActivity` runs on the caller's (main) dispatcher.
+     */
+    suspend fun produceAndShare(append: String = ""): Pair<String, String> {
+        val text = buildReport(append)
+        val path = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            writeReportFile(context, text)
+        }
+        val shared = shareReport(context, text)
+        return text to if (shared) path else "not shared: $path"
+    }
     // Live speech-pipeline log. Collected as state so it updates while a dialog
     // is being read, which is when the interesting events happen.
     val trace by com.example.continuumstudio.speech.SpeechTrace.events.collectAsState()
@@ -198,24 +274,24 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
                     // Share a full audio report. This is the mechanism for
                     // comparing the car's behaviour with the phone's: collect one
                     // in each situation and the difference is the answer.
-                    IconButton(onClick = {
-                        scope.launch {
-                            val car = com.example.continuumstudio.audio.AudioReportCollector
-                                .collect(context, "car / Android Auto")
-                            val phone = com.example.continuumstudio.audio.AudioReportCollector
-                                .collect(context, "phone / Bluetooth")
-                            val text = buildString {
-                                appendLine(com.example.continuumstudio.audio.AudioReport
-                                    .describeDifferences(car, phone))
-                                appendLine()
-                                appendLine("=== CAR ===")
-                                appendLine(car.render())
-                                appendLine("=== PHONE ===")
-                                appendLine(phone.render())
+                    IconButton(
+                        enabled = !busy,
+                        onClick = {
+                            scope.launch {
+                                busy = true
+                                reportStatus = null
+                                try {
+                                    val (text, where) = produceAndShare()
+                                    reportText = text
+                                    reportStatus = "Shown below. $where"
+                                } catch (e: Exception) {
+                                    reportStatus = "Report failed: ${e.javaClass.simpleName}: ${e.message}"
+                                } finally {
+                                    busy = false
+                                }
                             }
-                            shareReport(context, text)
-                        }
-                    }) {
+                        },
+                    ) {
                         Icon(Icons.Default.Share, "Share audio report")
                     }
                     IconButton(onClick = {
@@ -268,68 +344,115 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
 
             // --- Report ---------------------------------------------------
             //
-            // The share action above is the only thing that gets information off
-            // the phone while driving, so it is explained here rather than being
-            // a bare icon.
+            // The report is displayed here as well as shared. Relying on the share
+            // sheet alone meant a report could be "sent" into nothing if no app
+            // accepted the intent, with no feedback.
             Text(
                 "Tap the share icon to send a full audio report. It collects the same " +
                     "fields twice and diffs them, so the useful part is which values " +
-                    "moved between car and phone.",
+                    "moved between car and phone. The text also appears below, and is " +
+                    "saved to a file, so it can always be recovered.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Button(
+                enabled = !busy,
                 onClick = {
                     scope.launch {
-                        val car = com.example.continuumstudio.audio.AudioReportCollector
-                            .collect(context, "car / Android Auto")
-                        val phone = com.example.continuumstudio.audio.AudioReportCollector
-                            .collect(context, "phone / Bluetooth")
-                        shareReport(
-                            context,
-                            buildString {
-                                appendLine(com.example.continuumstudio.audio.AudioReport
-                                    .describeDifferences(car, phone))
-                                appendLine()
-                                appendLine("=== CAR ===")
-                                appendLine(car.render())
-                                appendLine("=== PHONE ===")
-                                appendLine(phone.render())
-                            },
-                        )
+                        busy = true
+                        reportStatus = null
+                        try {
+                            val (text, where) = produceAndShare()
+                            reportText = text
+                            reportStatus = "Shown below. $where"
+                        } catch (e: Exception) {
+                            reportStatus = "Report failed: ${e.javaClass.simpleName}: ${e.message}"
+                        } finally {
+                            busy = false
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Icon(Icons.Default.Share, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Share audio report")
+                Text(if (busy) "Collecting..." else "Share audio report")
             }
 
             // Audible probe, opt-in. A silent probe cannot tell "routed but quiet"
             // from "not routed at all", and that distinction is the whole
             // question in a car. Kept behind a button because it makes noise.
             OutlinedButton(
+                enabled = !busy,
                 onClick = {
                     scope.launch {
-                        val probe = com.example.continuumstudio.audio.AudioReportCollector
-                            .probePlayback(context, audible = true)
-                        shareReport(
-                            context,
-                            buildString {
-                                appendLine("Audible probe (should have been a 1s beep)")
+                        busy = true
+                        reportStatus = "Playing a 1s beep..."
+                        try {
+                            // Suspend and IO-bound: this used to block the main
+                            // thread for up to 6s and made the whole screen lag.
+                            val probe = com.example.continuumstudio.audio.AudioReportCollector
+                                .probePlayback(context, audible = true)
+                            val probeText = buildString {
+                                appendLine("Audible probe (a 1s beep should have played)")
                                 probe.forEach { (k, v) -> appendLine("$k: $v") }
-                                appendLine()
-                                appendLine(
-                                    com.example.continuumstudio.audio.AudioReportCollector
-                                        .collect(context, "after audible probe").render()
-                                )
-                            },
-                        )
+                            }
+                            val (text, where) = produceAndShare(append = probeText)
+                            reportText = text
+                            reportStatus = "Shown below. $where"
+                        } catch (e: Exception) {
+                            reportStatus = "Probe failed: ${e.javaClass.simpleName}: ${e.message}"
+                        } finally {
+                            busy = false
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Play a test beep and share the result") }
+
+            reportStatus?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            reportText?.let { text ->
+                // Copy-to-clipboard is the primary action, not text selection.
+                // Selecting text one-handed in a car is genuinely hard, and the
+                // user has to paste it into a dialog comment next - so the report
+                // is put on the clipboard directly and the selection container is
+                // only a fallback.
+                Button(
+                    onClick = {
+                        val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                        cm?.setPrimaryClip(
+                            android.content.ClipData.newPlainText("Continuum audio report", text)
+                        )
+                        reportStatus = "Copied to clipboard. Paste it into a dialog comment."
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Copy report to clipboard")
+                }
+                SelectionContainer {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(10.dp),
+                        )
+                    }
+                }
+            }
 
             // --- Live speech pipeline ------------------------------------
             //

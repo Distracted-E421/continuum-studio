@@ -5,6 +5,8 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Build
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -145,68 +147,72 @@ object AudioReportCollector {
     }
 
     /**
-     * Play a short silent clip and report what happened.
+     * Play a short clip and report what happened.
      *
-     * This is the one active probe. It is separate from [collect] so that a
-     * report can be taken without making any sound, and it uses a tone the user
-     * can hear *if desired* - a silent probe cannot distinguish "routed but
-     * quiet" from "not routed at all".
+     * **Never call this on the main thread.** `prepare()` reads from disk and the
+     * wait below blocks; the first version of this ran inside a
+     * `rememberCoroutineScope().launch` (i.e. Main) and froze the UI for up to six
+     * seconds, which is what made the app feel laggy and unresponsive afterwards.
+     * It is a `suspend` function that moves itself to [Dispatchers.IO] so a caller
+     * cannot get this wrong by accident.
      *
      * @return a description of what the player did, appended to the report
      */
-    fun probePlayback(context: Context, audible: Boolean): List<Pair<String, String>> {
-        val out = mutableListOf<Pair<String, String>>()
-        out += "probe audible" to audible.toString()
-        val started = CountDownLatch(1)
-        var error: String? = null
-        var durationMs = -1
-        var played = false
+    suspend fun probePlayback(context: Context, audible: Boolean): List<Pair<String, String>> =
+        withContext(Dispatchers.IO) {
+            val out = mutableListOf<Pair<String, String>>()
+            out += "probe audible" to audible.toString()
+            val started = CountDownLatch(1)
+            var error: String? = null
+            var durationMs = -1
+            var played = false
 
-        val player = try {
-            MediaPlayer()
-        } catch (e: Exception) {
-            out += "probe result" to "could not create MediaPlayer: ${e.message}"
-            return out
-        }
-
-        try {
-            player.setAudioAttributes(
-                android.media.AudioAttributes.Builder()
-                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-            val file = if (audible) toneFile(context) else silentFile(context)
-            player.setDataSource(file.absolutePath)
-            player.setOnErrorListener { _, what, extra ->
-                error = "what=$what extra=$extra"
-                started.countDown()
-                true
+            val player = try {
+                MediaPlayer()
+            } catch (e: Exception) {
+                out += "probe result" to "could not create MediaPlayer: ${e.message}"
+                return@withContext out
             }
-            player.setOnCompletionListener {
-                played = true
-                started.countDown()
-            }
-            player.prepare()
-            durationMs = runCatching { player.duration }.getOrDefault(-1)
-            player.start()
-            // Wait for the clip rather than a fixed sleep, so the reading reflects
-            // the actual playback.
-            started.await(6, TimeUnit.SECONDS)
-        } catch (e: Exception) {
-            error = "${e.javaClass.simpleName}: ${e.message}"
-        } finally {
-            runCatching { player.release() }
-        }
 
-        out += "probe duration" to "${durationMs}ms"
-        out += "probe completed" to played.toString()
-        out += "probe error" to (error ?: "none")
-        // Whether it completed is the interesting part: a routing failure usually
-        // still "plays" into a null sink, so a completion alone does not prove the
-        // user heard it. Hence the audible option.
-        return out
-    }
+            try {
+                player.setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                val file = if (audible) toneFile(context) else silentFile(context)
+                player.setDataSource(file.absolutePath)
+                player.setOnErrorListener { _, what, extra ->
+                    error = "what=$what extra=$extra"
+                    started.countDown()
+                    true
+                }
+                player.setOnCompletionListener {
+                    played = true
+                    started.countDown()
+                }
+                player.prepare()
+                durationMs = runCatching { player.duration }.getOrDefault(-1)
+                player.start()
+                // Wait for the clip rather than a fixed sleep, so the reading
+                // reflects actual playback. Bounded so a wedged player cannot hang
+                // the report.
+                started.await(6, TimeUnit.SECONDS)
+            } catch (e: Exception) {
+                error = "${e.javaClass.simpleName}: ${e.message}"
+            } finally {
+                runCatching { player.release() }
+            }
+
+            out += "probe duration" to "${durationMs}ms"
+            out += "probe completed" to played.toString()
+            out += "probe error" to (error ?: "none")
+            // Completion alone does not prove the user heard it: a routing failure
+            // usually still "plays" into a null sink. Hence the audible option and
+            // the routing snapshot that accompanies it.
+            out
+        }
 
     private fun appVersion(context: Context): String = runCatching {
         val pm = context.packageManager
