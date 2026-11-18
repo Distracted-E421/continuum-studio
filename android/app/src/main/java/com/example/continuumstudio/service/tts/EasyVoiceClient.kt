@@ -4,7 +4,9 @@ import android.content.Context
 import android.util.Log
 import com.example.continuumstudio.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -142,28 +144,41 @@ class EasyVoiceClient(private val context: Context) {
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
 
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.w(TAG, "Synthesis failed: HTTP ${response.code}")
-                    return@withContext null
-                }
-                val bytes = response.body?.bytes()
-                if (bytes == null || bytes.isEmpty()) {
-                    Log.w(TAG, "Synthesis returned an empty body")
-                    return@withContext null
-                }
+            val call = client.newCall(request)
 
-                // Write via a temp file so a killed process can't leave a
-                // truncated MP3 that looks like a valid cache hit.
-                val tmp = File(cacheDir, "${target.name}.tmp")
-                tmp.writeBytes(bytes)
-                if (!tmp.renameTo(target)) {
-                    tmp.delete()
-                    Log.w(TAG, "Could not commit cache file")
-                    return@withContext null
+            // Cancel the HTTP call if the coroutine is cancelled (user pressed
+            // stop or skip, or withTimeoutOrNull elapsed). Without this, `execute()`
+            // kept running to completion: abandoning playback could still leave two
+            // in-flight requests, each burning quota and possibly writing a cache
+            // entry for audio nobody will hear.
+            val cancelled = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.w(TAG, "Synthesis failed: HTTP ${response.code}")
+                        return@withContext null
+                    }
+                    val bytes = response.body?.bytes()
+                    if (bytes == null || bytes.isEmpty()) {
+                        Log.w(TAG, "Synthesis returned an empty body")
+                        return@withContext null
+                    }
+
+                    // Write via a temp file so a killed process can't leave a
+                    // truncated MP3 that looks like a valid cache hit.
+                    val tmp = File(cacheDir, "${target.name}.tmp")
+                    tmp.writeBytes(bytes)
+                    if (!tmp.renameTo(target)) {
+                        tmp.delete()
+                        Log.w(TAG, "Could not commit cache file")
+                        return@withContext null
+                    }
+                    Log.d(TAG, "Synthesized and cached ${bytes.size} bytes")
+                    target
                 }
-                Log.d(TAG, "Synthesized and cached ${bytes.size} bytes")
-                target
+            } finally {
+                cancelled?.dispose()
             }
         } catch (e: Exception) {
             // Includes UnknownHostException when offline: that is expected and
