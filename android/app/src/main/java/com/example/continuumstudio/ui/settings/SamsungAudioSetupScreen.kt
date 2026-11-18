@@ -167,9 +167,20 @@ fun SamsungAudioSetupScreen(onBack: () -> Unit) {
                         Text("Multi-app audio", fontWeight = FontWeight.Bold)
                     }
                     Text(
-                        "Lets several apps play at once instead of each one pausing the last. " +
-                            "This is the setting that makes music survive a dialog.",
+                        "Lets several apps hold audio focus at once, so apps that do not " +
+                            "decline focus do not pause each other.",
                         style = MaterialTheme.typography.bodySmall
+                    )
+                    // Important distinction. Dialog speech deliberately requests no
+                    // focus at all, so it mixes with music without this setting - the
+                    // mixing happens below the focus system. Claiming otherwise sent
+                    // the user to change the wrong thing when audio misbehaved.
+                    Text(
+                        "Dialog reading does not need this. It asks for no audio focus, " +
+                            "so it already plays over music. Multi-app audio is for apps " +
+                            "that would otherwise interrupt each other.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Switch(
                         checked = multiAudio,
