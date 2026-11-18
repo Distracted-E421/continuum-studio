@@ -103,13 +103,36 @@ Hard-won knowledge from a full overhaul of the dialog page and speech pipeline.
 - JDK is not on PATH: `export JAVA_HOME=/nix/store/1slz0vmmgsd7p6i4c0jaywkpw56wl2yg-openjdk-21.0.12+8` and put `$JAVA_HOME/bin` first. SDK is at `~/Android/Sdk` (`local.properties`).
 - `./gradlew --offline` works for `compileDebugKotlin`, `testDebugUnitTest`, `assembleDebug`. JUnit is not in the offline cache; the first test run needs network.
 - Unit tests are plain JUnit in `app/src/test`. 80 of them, all pure (no Robolectric).
+- Always target `:app:` explicitly (`./gradlew --offline :app:assembleDebug`). A bare task name also configures `:tablet`, whose `androidx.room:2.7.2` is NOT in the offline cache, so the build dies on dependency resolution before compiling anything.
+
+**`aapt2` cannot execute on this NixOS box (found 2026-11-18).** Google ships it as a
+generically-linked ELF whose interpreter is `/lib64/ld-linux-x86-64.so.2`; here that path is a
+symlink to `stub-ld` (musl placeholder), so every `process*Resources` task fails with
+`AAPT2 Daemon startup failed` / "NixOS cannot run dynamically linked executables". Debug builds
+appeared to work only because the resource step was still cached - the first `assembleRelease`
+is what surfaced it. Fix is to point its interpreter at the real glibc:
+
+```bash
+A=/home/e421/.gradle/caches/9.9.1/transforms/*/transformed/aapt2-*/aapt2
+chmod +w $A
+/nix/store/3vs2fr2mazafcdwyza15bfhpmccx1k7z-patchelf-0.15.2/bin/patchelf \
+  --set-interpreter /nix/store/r3hvhzl5fxhrgn0rfy5g7rda17702pj4-glibc-2.44-57/lib64/ld-linux-x86-64.so.2 $A
+aapt2 version   # expect "Android Asset Packaging Tool (aapt) 2.20-"
+```
+
+This lives in the Gradle cache, so **a clean cache (or a new AGP version) breaks it again**.
+Likewise `$ANDROID_HOME/build-tools/*/aapt` and `apksigner` have `#!/bin/bash` shebangs that do
+not resolve here - invoke them as `bash <path>`; `aapt` itself is also a foreign binary, so read
+version info from `app/build/outputs/apk/<variant>/output-metadata.json` or the merged manifest
+under `app/build/intermediates/merged_manifests/` instead.
 
 ### Release / OTA
 
-- Releases are **debug-signed** (no signing config in `build.gradle.kts`), so installs are interchangeable but cannot be published to Play.
-- In-app OTA reads **GitHub** (`OtaUpdateManager`). The Forgejo API 404s for this repo, so the Gitea fallback never fires — GitHub is the only working path.
+- Releases are **debug-signed** (no signing config in `build.gradle.kts`), so installs are interchangeable but cannot be published to Play. Keep using the **debug** APK as the release asset: every existing release carries the `CN=Android Debug` certificate (`cbdd6479...`), and switching to a release key would force an uninstall and lose settings.
+- In-app OTA reads **GitHub** (`OtaUpdateManager`). The Forgejo API 404s for this repo (private, so unauthenticated `/api/v1/repos/datapunk/continuum-studio` is "target couldn't be found"; `git.continuumlogic.dev` returns 525), so the Gitea branch never fires — GitHub is the only working path and the repo is public.
 - Asset must be named `continuum-<versionName>.apk`; versionCode must equal `major*10000+minor*100+patch` or every check reports an update.
-- Verify a release really contains the change by unzipping and grepping the dex (`unzip -p x.apk 'classes*.dex' | strings | grep -c <Symbol>`). A build log saying success is not proof; one release shipped a round behind.
+- Verify a release really contains the change by unzipping and grepping the dex (`unzip -p x.apk 'classes*.dex' | strings | grep -c <Symbol>`). A build log saying success is not proof; one release shipped a round behind. Also confirm the version from `output-metadata.json`, not from a build log.
+- `assembleRelease` produces `app-release-unsigned.apk` only (no `signingConfig` on the release build type), which makes it the wrong artifact to publish. Build `assembleDebug` for the asset.
 
 ### Audio pipeline invariants
 
