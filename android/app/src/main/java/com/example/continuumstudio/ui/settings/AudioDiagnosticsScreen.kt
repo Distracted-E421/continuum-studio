@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
@@ -172,6 +173,10 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
     val playbackFlow = com.example.continuumstudio.service.tts.AudioHub.existing()?.playback
         ?: emptyPlayback
     val playback by playbackFlow.collectAsState()
+
+    // Media volume, tracked so the repair button can show what it changed.
+    var mediaVolume by remember { mutableStateOf(-1) }
+    var mediaVolumeMax by remember { mutableStateOf(-1) }
     var showTrace by remember { mutableStateOf(true) }
 
     suspend fun collect() {
@@ -269,7 +274,12 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
         lines = out
     }
 
-    LaunchedEffect(Unit) { collect() }
+    LaunchedEffect(Unit) {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        mediaVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+        mediaVolumeMax = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        collect()
+    }
 
     Scaffold(
         topBar = {
@@ -351,6 +361,65 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
                 }
                 HorizontalDivider()
             }
+
+            // --- Media volume ---------------------------------------------
+            //
+            // A real car report showed music at 2/15 and notifications and system
+            // at 0/15, which is inaudible over road noise while looking like
+            // healthy numbers. Rather than asking the user to hunt for the right
+            // stream at the wheel, offer the fix directly.
+            HorizontalDivider()
+            Text(
+                "Media volume",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                if (mediaVolume >= 0) {
+                    "$mediaVolume of $mediaVolumeMax" +
+                        when {
+                            mediaVolume == 0 -> " - silent. Nothing can be heard."
+                            mediaVolume <= 3 -> " - very low. Inaudible over road noise."
+                            else -> ""
+                        }
+                } else {
+                    "unknown"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = when {
+                    mediaVolume in 0..3 -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+            Button(
+                onClick = {
+                    val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    // Two thirds of max: loud enough in a car, short of the level
+                    // that would be startling, and reversible by the volume keys.
+                    val target = (max * 2) / 3
+                    runCatching {
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                    }
+                    mediaVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                    mediaVolumeMax = max
+                    reportStatus =
+                        "Media volume set to $mediaVolume of $mediaVolumeMax. Turn it " +
+                            "back down if that was too loud."
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = mediaVolumeMax > 0,
+            ) {
+                Icon(Icons.Default.GraphicEq, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Raise media volume")
+            }
+            Text(
+                "This changes the phone's media stream only - not notifications or " +
+                    "alarms - so nothing else is altered.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             // --- Report ---------------------------------------------------
             //
