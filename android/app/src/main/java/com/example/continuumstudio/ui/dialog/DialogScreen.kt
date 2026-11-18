@@ -171,6 +171,52 @@ fun DialogScreen(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             Column {
+                // While a dialog is active the action matters and the branding does
+                // not, so the app bar collapses to a slim status strip. The title
+                // is already shown in the reading pane and the connection state is
+                // visible in the dock when it is wrong, so nothing is lost - and it
+                // returns 40+dp to the prompt on a phone.
+                val dialogActive = dialogState.activeDialog != null
+                if (dialogActive) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.primaryContainer)
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (connectionState.isConnected) "Connected" else "Disconnected",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (connectionState.isConnected) Color(0xFF4CAF50) else Color.Gray,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (connectionState.isConnected && latency != null) {
+                            LatencyBadge(latency)
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        if (connectionState.isConnected) {
+                            IconButton(
+                                onClick = onToggleHoldMode,
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    if (dialogState.holdMode) Icons.Default.Lock else Icons.Default.CheckCircle,
+                                    contentDescription = "Hold Mode",
+                                    tint = if (dialogState.holdMode) Color(0xFFFF9800) else Color.Gray,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                        IconButton(onClick = onRefresh, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Refresh",
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                } else {
                 TopAppBar(
                     title = { 
                         Column {
@@ -214,6 +260,7 @@ fun DialogScreen(
                         containerColor = MaterialTheme.colorScheme.primaryContainer
                     )
                 )
+                } // end dialog-inactive app bar
                 
                 // Offline banner
                 if (!isOnline) {
@@ -246,28 +293,49 @@ fun DialogScreen(
                 }
                 
                 // Tab bar - Dialog is the primary surface, History is secondary.
-                // Settings moved to the app-level Settings tab (it was
-                // duplicated here, costing ~630 lines of UI in this file).
-                TabRow(
-                    selectedTabIndex = selectedTab.ordinal,
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                //
+                // Deliberately a compact SegmentedButton row rather than a Material
+                // TabRow: with the app's NavigationBar below and the action dock in
+                // the dialog, a full 48dp tab bar as well left over 400dp of chrome
+                // on a phone - more than half the screen on a small device.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                        Tab(
-                            selected = selectedTab == MainTab.DIALOG,
-                            onClick = { selectedTab = MainTab.DIALOG },
-                            text = { Text("Dialog") },
-                            icon = { Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                        )
-                        Tab(
-                            selected = selectedTab == MainTab.HISTORY,
-                            onClick = { 
-                                selectedTab = MainTab.HISTORY
-                                onFetchHistory()
+                    listOf(
+                        MainTab.DIALOG to "Dialog",
+                        MainTab.HISTORY to "History",
+                    ).forEach { (tab, label) ->
+                        val selected = selectedTab == tab
+                        Text(
+                            text = label,
+                            fontSize = 13.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.65f)
                             },
-                            text = { Text("History") },
-                            icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (selected) {
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                )
+                                .clickable {
+                                    selectedTab = tab
+                                    if (tab == MainTab.HISTORY) onFetchHistory()
+                                }
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
                         )
                     }
+                }
             }
         }
         // FAB removed - using inline buttons instead
