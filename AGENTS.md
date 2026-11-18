@@ -115,7 +115,11 @@ Hard-won knowledge from a full overhaul of the dialog page and speech pipeline.
 
 - `AudioHub` owns **one** `DialogAudioPlayer`; `FallbackTts` owns **one** `TextToSpeech`. `DialogTTSHelper` is constructed by three surfaces (ViewModel, notification service, AutoReplyService) — never give it per-instance engines. A prior commit claimed one TTS engine while three existed.
 - Three OkHttp clients exist on purpose: WebSocket (`readTimeout(0)`, correct for a quiet socket), requests (15/20/20), uploads (20/120/120). Do not make HTTP calls on the WebSocket client — that inherited an infinite timeout and answers could hang forever.
-- `DialogAudioPlayer.playScript` synthesizes **segment by segment**, so playback starts before the whole dialog exists. Pauses are local `delay()` between segments.
+- `DialogAudioPlayer.playScript` is **producer/consumer with `PREFETCH_AHEAD = 2`**, so synthesis overlaps playback. A sequential generate→play→wait loop (the original design) put a full generation stall at every segment boundary; measured 1.6s generate vs 3.7s play made that audible as choppiness. **This must never go back to zero lookahead.**
+- **"Not playing" is not "finished".** `awaitSegmentFinish` requires the position to reach the clip duration or the session to report ENDED, with `START_GRACE_MS`/`LOAD_GRACE_MS` windows and `MAX_SEGMENT_PLAY_MS` as a ceiling. A player reports not-playing while starting, while buffering, and while a media session loads the next item — treating any of those as completion truncated segments mid-word and started the next over the top. This was reported by the user as "jumps over itself, cutting each section off" and is the single most user-visible bug found.
+- Synthesis is cancelled via an `invokeOnCompletion` hook on the Job; without it, stop/skip left OkHttp calls running, burning quota and caching unheard audio.
+- Clips contain **no** leading/trailing silence (verified with silencedetect), so the inter-segment `delay()` is the *entire* pause heard. Pauses are 120-320ms; the original 240-500ms read as 12.6% silence and sounded choppy.
+- Sentences are **chunked to ~180 chars** (`CHUNK_TARGET_CHARS`), not one segment per sentence: per-sentence segments meant one HTTP request each (12 for a typical dialog). List items join with ". " so grouping does not create a run-on. Long single sentences split at word boundaries (`CHUNK_MAX_CHARS` 320).
 
 ### EasyVoice API (measured against the live service)
 
