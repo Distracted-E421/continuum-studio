@@ -673,6 +673,27 @@ private fun XRCommentInputSection(
                 }
 
                 if (commentText.isNotEmpty()) {
+                    // Copy the comment out before it can be lost.
+                    //
+                    // Duplicate dialogs sometimes arrive and one is never answered,
+                    // so text the user typed or dictated can vanish with no way to
+                    // reach it short of grepping agent logs. In a car this is
+                    // especially bad: the text was dictated, not typed.
+                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(
+                        onClick = {
+                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(commentText))
+                        },
+                        modifier = Modifier.size(if (xrMode) 48.dp else 40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy comment",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(if (xrMode) 24.dp else 20.dp)
+                        )
+                    }
                     Spacer(Modifier.width(8.dp))
                     IconButton(
                         onClick = { onCommentChange("") },

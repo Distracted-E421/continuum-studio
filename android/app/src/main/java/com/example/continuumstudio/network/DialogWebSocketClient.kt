@@ -121,6 +121,33 @@ class DialogWebSocketClient(
     // Events channel for one-shot events
     private val _events = Channel<DialogEvent>(Channel.BUFFERED)
     val events: Flow<DialogEvent> = _events.receiveAsFlow()
+
+    /**
+     * Dialog ids already announced to the UI and notifications.
+     *
+     * The daemon can issue the same dialog twice (an agent retry), and the app
+     * re-announced it each time, so a duplicate appeared on screen and only one
+     * copy could be answered - typically stranding a comment the user had typed or
+     * dictated. `readDialogIds` in the ViewModel only deduplicates speech.
+     *
+     * Bounded: it only needs to cover what is in flight, and an unbounded set over
+     * a long-lived connection is a slow leak.
+     */
+    private val announcedDialogIds = object : LinkedHashSet<String>() {
+        override fun add(element: String): Boolean {
+            val added = super.add(element)
+            if (size > MAX_ANNOUNCED_IDS) {
+                val oldest = firstOrNull()
+                if (oldest != null) remove(oldest)
+            }
+            return added
+        }
+    }
+
+    private companion object {
+        /** Enough for far more than the handful of dialogs normally in flight. */
+        const val MAX_ANNOUNCED_IDS = 128
+    }
     
     /**
      * Calculate reconnection delay with exponential backoff and jitter
@@ -591,6 +618,25 @@ class DialogWebSocketClient(
                     // the car shows a dialog with no buttons.
                     val details = fetchCurrentDialog(_connectionState.value.serverUrl)
                     if (details != null) {
+                        // Only announce a dialog once.
+                        //
+                        // Observed in practice: the same dialog occasionally
+                        // appeared twice and only one copy could be answered, so a
+                        // carefully written comment was stranded on the other. The
+                        // daemon can genuinely issue a duplicate for the same id
+                        // when an agent retries, and the app re-announced it every
+                        // time - `readDialogIds` only deduplicates *speech*, not the
+                        // dialog itself.
+                        //
+                        // Announcing by id here means the second copy is ignored
+                        // rather than shown as a separate unanswered dialog.
+                        if (!announcedDialogIds.add(details.id)) {
+                            android.util.Log.i(
+                                "DialogWebSocket",
+                                "ignoring repeat announcement for ${details.id.take(8)}",
+                            )
+                            return
+                        }
                         // Full details are now in state; let surfaces build the
                         // notification with options and speak the option labels.
                         _events.send(

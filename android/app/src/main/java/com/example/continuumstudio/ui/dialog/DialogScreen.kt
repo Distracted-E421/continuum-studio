@@ -2063,6 +2063,28 @@ fun ActiveDialogCard(
                         unfocusedLabelColor = Color(0xFF757575),
                     ),
                 )
+                // Copy the comment out before submitting.
+                //
+                // A duplicate dialog can swallow the answer, and then the text the
+                // user carefully typed or dictated exists nowhere they can reach -
+                // recovering it meant digging through agent logs. One tap puts it on
+                // the clipboard regardless of whether the submit lands.
+                if (comment.isNotBlank()) {
+                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                    TextButton(
+                        onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(comment)) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = Color(0xFF66BB6A),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Copy comment", fontSize = 12.sp, color = Color(0xFF66BB6A))
+                    }
+                }
             }
 
             // Keep the last line clear of the dock.
