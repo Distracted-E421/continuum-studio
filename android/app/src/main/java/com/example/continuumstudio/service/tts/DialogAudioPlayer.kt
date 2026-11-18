@@ -75,6 +75,17 @@ class DialogAudioPlayer(private val context: Context) {
         private const val MAX_SEGMENT_PLAY_MS = 180_000L
 
         /**
+         * Longest we will wait for another app to hand audio focus back.
+         *
+         * A hold suspends the segment ceiling (otherwise a long call would make
+         * the player skip ahead over itself), so it needs a bound of its own or a
+         * focus loss that never recovers would leave the read hanging with the
+         * player paused and no indication why. Five minutes covers a phone call
+         * far longer than any realistic dialog read.
+         */
+        private const val MAX_HOLD_MS = 300_000L
+
+        /**
          * How long a media session may take to load a segment before its
          * not-playing state is treated as an ending.
          *
@@ -502,7 +513,16 @@ class DialogAudioPlayer(private val context: Context) {
         // That is the "jumps over itself too fast, cutting each section" symptom.
         // Now we require either an explicit completion callback or the position to
         // have reached the clip duration.
-        val deadline = System.currentTimeMillis() + MAX_SEGMENT_PLAY_MS
+        // Deadline is mutable because a focus hold must not count against it.
+        // Otherwise a phone call longer than MAX_SEGMENT_PLAY_MS would hit the
+        // ceiling, log "moving on", and start the next segment over the top of a
+        // clip that is merely paused.
+        var deadline = System.currentTimeMillis() + MAX_SEGMENT_PLAY_MS
+
+        // Separate bound for the hold itself. A hold suspends `deadline`, so
+        // without this an unrecoverable focus loss would wait forever.
+        var holdStartedAt = 0L
+        var holdWarned = false
 
         // Give playback a moment to actually begin before trusting any "stopped"
         // observation, so the start-up window cannot end a segment.
@@ -510,6 +530,31 @@ class DialogAudioPlayer(private val context: Context) {
         var startedAt = 0L
 
         while (isActive()) {
+            // A hold is not a stall: time spent waiting on another app must not
+            // push us past the segment ceiling. It gets its own, longer bound so
+            // a loss that never recovers cannot hang the script silently.
+            if (heldByFocusLoss) {
+                if (holdStartedAt == 0L) holdStartedAt = System.currentTimeMillis()
+                deadline = System.currentTimeMillis() + MAX_SEGMENT_PLAY_MS
+                val heldFor = System.currentTimeMillis() - holdStartedAt
+                if (heldFor > MAX_HOLD_MS) {
+                    SpeechTrace.warn(
+                        "focus",
+                        "held for ${heldFor}ms; giving up on segment ${segmentIndex + 1}",
+                    )
+                    return
+                }
+                if (heldFor > 30_000L && !holdWarned) {
+                    holdWarned = true
+                    SpeechTrace.warn(
+                        "focus",
+                        "still held after ${heldFor}ms - another app has audio focus",
+                    )
+                }
+            } else {
+                holdStartedAt = 0L
+                holdWarned = false
+            }
             if (System.currentTimeMillis() > deadline) {
                 SpeechTrace.warn("play", "segment ${segmentIndex + 1} exceeded max play time; moving on")
                 return
@@ -546,14 +591,13 @@ class DialogAudioPlayer(private val context: Context) {
             }
 
             // Genuinely finished: the clip reached its end, or the media session
-            // reports ENDED. Only trust "not playing" *after* we have seen it play
-            // and given it a grace window.
-            val reachedEnd = duration > 0 && position >= duration - 80
+            // reports ENDED, or it stopped after playing with no known duration.
+            // That decision lives in SegmentEnd (pure, tested) because it was
+            // wrong twice before - and treating a focus hold as an ending was the
+            // third way it could go wrong.
             val endedBySession = preferMediaSession &&
                 MediaSessionBridge.isConnected() &&
                 MediaSessionBridge.hasEnded()
-
-            if (reachedEnd || endedBySession) return
 
             // A media session that has been asked to play but has not started yet
             // is not "finished". `setMediaItem` + `prepare()` + `play()` is
@@ -564,21 +608,26 @@ class DialogAudioPlayer(private val context: Context) {
             val sessionLoading = preferMediaSession &&
                 MediaSessionBridge.isConnected() &&
                 !playingNow &&
-                !MediaSessionBridge.hasEnded()
+                !endedBySession
 
             if (sessionLoading && System.currentTimeMillis() - startedAt < LOAD_GRACE_MS) {
                 delay(120)
                 continue
             }
 
-            if (sawPlaying && !playingNow &&
-                System.currentTimeMillis() - startedAt > START_GRACE_MS &&
-                duration <= 0
-            ) {
-                // Unknown duration and it stopped after having played: the only
-                // safe interpretation is that it ended.
-                return
-            }
+            val finished = SegmentEnd.isFinished(
+                SegmentEnd.Observation(
+                    positionMs = position,
+                    durationMs = duration,
+                    playingNow = playingNow,
+                    sawPlaying = sawPlaying,
+                    sessionEnded = endedBySession,
+                    heldByFocus = heldByFocusLoss,
+                    msSincePlaying = System.currentTimeMillis() - startedAt,
+                    startGraceMs = START_GRACE_MS,
+                )
+            )
+            if (finished) return
 
             delay(120)
         }
