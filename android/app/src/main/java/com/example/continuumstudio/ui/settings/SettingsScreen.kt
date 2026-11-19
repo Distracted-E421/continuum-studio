@@ -66,6 +66,7 @@ fun SettingsScreen(
     
     var showSamsungAudioSetup by remember { mutableStateOf(false) }
     var showAudioDiagnostics by remember { mutableStateOf(false) }
+    var showProbeBridge by remember { mutableStateOf(false) }
     var showSpeechSettings by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         viewModel.loadSettings()
@@ -82,6 +83,10 @@ fun SettingsScreen(
     
     if (showSamsungAudioSetup) {
         SamsungAudioSetupScreen(onBack = { showSamsungAudioSetup = false })
+        return
+    }
+    if (showProbeBridge) {
+        ProbeBridgeScreen(onBack = { showProbeBridge = false })
         return
     }
     if (showAudioDiagnostics) {
@@ -308,6 +313,13 @@ fun SettingsScreen(
                     label = "Audio diagnostics",
                     description = "Inspect media session and routing when car audio misbehaves",
                     onClick = { showAudioDiagnostics = true }
+                )
+            }
+            item {
+                SettingsNavigationItem(
+                    label = "Probe bridge",
+                    description = "Let a desktop query this phone's audio state (off by default)",
+                    onClick = { showProbeBridge = true }
                 )
             }            
             item {
