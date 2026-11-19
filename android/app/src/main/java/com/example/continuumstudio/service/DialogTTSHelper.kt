@@ -122,6 +122,33 @@ class DialogTTSHelper(private val context: Context) {
     @Volatile
     var useMediaSession: Boolean = false
 
+    /**
+     * Record an incident without blocking the caller.
+     *
+     * Own thread rather than a shared scope: this must not compete with synthesis, and
+     * it must not be cancelled when playback stops - the interesting case is often
+     * exactly when playback went wrong.
+     */
+    private fun recordIncidentAsync(dialogId: String?, title: String, segmentCount: Int) {
+        try {
+            Thread({
+                com.example.continuumstudio.audio.IncidentRecorder.record(
+                    context = context,
+                    trigger = com.example.continuumstudio.audio.IncidentRecorder.Trigger.DIALOG_SPOKEN,
+                    extra = mapOf(
+                        "dialogId" to (dialogId ?: "(none)"),
+                        "title" to title,
+                        "segments" to segmentCount.toString(),
+                        "voice" to audioPlayer.voice,
+                        "waitMs" to audioPlayer.waitMs.toString(),
+                    ),
+                )
+            }, "incident-record").apply { isDaemon = true }.start()
+        } catch (e: Throwable) {
+            Log.d(TAG, "could not start incident recording: ${e.message}")
+        }
+    }
+
     /** Session lifetime rules, kept in a separately tested unit. */
     private val session = SessionLifetime()
 
@@ -173,6 +200,14 @@ class DialogTTSHelper(private val context: Context) {
         val labels = optionLabels(optionsJson)
         val script = buildScript(title, prompt, dialogType, labels, priority)
         SpeechTrace.scriptCompiled(script)
+
+        // Record an incident on every read.
+        //
+        // This is the point of the recorder: the next time audio misbehaves, the state
+        // at the moment a dialog was spoken is already on disk. Nobody has to notice a
+        // failure, open a screen, or remember what it sounded like. Best-effort and off
+        // the main thread, because diagnostics must never delay speech.
+        recordIncidentAsync(dialogId, title, script.segments.size)
 
         if (audioPlayer.usesEasyVoice) {
             // Only now, with something to actually say, do we register with the

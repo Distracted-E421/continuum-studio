@@ -28,7 +28,9 @@ import androidx.compose.ui.unit.dp
 import com.example.continuumstudio.audio.MultiSoundController
 import com.example.continuumstudio.audio.ShizukuBridge
 import com.example.continuumstudio.service.tts.MediaSessionBridge
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Send a report somewhere the user can pick.
@@ -420,6 +422,88 @@ fun AudioDiagnosticsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            // --- Incidents -----------------------------------------------
+            //
+            // The recorder writes on every dialog read, so the useful thing here is
+            // not "record one now" but "show me the last time it happened". Copying is
+            // the delivery path, because no upload exists.
+            HorizontalDivider()
+            Text(
+                "Recorded incidents",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "Every dialog read writes one automatically, so a failure is captured " +
+                    "without anyone noticing it at the time.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            var incidents by remember { mutableStateOf(com.example.continuumstudio.audio.IncidentRecorder.list(context)) }
+            var incidentText by remember { mutableStateOf<String?>(null) }
+            Text("${incidents.size} recorded", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            val f = withContext(Dispatchers.IO) {
+                                com.example.continuumstudio.audio.IncidentRecorder.record(
+                                    context,
+                                    com.example.continuumstudio.audio.IncidentRecorder.Trigger.MANUAL,
+                                )
+                            }
+                            incidents = com.example.continuumstudio.audio.IncidentRecorder.list(context)
+                            incidentText = f?.let { file ->
+                                withContext(Dispatchers.IO) { runCatching { file.readText() }.getOrNull() }
+                            }
+                            reportStatus = if (f != null) "Captured ${f.name}" else "Capture failed"
+                            busy = false
+                        }
+                    },
+                ) { Text("Capture now") }
+                OutlinedButton(
+                    enabled = incidents.isNotEmpty() && !busy,
+                    onClick = {
+                        scope.launch {
+                            val latest = incidents.lastOrNull() ?: return@launch
+                            incidentText = withContext(Dispatchers.IO) {
+                                runCatching { latest.readText() }.getOrNull()
+                            }
+                        }
+                    },
+                ) { Text("Show latest") }
+            }
+            incidentText?.let { text ->
+                Button(
+                    onClick = {
+                        val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                        cm?.setPrimaryClip(android.content.ClipData.newPlainText("Incident", text))
+                        reportStatus = "Incident copied - paste it into a dialog comment"
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.ContentCopy, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Copy incident")
+                }
+                SelectionContainer {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(10.dp),
+                        )
+                    }
+                }
+            }
 
             // --- Report ---------------------------------------------------
             //
