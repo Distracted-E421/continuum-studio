@@ -223,6 +223,52 @@ Do **not** route free text through Synapsix `/api/action` with `action: "shell"`
 daemon endpoint that could carry a payload and it executes arbitrary host commands. Automatic
 report upload needs a real endpoint, designed deliberately.
 
+### Probe bridge and incident recording (2026-11-18)
+
+**Diagnostics must not require the owner to be watching.** Six releases were spent fixing
+car audio from descriptions. `IncidentRecorder` now writes an AudioReport + findings on
+every dialog read, so the state at the moment of failure is already on disk. Best-effort,
+own daemon thread, all failures swallowed (deliberate): a recorder that can delay speech
+is worse than none. Bounded at 40 files, oldest first; `prune` only touches `.txt` so a
+future export format is never silently deleted.
+
+**`android.util.Log` and `org.json` are stubs in JVM unit tests.** Both throw `RuntimeException:
+not mocked`. This is why `ProbeServer` takes an injected log sink and `ProbeJson` is
+hand-written - without that, the auth/parsing paths of a *network-exposed* component would
+be untestable off-device. Do not reintroduce either dependency into those classes.
+
+**A loopback-only listener cannot be reached from outside the phone.** The probe bridge
+shipped with `127.0.0.1` binding and then needed `adb forward` to use, which needs wireless
+debugging - unusable in the exact situation it was built for (owner on mobile data, no
+wireless ADB, Shizuku down). The owner pasted a probe token before this was realised; tokens
+are per-session and in-memory so nothing was exposed, but do not repeat a design where the
+delivery path is unreachable by the only person who needs it.
+
+**`MediaSessionManager.getActiveSessions` needs no Shizuku** - only the
+`NotificationListenerService` permission the app already holds for `NowPlayingService`. This
+is the practical replacement for `dumpsys media_session` when Shizuku is unavailable, and it
+answers the decisive car question: if another app is PLAYING while our dialog is silent, our
+audio path is broken; if nothing is playing, the phone is not routing media anywhere and the
+fault is downstream. Requires the user to enable the Continuum notification listener in
+system settings.
+
+**Head unit is not addressable from the phone.** It is a separate computer behind the USB
+link; Android Auto is a projection protocol. No phone API reads or sets the car's source or
+volume. `android/docs/HEAD_UNIT_VISIBILITY.md` records the four layers and what is reachable.
+Do not promise more than that to the owner.
+
+**Probe server is off unless started, loopback by default, token for everything but `ping`,
+and the `dumpsys` command set is an enum** (`ProbeCommand`) - never a caller-supplied string,
+because a network-reachable run-a-command endpoint is RCE on the owner's phone (the same
+reason `/api/action`'s `shell` action was refused). A test asserts every command is read-only
+and starts with `dumpsys`.
+
+**`UI_MODE_TYPE_CAR` is unreliable** (reported NORMAL while projecting to a Subaru) and
+inferring projection from audio state was worse - the media session only exists during a read,
+so a layout decision taken before one always said "not projecting". `CarProjection` asks the
+car framework's connection type and falls back to UiMode, and the result must not be cached
+in `remember`.
+
 **The media session must not outlive a read (found 2026-11-18 in a Subaru).** Reported symptom
 was "no audio in the car from *any* app". Continuum Studio was observed highlighted in the Android
 Auto app bar with no dialog present. Cause: `DialogMediaService` started from `BOOT_COMPLETED` and
