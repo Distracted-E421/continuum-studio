@@ -280,6 +280,18 @@ class DialogWebSocketClient(
         
         val request = requestBuilder.build()
 
+        // Close any previous socket before replacing the reference.
+        //
+        // `webSocket = ...` used to overwrite the field without closing what was there.
+        // On a reconnect loop - which is the normal state on a car link - each attempt
+        // left the old socket open until OkHttp's own timeout reaped it, so a drive with
+        // patchy signal accumulated sockets and their reader threads. Closing is cheap;
+        // an unclosed socket is not.
+        webSocket?.let { old ->
+            runCatching { old.close(1000, "reconnecting") }
+                .onFailure { android.util.Log.d("DialogWebSocket", "closing previous socket failed: ${it.message}") }
+        }
+
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 scope.launch {
