@@ -1,13 +1,16 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Backup rules for API < 31, where `data_extraction_rules.xml` is ignored.
+
+   Kept in sync with that file: diagnostics directories are excluded from backup
+   because they contain device names, audio routing and dialog titles. They exist to be
+   read on the device and pasted deliberately, not replicated to a cloud backup.
+
+   No <include> is declared, so everything not excluded is still backed up - in
+   particular `OfflineViewModel`'s queue file, which is user work.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="file" path="incidents/" />
+    <exclude domain="file" path="reports/" />
+    <exclude domain="external" path="reports/" />
 </full-backup-content>

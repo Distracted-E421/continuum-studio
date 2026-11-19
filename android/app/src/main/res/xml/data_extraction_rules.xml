@@ -1,19 +1,32 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Backup and device-transfer rules.
+
+   The app has `allowBackup="true"`, so everything under `filesDir` is uploaded to the
+   user's cloud backup by default. The diagnostics directories are deliberately
+   excluded:
+
+   - `incidents/` holds recorded audio-state reports written automatically on every
+     dialog read. They contain device names, audio routing and the text of dialog titles.
+     That is diagnostic material which must stay on the device - it exists to be read by
+     the owner and pasted deliberately, not to be replicated to a third party by a
+     background process.
+   - `reports/` is the same content written on demand from the diagnostics screen.
+
+   `OfflineViewModel`'s queue file is NOT excluded: it is user work, and losing it on a
+   device migration would be a real data loss.
+
+   Note for API < 31, `backup_rules.xml` is the one that applies; both are kept in sync.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="file" path="incidents/" />
+        <exclude domain="file" path="reports/" />
+        <exclude domain="external" path="reports/" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="file" path="incidents/" />
+        <exclude domain="file" path="reports/" />
+        <exclude domain="external" path="reports/" />
     </device-transfer>
-    -->
 </data-extraction-rules>
