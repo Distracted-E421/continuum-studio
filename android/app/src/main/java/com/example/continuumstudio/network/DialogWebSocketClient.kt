@@ -130,15 +130,17 @@ class DialogWebSocketClient(
      * copy could be answered - typically stranding a comment the user had typed or
      * dictated. `readDialogIds` in the ViewModel only deduplicates speech.
      *
-     * Bounded: it only needs to cover what is in flight, and an unbounded set over
-     * a long-lived connection is a slow leak.
+     * Entries are removed when the dialog completes, so a *legitimate* re-issue of
+     * the same id is not suppressed - only concurrent repeats are. Suppressing a
+     * real dialog would be a worse bug than the duplicate.
+     *
+     * Bounded as well: an unbounded set over a long-lived connection is a leak.
      */
     private val announcedDialogIds = object : LinkedHashSet<String>() {
         override fun add(element: String): Boolean {
             val added = super.add(element)
             if (size > MAX_ANNOUNCED_IDS) {
-                val oldest = firstOrNull()
-                if (oldest != null) remove(oldest)
+                firstOrNull()?.let { remove(it) }
             }
             return added
         }
@@ -637,6 +639,15 @@ class DialogWebSocketClient(
                             )
                             return
                         }
+                        // The dedupe set must forget an id once it is answered,
+                        // otherwise a *legitimate* re-issue of the same id later
+                        // (the daemon reusing it for a new request) would be
+                        // suppressed and the dialog would never appear at all. That
+                        // would be a worse bug than the duplicate it fixes.
+                        android.util.Log.d(
+                            "DialogWebSocket",
+                            "announcing ${details.id.take(8)} (${announcedDialogIds.size} tracked)",
+                        )
                         // Full details are now in state; let surfaces build the
                         // notification with options and speak the option labels.
                         _events.send(
@@ -660,6 +671,11 @@ class DialogWebSocketClient(
                 "DialogCompleted" -> {
                     val completed = json.decodeFromString<ServerMessage.DialogCompleted>(text)
                     _dialogState.update { it.copy(activeDialog = null) }
+                    // Stop tracking the id: once a dialog is answered it is done,
+                    // and if the daemon legitimately reuses the id later the new
+                    // dialog must still be announced. Only *concurrent* repeats
+                    // need suppressing.
+                    announcedDialogIds.remove(completed.id)
                     _events.send(DialogEvent.DialogCompleted(completed.id))
                 }
                 "QueueUpdate" -> {

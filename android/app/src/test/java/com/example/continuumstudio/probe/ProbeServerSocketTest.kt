@@ -30,7 +30,8 @@ class ProbeServerSocketTest {
     }
 
     private fun startServer(configuredToken: String? = token): ProbeServer {
-        val handler: (ProbeRoute) -> ProbeServer.ProbeResponse = { route ->
+        val handler: (ProbeServer.ProbeRequest) -> ProbeServer.ProbeResponse = { req ->
+            val route = req.route
             when (route) {
                 ProbeRoute.PING -> ProbeServer.ProbeResponse(
                     200,
@@ -54,6 +55,20 @@ class ProbeServerSocketTest {
                     200,
                     ProbeJson.fields(mapOf("probe completed" to "true")),
                 )
+                ProbeRoute.DUMPSYS -> {
+                    // Only an allowlisted name may be echoed back - the route must
+                    // never accept a raw command.
+                    val what = req.queryValue("what")
+                    val cmd = ProbeCommand.byKey(what)
+                    if (cmd == null) {
+                        ProbeServer.ProbeResponse(400, ProbeJson.error("unknown_command", "no"))
+                    } else {
+                        ProbeServer.ProbeResponse(
+                            200,
+                            ProbeJson.fields(mapOf("command" to cmd.command)),
+                        )
+                    }
+                }
             }
         }
         val s = ProbeServer(

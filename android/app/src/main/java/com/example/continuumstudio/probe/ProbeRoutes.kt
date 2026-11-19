@@ -21,6 +21,14 @@ enum class ProbeRoute(val method: String, val path: String) {
      * change anything, and that rule is the reason the read endpoints are safe to
      * hit at any moment, including while the owner is driving. */
     PROBE_AUDIO("POST", "/probe/audio/probe"),
+
+    /**
+     * Read-only `dumpsys` transcript, selected by an allowlisted `what` query value.
+     *
+     * The command is never caller-supplied - the query selects from
+     * [ProbeCommand]. See that enum for why.
+     */
+    DUMPSYS("GET", "/probe/dumpsys"),
     ;
 
     val requiresToken: Boolean get() = this != PING

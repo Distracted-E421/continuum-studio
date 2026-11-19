@@ -170,20 +170,27 @@
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
-        <!-- Owns a MediaSession so Android Auto keeps the audio route alive.
-             Without this the car drops back to its own radio.
-             MediaLibraryService (browsable) + the mediaroute/AUTO action are
-             what make AA treat this as a media source at all. -->
+        <!-- Owns a MediaSession. NOT exported and no longer advertised to Android
+             Auto.
+
+             It used to be exported with the media3/MediaBrowser intent filters so
+             AA could discover it. That made Continuum a discoverable media source
+             on the head unit, which in practice meant the car attached to a source
+             that played nothing: no audio from any app, and the head unit's own
+             volume overlay stopped appearing (Subaru, 2026-11-18).
+
+             The automotive descriptor no longer declares `media` either, so AA has
+             no reason to look for this. In-app binding still works - a
+             SessionToken targets this component explicitly and does not need
+             intent filters - and dialog speech goes through the phone's normal
+             media route instead.
+
+             If head-unit playback is ever wanted again, it must be an explicit
+             opt-in with a session that exists only for the duration of a read. -->
         <service
             android:name=".service.DialogMediaService"
-            android:exported="true"
-            android:foregroundServiceType="mediaPlayback">
-            <intent-filter>
-                <action android:name="androidx.media3.session.MediaLibraryService" />
-                <action android:name="androidx.media3.session.MediaSessionService" />
-                <action android:name="android.media.browse.MediaBrowserService" />
-            </intent-filter>
-        </service>
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <!-- Boot receiver keeps the media session available so Android Auto
              always finds a media source when the car connects. -->

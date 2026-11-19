@@ -54,6 +54,17 @@ class AnnouncedDialogIdsTest {
     }
 
     @Test
+    fun `a re-issue after completion is accepted`() {
+        // The daemon may reuse an id for a new request. Only *concurrent* repeats
+        // are duplicates; suppressing a real dialog would be worse than the bug.
+        val seen = bounded(128)
+        assertTrue(seen.add("abc"))
+        assertFalse(seen.add("abc"))
+        seen.remove("abc") // what happens on DialogCompleted
+        assertTrue("a re-issue after completion must be announced", seen.add("abc"))
+    }
+
+    @Test
     fun `eviction is oldest-first so recent dialogs stay protected`() {
         val seen = bounded(3)
         seen.add("a"); seen.add("b"); seen.add("c"); seen.add("d")

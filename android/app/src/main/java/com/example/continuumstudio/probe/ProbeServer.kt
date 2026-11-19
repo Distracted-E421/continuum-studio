@@ -39,7 +39,7 @@ class ProbeServer(
     /** Supplies the token. Null or blank means "not configured" - refuse. */
     private val tokenProvider: () -> String?,
     /** Answers a read route. Called off the main thread. */
-    private val readHandler: (ProbeRoute) -> ProbeResponse,
+    private val readHandler: (ProbeRequest) -> ProbeResponse,
     /**
      * Log sink.
      *
@@ -62,6 +62,30 @@ class ProbeServer(
 
     /** A status code plus body, so handlers do not touch the socket. */
     data class ProbeResponse(val status: Int, val body: String)
+
+    /**
+     * A resolved request.
+     *
+     * The query is passed as a map rather than folded into the route so handlers
+     * never see a raw string to parse - in particular the `dumpsys` handler must
+     * only ever receive an allowlisted command name ([com.example.continuumstudio.probe.ProbeCommand]).
+     */
+    data class ProbeRequest(val route: ProbeRoute, val query: Map<String, String>) {
+        fun queryValue(key: String): String? = query[key]
+    }
+
+    /** Parse `a=1&b=2`, tolerating junk. Values are URL-decoded; keys are not needed. */
+    internal fun parseQuery(raw: String): Map<String, String> {
+        if (raw.isBlank()) return emptyMap()
+        return raw.split('&').mapNotNull { part ->
+            if (part.isBlank()) return@mapNotNull null
+            val idx = part.indexOf('=')
+            if (idx <= 0) return@mapNotNull null
+            val k = part.substring(0, idx)
+            val v = java.net.URLDecoder.decode(part.substring(idx + 1), "UTF-8")
+            k to v
+        }.toMap()
+    }
 
     @Volatile
     private var server: ServerSocket? = null
@@ -136,7 +160,9 @@ class ProbeServer(
                 return
             }
             val method = parts[0]
-            val path = parts[1].substringBefore('?')
+            val rawTarget = parts[1]
+            val path = rawTarget.substringBefore('?')
+            val query = parseQuery(rawTarget.substringAfter('?', ""))
 
             // Drain headers, capturing the token. Bounded so a huge header block
             // cannot exhaust memory.
@@ -157,7 +183,7 @@ class ProbeServer(
             val route = ProbeRoute.match(method, path)
             when (val auth = ProbeAuthorizer.authorize(route, token, tokenProvider())) {
                 ProbeAuth.Allowed -> {
-                    val r = readHandler(route!!)
+                    val r = readHandler(ProbeRequest(route!!, query))
                     respond(client, r.status, r.body)
                 }
                 ProbeAuth.NoTokenConfigured ->
