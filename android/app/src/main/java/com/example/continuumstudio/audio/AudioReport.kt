@@ -154,6 +154,34 @@ object AudioReportCollector {
         out += "Shizuku available" to
             runCatching { ShizukuBridge.isAvailable() }.getOrDefault(false).toString()
 
+        // --- Media sessions (no Shizuku needed) ----------------------------
+        //
+        // This is the decisive field for "is something else making sound while we are
+        // silent". It needs only the notification-listener permission the app already
+        // holds, so it works when Shizuku does not - which it did not, on mobile data
+        // with no wireless debugging.
+        val listenerComponent = runCatching {
+            android.content.ComponentName(
+                context,
+                com.example.continuumstudio.service.NowPlayingService::class.java,
+            )
+        }.getOrNull()
+        val sessionsAvailable = SessionInspector.isAvailable(context)
+        out += "media sessions readable" to sessionsAvailable.toString()
+        if (sessionsAvailable) {
+            val others = SessionInspector.othersPlaying(
+                context,
+                listenerComponent,
+                context.packageName,
+            )
+            out += "other apps playing" to
+                if (others.isEmpty()) "none" else others.joinToString("; ") { it.describe() }
+            out += "all sessions" to
+                SessionInspector.sessions(context, listenerComponent)
+                    .joinToString("; ") { "${it.packageName}:${it.playbackState}" }
+                    .ifEmpty { "none" }
+        }
+
         return AudioReport(lines = out, situation = situation)
     }
 

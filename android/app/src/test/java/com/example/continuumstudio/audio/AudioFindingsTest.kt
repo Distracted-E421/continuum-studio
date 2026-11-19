@@ -34,6 +34,33 @@ class AudioFindingsTest {
     }
 
     @Test
+    fun `another app playing while ours is silent is reported as a conflict`() {
+        // The decisive car case: if Vivaldi is audible and our dialog is not, our own
+        // audio path is broken.
+        val findings = AudioFindings.inspect(
+            healthy("other apps playing" to "com.vivaldi.browser:PLAYING")
+        )
+        assertTrue(
+            "should name the conflict: $findings",
+            findings.any { it.contains("Other apps ARE playing") },
+        )
+    }
+
+    @Test
+    fun `nothing playing is not a finding, because it is normal`() {
+        // A phone at rest has no sessions playing. Reporting that made a healthy
+        // report look broken - a real false positive caught by this suite.
+        val findings = AudioFindings.inspect(healthy("other apps playing" to "none"))
+        assertTrue("no conflict should be reported: $findings", findings.isEmpty())
+    }
+
+    @Test
+    fun `unreadable sessions are flagged because a conflict could be missed`() {
+        val findings = AudioFindings.inspect(healthy("media sessions readable" to "false"))
+        assertTrue(findings.any { it.contains("notification listener") })
+    }
+
+    @Test
     fun `a healthy report has no findings`() {
         val findings = AudioFindings.inspect(healthy())
         assertEquals("unexpected findings: $findings", emptyList<String>(), findings)

@@ -88,6 +88,25 @@ object AudioFindings {
                 "be holding the car's channel."
         }
 
+        // --- Who else is making sound ---------------------------------------
+        //
+        // Only reported when something IS playing. "Nothing is playing" is the normal
+        // state of a phone at rest, so emitting a finding for it made a healthy report
+        // look broken - caught by the healthy-report test.
+        //
+        // The useful case is a genuine conflict: another app audible while ours is
+        // silent means our audio path is the problem.
+        val others = map["other apps playing"].orEmpty()
+        if (others.isNotEmpty() && others != "none") {
+            out += "Other apps ARE playing ($others). If our dialog is silent while " +
+                "those are audible, our own audio path is the problem."
+        }
+        if (map["media sessions readable"].orEmpty() == "false") {
+            out += "Media sessions cannot be read, so a conflict with another app could " +
+                "not be checked. Enable the Continuum notification listener in system " +
+                "settings (no Shizuku needed)."
+        }
+
         return out
     }
 }
