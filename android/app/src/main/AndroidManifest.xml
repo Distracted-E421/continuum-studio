@@ -191,17 +191,6 @@
             android:name=".service.DialogMediaService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
-
-        <!-- Boot receiver keeps the media session available so Android Auto
-             always finds a media source when the car connects. -->
-        <receiver
-            android:name=".service.MediaBootReceiver"
-            android:enabled="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
     </application>
 
 </manifest>

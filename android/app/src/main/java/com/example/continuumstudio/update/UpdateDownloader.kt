@@ -61,8 +61,24 @@ class UpdateDownloader(
             val apkFile = File(updateDir, fileName)
             val tempFile = File(updateDir, "$fileName.tmp")
             
-            // Download with progress
-            val digest = if (info.sha256 != null) MessageDigest.getInstance("SHA-256") else null
+            // Download with progress.
+            //
+            // The digest is always computed and the hash is always REQUIRED. Previously
+            // both were conditional on `info.sha256 != null`, and every call site passed
+            // null - so an APK with `REQUEST_INSTALL_PACKAGES` was downloaded and
+            // installed with no integrity check at all. An optional security check that
+            // is never armed is worse than none, because it reads as protection.
+            val expected = info.sha256?.trim()?.lowercase()
+            if (expected.isNullOrEmpty()) {
+                emit(
+                    DownloadState.Error(
+                        "Refusing to install an update with no published checksum. " +
+                            "Re-publish the release with a digest, or update via adb."
+                    )
+                )
+                return@flow
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
             var downloadedBytes = 0L
             var lastEmittedProgress = 0
             
@@ -91,12 +107,19 @@ class UpdateDownloader(
                 }
             }
             
-            // Verify hash if provided
-            if (info.sha256 != null && digest != null) {
+            // Verify, unconditionally. `expected` was checked non-empty above, so there
+            // is no path to install without a matching checksum.
+            run {
                 val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
-                if (!actualHash.equals(info.sha256, ignoreCase = true)) {
+                if (!actualHash.equals(expected, ignoreCase = true)) {
                     tempFile.delete()
-                    emit(DownloadState.Error("SHA256 mismatch! Expected: ${info.sha256}, Got: $actualHash"))
+                    emit(
+                        DownloadState.Error(
+                            "Checksum mismatch - the download is corrupt or was " +
+                                "substituted. Expected $expected, got $actualHash. " +
+                                "Nothing was installed."
+                        )
+                    )
                     return@flow
                 }
                 Log.d(TAG, "SHA256 verified: $actualHash")

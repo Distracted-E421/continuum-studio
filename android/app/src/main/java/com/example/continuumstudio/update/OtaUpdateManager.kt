@@ -53,6 +53,27 @@ class OtaUpdateManager(
         const val GITHUB_API_BASE = "https://api.github.com"
         const val GITHUB_OWNER = "Distracted-E421"
         const val GITHUB_REPO = "continuum-studio"
+
+        /**
+         * Extract the hex hash from a `sha256:<hex>` digest, or null.
+         *
+         * Pure, and on the companion so it is callable without an instance: a parsing
+         * rule that guards an install path should be testable in one line rather than
+         * behind a constructed manager holding a `Context`.
+         */
+        internal fun parseDigest(raw: String?): String? {
+            val v = raw?.trim() ?: return null
+            if (v.isEmpty()) return null
+            val hex = v.substringAfter(':', v).trim()
+            // A SHA-256 hex digest is exactly 64 hex characters. Anything else is not
+            // something to compare against; treating it as a hash would reject every
+            // download, which looks identical to a corrupt asset.
+            return if (hex.length == 64 && hex.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
+                hex.lowercase()
+            } else {
+                null
+            }
+        }
     }
     
     fun getCurrentVersionCode(): Int {
@@ -185,7 +206,10 @@ class OtaUpdateManager(
                     downloadUrl = apkAsset.browser_download_url,
                     releaseNotes = release.body ?: "",
                     fileSize = apkAsset.size,
-                    sha256 = null,
+                    // GitHub reports `sha256:<hex>`; strip the prefix so the downloader
+                    // compares hex against hex. Without this the APK was installed
+                    // unverified - see GithubAsset.digest.
+                    sha256 = parseDigest(apkAsset.digest),
                     source = "GITHUB",
                     publishedAt = System.currentTimeMillis(),
                     isPreRelease = release.prerelease
@@ -196,7 +220,7 @@ class OtaUpdateManager(
             null
         }
     }
-    
+
     private fun extractVersionCode(tagName: String): Int {
         // Parse version code from tag (e.g., "v1.2.3" -> 10203)
         val version = tagName.removePrefix("v").split(".")
@@ -359,5 +383,15 @@ data class GithubRelease(
 data class GithubAsset(
     val name: String,
     val size: Long = 0,
-    val browser_download_url: String
+    val browser_download_url: String,
+    /**
+     * GitHub's own SHA-256 of the asset, as `sha256:<hex>`.
+     *
+     * Present since 2025 and the reason an APK can be verified at all: the app
+     * self-updates with `REQUEST_INSTALL_PACKAGES`, and every call site used to
+     * pass `sha256 = null`, so a downloaded APK was installed with **no integrity
+     * check**. A truncated download or a substituted asset would have been
+     * installed silently.
+     */
+    val digest: String? = null,
 )
