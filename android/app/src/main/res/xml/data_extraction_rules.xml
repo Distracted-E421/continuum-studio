@@ -2,29 +2,42 @@
 <!--
    Backup and device-transfer rules.
 
-   The app has `allowBackup="true"`, so everything under `filesDir` is uploaded to the
-   user's cloud backup by default. The diagnostics directories are deliberately
-   excluded:
+   The app has `allowBackup="true"`, so by default everything in the app's files dir and
+   its DataStores is uploaded to the user's cloud backup. Two categories are excluded.
 
-   - `incidents/` holds recorded audio-state reports written automatically on every
-     dialog read. They contain device names, audio routing and the text of dialog titles.
-     That is diagnostic material which must stay on the device - it exists to be read by
-     the owner and pasted deliberately, not to be replicated to a third party by a
-     background process.
-   - `reports/` is the same content written on demand from the diagnostics screen.
+   1. CREDENTIALS. `datastore/settings.preferences_pb` holds the Cloudflare Access client
+      secret and the endpoint list; `app_settings` holds an earlier copy of the same
+      fields. A credential must not be replicated to a third-party backup service, and it
+      is not needed there - the user re-enters it on a new device.
 
-   `OfflineViewModel`'s queue file is NOT excluded: it is user work, and losing it on a
-   device migration would be a real data loss.
+   2. DIAGNOSTICS. `incidents/` (written automatically on every dialog read) and
+      `reports/` (written on demand) contain device names, audio routing and dialog
+      titles. They are meant to be read on the device and pasted deliberately.
 
-   Note for API < 31, `backup_rules.xml` is the one that applies; both are kept in sync.
+   Everything else still backs up. In particular `offline_queue` (queued answers) and
+   `dialog_history` are user work and must survive a device migration.
+
+   ## Maintenance
+
+   Backup rules do not support wildcards, so these paths are literal. If a DataStore is
+   renamed, the matching exclusion must be renamed here too - otherwise the credential
+   silently starts being backed up again while this file still looks correct. The
+   `preferences_pb` suffix is the DataStore library's own convention (present in
+   `datastore-preferences-core`), not an assumption.
+
+   API < 31 uses `backup_rules.xml`; both files are kept in sync.
 -->
 <data-extraction-rules>
     <cloud-backup>
+        <exclude domain="file" path="datastore/settings.preferences_pb" />
+        <exclude domain="file" path="datastore/app_settings.preferences_pb" />
         <exclude domain="file" path="incidents/" />
         <exclude domain="file" path="reports/" />
         <exclude domain="external" path="reports/" />
     </cloud-backup>
     <device-transfer>
+        <exclude domain="file" path="datastore/settings.preferences_pb" />
+        <exclude domain="file" path="datastore/app_settings.preferences_pb" />
         <exclude domain="file" path="incidents/" />
         <exclude domain="file" path="reports/" />
         <exclude domain="external" path="reports/" />

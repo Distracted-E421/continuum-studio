@@ -2,14 +2,22 @@
 <!--
    Backup rules for API < 31, where `data_extraction_rules.xml` is ignored.
 
-   Kept in sync with that file: diagnostics directories are excluded from backup
-   because they contain device names, audio routing and dialog titles. They exist to be
-   read on the device and pasted deliberately, not replicated to a cloud backup.
+   Kept in sync with that file. Excluded:
 
-   No <include> is declared, so everything not excluded is still backed up - in
-   particular `OfflineViewModel`'s queue file, which is user work.
+   - `datastore/settings.preferences_pb` and `app_settings.preferences_pb`: these hold the
+     Cloudflare Access client secret. A credential must not go to a cloud backup.
+   - `incidents/` and `reports/`: diagnostics containing device names and audio routing.
+
+   Everything else is still backed up, including `offline_queue` and `dialog_history`,
+   which are user work.
+
+   These paths are literal because backup rules do not support wildcards. Renaming a
+   DataStore requires renaming its exclusion here, or the credential silently starts
+   being backed up again.
 -->
 <full-backup-content>
+    <exclude domain="file" path="datastore/settings.preferences_pb" />
+    <exclude domain="file" path="datastore/app_settings.preferences_pb" />
     <exclude domain="file" path="incidents/" />
     <exclude domain="file" path="reports/" />
     <exclude domain="external" path="reports/" />
