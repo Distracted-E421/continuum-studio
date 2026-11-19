@@ -269,6 +269,40 @@ so a layout decision taken before one always said "not projecting". `CarProjecti
 car framework's connection type and falls back to UiMode, and the result must not be cached
 in `remember`.
 
+### Update integrity was inert, and two audit findings (2026-11-18)
+
+**`UpdateDownloader` never verified anything.** It computed a SHA-256 only `if
+info.sha256 != null`, and *every* call site passed `null` - so an app holding
+`REQUEST_INSTALL_PACKAGES` installed whatever it downloaded, unverified. The check existing
+in the code is what made it dangerous: it read as protection while doing nothing. Now:
+
+- `GithubAsset.digest` carries GitHub's `sha256:<hex>`; `OtaUpdateManager.parseDigest`
+  (on the companion, so it is testable without a `Context`) strips the prefix and requires
+  exactly 64 hex characters. A malformed value means "no checksum", not "compare against
+  nonsense" - the latter fails every download and looks identical to a corrupt asset.
+- `UpdateDownloader` **requires** a checksum and refuses to install without one.
+- The Gitea path still has none available, so it fails closed. Verified end to end: the
+  published `v1.19.60` asset's digest matches the local `sha256sum` exactly.
+
+**`MediaBootReceiver` was an exported no-op.** `exported="true"`, no permission, filtered
+on `BOOT_COMPLETED`, and doing nothing since 1.19.49 - so any app could send it that
+intent. Harmless that day, but latent liability with zero benefit; deleted rather than
+left. When auditing, check `exported="true"` components for what they would do if
+invoked by a stranger, not just what they do on the happy path.
+
+**A dozen unresolved references in one file means the file's structure is broken.** My
+edit left an unterminated `/**`, swallowing the rest of `OtaUpdateManager`; the compiler
+reported unrelated "unresolved reference" errors far down the file and I chased those
+first. Check comment and brace balance before believing the symbol errors.
+
+**Diagnostics must be excluded from cloud backup.** `allowBackup` is true and the rules
+were the untouched templates, so incident records (device names, audio routing, dialog
+titles) were being uploaded to Google's cloud backup by a background process. Both
+`data_extraction_rules.xml` and `backup_rules.xml` now exclude `incidents/` and `reports/`;
+`OfflineViewModel`'s queue file is deliberately NOT excluded because it is user work.
+Verify with a byte search for the resource name in the APK, not a text grep - binary XML
+keeps strings in a pool and the first attempt gave a false negative.
+
 **The media session must not outlive a read (found 2026-11-18 in a Subaru).** Reported symptom
 was "no audio in the car from *any* app". Continuum Studio was observed highlighted in the Android
 Auto app bar with no dialog present. Cause: `DialogMediaService` started from `BOOT_COMPLETED` and
