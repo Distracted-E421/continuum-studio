@@ -72,16 +72,21 @@ class DialogTTSHelper(private val context: Context) {
     /**
      * Bring up the media session for an imminent read.
      *
-     * Kept separate from [ensureSessionForRead]'s callers so that merely opening
-     * the app - or receiving a dialog while reading is switched off - never
-     * registers us with the car.
+     * **Disabled by default** (2026-11-18). Declaring `<uses name="media"/>` to
+     * Android Auto made the app a permanently registered media source, which on a
+     * Subaru head unit meant Continuum appeared selected with no dialog present
+     * and the car lost audio from *every* app - the head unit's own volume overlay
+     * stopped appearing too. Registering as a media source is the most invasive
+     * thing this app can do to a car, so it is opt-in via [useMediaSession].
      *
-     * @param beforePlay runs once the session is actually usable, so the first
-     *        segment goes to the car rather than to the phone speaker. Connecting
-     *        is asynchronous, and previously it was already connected by the time
-     *        anything played; now it has to be awaited.
+     * @param beforePlay runs once the session is usable (or immediately when the
+     *        session is disabled), so playback is never serialised behind it.
      */
     private fun ensureSessionForRead(beforePlay: () -> Unit) {
+        if (!useMediaSession) {
+            beforePlay()
+            return
+        }
         if (!session.shouldRequestSession(aboutToSpeak = true)) {
             beforePlay()
             return
@@ -106,6 +111,16 @@ class DialogTTSHelper(private val context: Context) {
             beforePlay()
         }
     }
+
+    /**
+     * Whether to route dialog audio through a MediaSession at all.
+     *
+     * Default false: speech uses the phone's normal media route, and the app does
+     * not register with Android Auto as a media source. That is what keeps music
+     * and the head unit's own audio behaviour intact.
+     */
+    @Volatile
+    var useMediaSession: Boolean = false
 
     /** Session lifetime rules, kept in a separately tested unit. */
     private val session = SessionLifetime()

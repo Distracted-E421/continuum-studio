@@ -255,24 +255,20 @@ class MainActivity : ComponentActivity() {
                 
                 // XR/Glasses state
                 val isGlassesConnected by xrViewModel.isGlassesConnected.collectAsState()
-    // Car/Android Auto mode.
-    //
-    // Deliberately NOT based on UI_MODE_TYPE_CAR alone: a real Samsung S24
-    // projecting to a Subaru head unit over USB reported NORMAL (2026-11-18), so
-    // trusting that flag meant the car layout never appeared. Projection is
-    // instead inferred from evidence only present while attached - a connected
-    // media session, or a remote-submix output (the USB capture path).
-    val isDrivingMode = remember(displayInfo, isGlassesConnected) {
-        val uiModeCar = runCatching {
-            getSystemService(android.app.UiModeManager::class.java)
-                ?.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_CAR
-        }.getOrDefault(false)
-        val projectorAttached = runCatching {
-            com.example.continuumstudio.service.tts.MediaSessionBridge.isConnected() ||
-                hasRemoteSubmix(this@MainActivity)
-        }.getOrDefault(false)
-        uiModeCar || projectorAttached
-    }
+                // Car/Android Auto mode.
+                //
+                // NOT based on UI_MODE_TYPE_CAR alone: a real Samsung S24
+                // projecting to a Subaru over USB reported NORMAL (2026-11-18).
+                // Nor on audio state, which was the previous mistake - the media
+                // session only exists during a read, so the inference was false
+                // whenever it was evaluated and the car layout never appeared.
+                //
+                // `Car`'s own connection API answers this directly; UiMode is the
+                // fallback. Not wrapped in `remember`: the answer changes when the
+                // cable is plugged in, and caching it was the bug.
+                val isDrivingMode =
+                    com.example.continuumstudio.service.tts.CarProjection
+                        .isProjecting(this@MainActivity)
                 val glassesDisplayState by xrViewModel.glassesDisplayState.collectAsState()
                 val xrLayoutMode by xrViewModel.layoutMode.collectAsState()
                 val currentDisplayMode by xrViewModel.currentDisplayMode.collectAsState()
@@ -1015,8 +1011,9 @@ class MainActivity : ComponentActivity() {
  *
  * `TYPE_REMOTE_SUBMIX` (25) appears when a media stream is being sent somewhere
  * other than a local output - in practice, Android Auto handing the head unit its
- * audio over USB. Observed on a Samsung S24 projecting to a Subaru (2026-11-18),
- * where `UI_MODE_TYPE_CAR` was still NORMAL, so this is the usable signal.
+ * audio over USB. Useful as evidence in the report, but deliberately NOT used to
+ * decide the layout any more: it only exists while audio is routing, so it is
+ * false exactly when a layout decision is usually taken.
  */
 private fun hasRemoteSubmix(context: android.content.Context): Boolean = runCatching {
     val am = context.getSystemService(android.content.Context.AUDIO_SERVICE)

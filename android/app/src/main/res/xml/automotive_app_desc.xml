@@ -2,13 +2,31 @@
 <!--
     Android Auto application descriptor.
 
-    `media` is what lets the head unit talk to DialogMediaService. Without it
-    Android Auto never queries our MediaSession, so the audio route is never
-    held by us and the car falls back to its own radio.
+    ## `media` is deliberately NOT declared (2026-11-18)
 
-    `notification` keeps the MessagingStyle dialog notifications working.
+    It used to be, with the reasoning that a MediaSession is how AA routes our
+    audio to the head unit. In practice that declaration made Continuum a
+    **permanently registered AA media source**: the app appeared selected in the
+    head unit's app bar with no dialog present, and the car then had no audio from
+    *any* app - including music - while its own native volume overlay stopped
+    appearing. A head unit routed to a source that plays nothing is
+    indistinguishable from a broken car.
+
+    The owner's requirement for this work is that audio must not break other apps.
+    Registering as a media source is the single most invasive thing the app does to
+    a car, so it is off by default. Dialog audio then plays through the phone's own
+    route rather than being presented to the head unit as a media item.
+
+    To restore AA media playback later, add `<uses name="media" />` back - but only
+    together with a session that exists strictly for the duration of a read, and
+    re-verify that the car keeps audio for other apps afterwards.
+
+    ## `notification` is kept
+
+    MessagingStyle notifications are how dialogs appear on the head unit as
+    messages, which is the intended integration: read the prompt, answer it, and
+    hand the audio channel to nobody.
 -->
 <automotiveApp>
-    <uses name="media" />
     <uses name="notification" />
 </automotiveApp>

@@ -99,6 +99,11 @@ object AudioReportCollector {
         // --- How Android thinks we are connected ---------------------------
         out += "car mode (UiModeManager)" to carMode(context)
 
+        // The full projection evidence. "car mode is NORMAL" was true and
+        // misleading at the same time, so the raw inputs are reported together.
+        out += "projection" to com.example.continuumstudio.service.tts.CarProjection
+            .describe(context)
+
         // --- Routing -------------------------------------------------------
         out += "audio mode" to when (am.mode) {
             AudioManager.MODE_NORMAL -> "NORMAL"
