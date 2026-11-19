@@ -269,6 +269,28 @@ so a layout decision taken before one always said "not projecting". `CarProjecti
 car framework's connection type and falls back to UiMode, and the result must not be cached
 in `remember`.
 
+### Credential exposure and a vacuous test (2026-11-18)
+
+**The Cloudflare Access client secret was in cloud backup.** It lives in DataStore
+(`settings` and `app_settings`), `allowBackup` is true, and the rules previously excluded
+only diagnostics - so the credential and the endpoint list were replicated to the user's
+Google backup and persisted there after uninstall. Both DataStores are now excluded from
+cloud backup *and* device transfer in both rule files (only one applies per Android
+version). `offline_queue` and `dialog_history` are deliberately NOT excluded: user work
+where a migration loss is real data loss.
+
+**Mutation-test guard tests, or they lie.** The first `BackupRulesCoverCredentialsTest`
+asserted `contains()` over the whole rules file, so the *documentation comment* mentioning
+`datastore/settings.preferences_pb` satisfied it - deleting the actual `<exclude>` still
+passed. Rewritten to parse only `<exclude>` lines, then re-mutated to confirm it fails.
+This is the second "protection that reads as protection" bug found the same day (the other
+was the inert checksum), so treat any guard as unverified until a mutation kills it. Note
+Gradle needs `--rerun-tasks` for a mutation to be observed at all.
+
+Still plaintext at rest; Keystore-backed storage is a deliberate follow-up. Audited and
+clean: the secret never reaches a log line, probe response, or incident record - only
+outbound Cloudflare headers.
+
 ### Update integrity was inert, and two audit findings (2026-11-18)
 
 **`UpdateDownloader` never verified anything.** It computed a SHA-256 only `if
